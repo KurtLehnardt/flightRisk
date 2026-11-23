@@ -577,7 +577,7 @@ ORPHAN_LANDED_CONFIRM = "landed by the ground with no controller"
 #: The same for a held drone that landed by itself (its battery landing, for example) while
 #: that countdown ran.
 ORPHAN_SELF_LANDED_CONFIRM = "landed while held with no controller"
-#: The same for a drone lost while that countdown ran (it was held with no controller).
+#: The same for a drone lost while that countdown ran, or while it was held with no controller and no countdown.
 ORPHAN_LOST_CONFIRM = "lost while held with no controller"
 
 
@@ -812,6 +812,8 @@ class FleetSupervisor:
             # drone's lanes; they would wait for the operator.
             retask_excluded=self._held_for_manual,
             sidestep_margin_cm=fleet_sidestep_margin_cm() if sidestep_margin_cm is None else int(sidestep_margin_cm),
+            # A lost drone a person flies by hand is never sent land again.
+            manually_controlled=self._flown_by_hand,
         )
         self._lock = threading.Lock()
         self._busy = threading.Lock()  # one plan() or start() at a time
@@ -841,6 +843,11 @@ class FleetSupervisor:
 
     def _held_for_manual(self, drone_id: str) -> bool:
         return self.manual is not None and self.manual.paused(drone_id)
+
+    def _flown_by_hand(self, drone_id: str) -> bool:
+        """True while this dashboard's manual control has *drone_id* (a person flies it by hand)."""
+        manual = getattr(self, "manual", None)
+        return manual is not None and manual.controlled == drone_id
 
     def _paused_drones(self) -> list[str]:
         """Drones whose search is paused for manual control."""
@@ -1349,7 +1356,8 @@ class FleetSupervisor:
         countdown landed it, or it landed by itself while the countdown ran)
         is lost once it reports landed with lanes left, although it stays
         held. For such a drone, and for a held drone lost while its countdown
-        ran, the lanes are not offered at once: they wait for the operator's
+        ran or while it was held with no controller and no countdown, the
+        lanes are not offered at once: they wait for the operator's
         ``confirm_retask`` (``ORPHAN_LANDED_CONFIRM``,
         ``ORPHAN_SELF_LANDED_CONFIRM``, ``ORPHAN_LOST_CONFIRM``), so none of
         its unflown lanes is given to another drone unless a person confirms
@@ -1397,7 +1405,12 @@ class FleetSupervisor:
                 confirm = ORPHAN_LANDED_CONFIRM
             elif orphan_landing is not None:
                 confirm = ORPHAN_SELF_LANDED_CONFIRM
-            elif self.manual is not None and self.manual.orphaned(drone_id):
+            elif self.manual is not None and (
+                self.manual.orphaned(drone_id)
+                # Held with nobody controlling it and no countdown yet (it was
+                # already landing, for example): nobody watches it either.
+                or (self.manual.paused(drone_id) and self.manual.controlled != drone_id)
+            ):
                 confirm = f"{ORPHAN_LOST_CONFIRM} ({reason})"
             if confirm is not None:
                 # Nobody was controlling it: none of its unflown lanes is given to

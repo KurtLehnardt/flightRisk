@@ -19,6 +19,7 @@ import secrets
 import socket
 import sys
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from http import HTTPStatus
@@ -27,6 +28,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+from flightrisk.drone.obstacle_sensor import ENV_OBSTACLE_SENSING, SENSING_ENV_REQUIRED
 from flightrisk.launcher import preflight as pf
 from flightrisk.launcher.adaptermap import confirmed_mapping, propose_adapters
 from flightrisk.launcher.ceilingfile import (
@@ -54,19 +56,33 @@ from flightrisk.launcher.settings import (
     DEFAULT_PRESET,
     ERROR,
     MAX_DRONES,
+    OBSTACLE_SENSING_MODES,
     Issue,
     LauncherSettings,
     PresetError,
     PresetStore,
     SettingsError,
     builtin_presets,
+    effective_obstacle,
     errors,
+    sensing_warning,
     validate,
 )
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 SESSION_HEADER = "X-Launcher-Session"
 MAX_BODY = 256 * 1024
+#: The ``/api/start`` body key that confirms a start with weaker obstacle sensing; its value must be
+#: the mode the edges will use (``off``), so a confirmation never carries over to another mode.
+CONFIRM_SENSING = "confirm_sensing"
+#: The ``/api/start`` body key that must echo the one-time nonce of the refusal being confirmed.
+CONFIRM_NONCE = "confirm_nonce"
+#: ``needs_confirmation`` of the refusal that asks for it.
+NEEDS_SENSING_CONFIRMATION = "obstacle_sensing"
+#: A confirmation nonce is valid this long after its refusal, in seconds, and for one start only.
+SENSING_NONCE_TTL_S = 300.0
+#: At most this many confirmation nonces are outstanding; a new one drops the oldest.
+MAX_SENSING_NONCES = 16
 
 
 class ApiError(Exception):
@@ -120,9 +136,19 @@ class LauncherApp:
         self.python = python
         self.on_quit = on_quit
         self.last_checks: list[dict[str, Any]] = []
+        #: The obstacle settings of the last Start (``obstacle()``), shown while its processes run.
+        self.running_obstacle: dict[str, Any] | None = None
         self._adapters_cache: list[dict[str, Any]] | None = None
         self._start_lock = threading.Lock()
         self._stop_threads: list[threading.Thread] = []
+        #: Outstanding sensing confirmation nonces (``_require_sensing_confirmation``): nonce to the mode,
+        #: the edges and the ``_clock()`` time it expires. Guarded by ``_nonce_lock``.
+        self._sensing_nonces: dict[str, tuple[str, tuple[str, ...], float]] = {}
+        self._nonce_lock = threading.Lock()
+        self._clock: Callable[[], float] = time.monotonic
+        #: True from a confirmed start with weaker obstacle sensing until the next Stop (or the next start): only
+        #: then may Restart relaunch an edge that flies with weaker sensing. Guarded by ``_nonce_lock``.
+        self._weak_sensing_run_open = False
 
     # ---- helpers ---------------------------------------------------------
 
@@ -163,6 +189,87 @@ class LauncherApp:
             if k.startswith(("FLIGHTRISK_", "OTEL_")) and k not in CONTROLLED_ENV
         )
 
+    def obstacle(self, settings: LauncherSettings) -> dict[str, Any]:
+        """The obstacle sensing mode the edges started here will use, where it comes from, and the warning to confirm."""
+        eff = effective_obstacle(settings, self.environ)
+        local = tuple(d.drone_id for d in settings.local_drones())
+        return {
+            **eff.to_json(),
+            "edges": list(local),
+            "warning": sensing_warning(eff, local) if eff.downgraded and local else None,
+        }
+
+    def _require_sensing_confirmation(self, settings: LauncherSettings, body: dict[str, Any]) -> bool:
+        """Refuse a start whose edges would fly with weaker obstacle sensing unless the body confirms it now.
+
+        Raises ``ApiError`` 409 with ``needs_confirmation``, the mode, the warning text and a new one-time
+        ``confirm_nonce`` when the effective mode (the window's, or an inherited
+        ``FLIGHTRISK_OBSTACLE_SENSING``, which wins) is not ``required``, unless the body carries
+        ``confirm_sensing`` equal to exactly that mode and ``confirm_nonce`` equal to a nonce this
+        launcher issued for that mode and these edges less than ``SENSING_NONCE_TTL_S`` ago. A nonce is
+        used up by the attempt that presents it, whatever the outcome, and Stop forgets every nonce, so
+        a confirmation can never be replayed for a later start. Nothing to confirm when no edge starts
+        here. Returns True when weaker sensing was confirmed, False when there was nothing to confirm.
+        """
+        local = tuple(d.drone_id for d in settings.local_drones())
+        eff = effective_obstacle(settings, self.environ)
+        if not local or not eff.downgraded:
+            return False
+        now = self._clock()
+        nonce = body.get(CONFIRM_NONCE)
+        with self._nonce_lock:
+            self._sensing_nonces = {n: v for n, v in self._sensing_nonces.items() if v[2] > now}
+            issued = self._sensing_nonces.pop(nonce, None) if isinstance(nonce, str) else None
+            if body.get(CONFIRM_SENSING) == eff.mode and issued is not None and issued[:2] == (eff.mode, local):
+                confirmed = True
+            else:
+                confirmed = False
+                nonce = secrets.token_urlsafe(16)
+                while len(self._sensing_nonces) >= MAX_SENSING_NONCES:
+                    del self._sensing_nonces[next(iter(self._sensing_nonces))]
+                self._sensing_nonces[nonce] = (eff.mode, local, now + SENSING_NONCE_TTL_S)
+        if confirmed:
+            self.manager._event(f"obstacle sensing {eff.mode} confirmed by the operator for {', '.join(local)} "
+                                f"(from the {eff.mode_source})")
+            return True
+        raise ApiError(
+            HTTPStatus.CONFLICT, sensing_warning(eff, local),
+            needs_confirmation=NEEDS_SENSING_CONFIRMATION, mode=eff.mode, mode_source=eff.mode_source,
+            edges=list(local), confirm_nonce=nonce,
+        )
+
+    def _forget_sensing_confirmations(self) -> None:
+        """Drop every outstanding confirmation nonce and close the confirmed run (on Stop)."""
+        with self._nonce_lock:
+            self._sensing_nonces.clear()
+            self._weak_sensing_run_open = False
+
+    def _require_open_weak_sensing_run(self, name: str) -> None:
+        """Refuse to restart an edge with weaker obstacle sensing once its confirmed run was stopped.
+
+        The edge restarts with the environment it was started with. When that environment says
+        ``FLIGHTRISK_OBSTACLE_SENSING`` is not ``required`` (from the window or inherited), a restart is
+        allowed only while the confirmed run is open, from its confirmed start until Stop: an edge that
+        crashed during that run may be restarted, but after Stop the operator must confirm again with
+        Start. Raises ``ApiError`` 409.
+        """
+        try:
+            spec = self.manager.spec(name)
+        except ProcessError:
+            return  # restart() reports the unknown name
+        mode = (spec.env.get(ENV_OBSTACLE_SENSING) or "").strip().lower() or SENSING_ENV_REQUIRED
+        if spec.kind != "edge" or mode == SENSING_ENV_REQUIRED:
+            return
+        with self._nonce_lock:
+            open_run = self._weak_sensing_run_open
+        if not open_run:
+            raise ApiError(
+                HTTPStatus.CONFLICT,
+                f"{name} was started with obstacle sensing {mode}, and that run was stopped. "
+                f"Press Start to confirm sensing {mode} again.",
+                needs_confirmation=NEEDS_SENSING_CONFIRMATION, mode=mode,
+            )
+
     def profiles(self) -> list[dict[str, Any]]:
         rows = []
         for row in self.preflight_env.weights():
@@ -197,6 +304,7 @@ class LauncherApp:
             "stopping": self.manager.stopping(),
             "stop_warning": stop_warning(self.manager.windows),
             "is_windows": self.preflight_env.is_windows,
+            "running_obstacle": self.running_obstacle if self.manager.busy() else None,
         }
 
     def room_ceiling(self) -> tuple[int, int] | None:
@@ -229,6 +337,7 @@ class LauncherApp:
             "platform": {"is_windows": self.preflight_env.is_windows, "name": sys.platform, "host": socket.gethostname()},
             "max_drones": MAX_DRONES,
             "launcher_port": self.port,
+            "obstacle_limits": {"modes": list(OBSTACLE_SENSING_MODES)},
         }
 
     def validate(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -241,6 +350,7 @@ class LauncherApp:
             "ceiling_file": self.ceiling_plan(settings).to_json(),
             "fleet": list(settings.fleet_ids()) if settings.runs_ground else [],
             "needs_token": settings.needs_token(),
+            "obstacle": self.obstacle(settings),
             "plan": [
                 {"name": p.name, "command": self.redact(p.command_line()), "env": {k: self.redact(v) for k, v in p.display_env.items()}}
                 for p in plan
@@ -276,6 +386,8 @@ class LauncherApp:
             found = self._validate(settings, fresh_adapters=True)
             if errors(found):
                 return {"started": False, "issues": [i.to_json() for i in found], "checks": []}
+            # Before the drones are probed: weaker obstacle sensing is never started without the operator's yes.
+            weak_sensing_confirmed = self._require_sensing_confirmation(settings, body)
             token = self.reload_token()
             checks = pf.run_preflight(settings, token, self.preflight_env, probe_drones=True)
             self.last_checks = [self._redact_check(c.to_json()) for c in checks]
@@ -296,10 +408,15 @@ class LauncherApp:
                 self.store.save_last(settings)
             except (OSError, PresetError):
                 pass  # remembering the settings is a convenience; it must not stop a start
+            obstacle = self.obstacle(settings)
             try:
                 self.manager.start(build_plan(settings, token, self.python, self.environ))
             except ProcessError as exc:
                 raise ApiError(HTTPStatus.CONFLICT, str(exc)) from None
+            with self._nonce_lock:
+                # Restart may relaunch an edge with weaker sensing only during this confirmed run (until Stop).
+                self._weak_sensing_run_open = weak_sensing_confirmed
+            self.running_obstacle = obstacle if obstacle["edges"] else None
             self._remember_adapters(settings)
             return {"started": True, "issues": [i.to_json() for i in found], "checks": self.last_checks,
                     "ceiling_file": written.to_json() if written is not None else None}
@@ -317,6 +434,7 @@ class LauncherApp:
     def stop(self, body: dict[str, Any]) -> dict[str, Any]:
         if body.get("confirm") is not True:
             raise ApiError(HTTPStatus.BAD_REQUEST, "stopping needs confirmation")
+        self._forget_sensing_confirmations()
         if self.manager.stopping():
             return {"stopping": True}  # already stopping; a second signal would interrupt a landing
         thread = threading.Thread(target=self.manager.stop_all, daemon=True, name="launcher-stop")
@@ -335,6 +453,7 @@ class LauncherApp:
             raise ApiError(HTTPStatus.BAD_REQUEST, "name the process to restart")
         if name not in self.manager.names():
             raise ApiError(HTTPStatus.NOT_FOUND, f"no process named {name!r} was started by this launcher")
+        self._require_open_weak_sensing_run(name)
         try:
             self.manager.restart(name, background=True)
         except ProcessError as exc:

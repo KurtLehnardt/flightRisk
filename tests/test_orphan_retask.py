@@ -601,7 +601,9 @@ def test_a_lost_drone_reporting_autonomous_control_blocks_the_confirmation():
                                    control_mode="autonomous"))
     ok, detail = supervisor.confirm_retask(HELD)
     assert not ok and detail.startswith("drone-2 reports autonomous control again, so it may fly these lanes itself")
-    assert "take control of it and land it" in detail
+    # It is on the ground already: taking control keeps it there; there is nothing to land.
+    assert "take control of it so it stays on the ground, then confirm the re-task" in detail
+    assert "land it" not in detail
 
 
 def test_switching_control_away_from_a_lost_drone_does_not_resume_it():
