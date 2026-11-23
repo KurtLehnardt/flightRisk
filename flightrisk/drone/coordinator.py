@@ -120,6 +120,7 @@ from flightrisk.drone.obstacle_sensor import (
     TELEMETRY_STATE,
 )
 from flightrisk.drone.plan_paths import closest_approach
+from flightrisk.drone.temp_preflight import TELEMETRY_TEMP, live_refusal, temp_status
 from flightrisk.drone.search import split_parallel_track_zones
 from flightrisk.fleet_protocol import MAX_TEXT_LEN
 
@@ -1049,6 +1050,10 @@ class FleetCoordinator:
                         uncovered = self._obstacle_uncovered_locked()
                     entry["uncovered_cm"] = sum(u["distance_cm"] for u in uncovered if u["drone_id"] == drone_id)
                     entry["reflights"] = self._reflight_counts_locked(drone_id)
+                # The temperature check before the drone's last takeoff and the live reading, only from an edge that reports them.
+                temp = temp_status(telemetry.get(TELEMETRY_TEMP))
+                if temp is not None:
+                    entry[TELEMETRY_TEMP] = temp
                 rel_x = _number(telemetry.get("rel_x_cm"))
                 rel_y = _number(telemetry.get("rel_y_cm"))
                 if rel_x is not None and rel_y is not None:
@@ -1389,6 +1394,16 @@ class FleetCoordinator:
                     # The edge cannot reach its drone, so its battery is a
                     # cached value and a start_at would be refused anyway.
                     refusals[drone_id] = _drone_link_refusal(telemetry)
+                    continue
+                too_hot = live_refusal(temp_status(telemetry.get(TELEMETRY_TEMP)))
+                if too_hot is not None:
+                    # The drone's live temperature (its newest fresh state
+                    # packet) is at or above its edge's refusal level. A drone
+                    # on the ground would be refused its takeoff by the edge
+                    # anyway; one already in the air (after a manual takeoff)
+                    # is refused here too, so a start never sends a drone that
+                    # hot on its lanes.
+                    refusals[drone_id] = too_hot
                     continue
                 sensing = telemetry.get(TELEMETRY_SENSING)
                 if telemetry.get(TELEMETRY_SENSOR_OK) is False and sensing not in (SENSING_OFF, SENSING_AUTOPILOT):
