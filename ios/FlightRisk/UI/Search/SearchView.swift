@@ -18,6 +18,8 @@ import SwiftUI
 ///  8. Start/Stop Search button (bottom action area)
 ///  9. Disclaimer footer
 /// 10. "Models not loaded" banner (when fps < 0.5 after 2s delay)
+/// 11. "Person detection unavailable" banner (always, while the detection
+///     model is missing or failed to load)
 struct SearchView: View {
 
     /// The view model driving all search screen state.
@@ -53,9 +55,23 @@ struct SearchView: View {
             }
 
             // ----- Layer 10: Models not loaded banner -----
-            if viewModel.isSearching && showModelsNotLoadedBanner && viewModel.fps < 0.5 {
+            // Not shown when layer 11 already explains that detection is off.
+            if viewModel.detectionUnavailableReason == nil
+                && viewModel.isSearching && showModelsNotLoadedBanner && viewModel.fps < 0.5 {
                 VStack {
                     modelsNotLoadedBanner
+                        .padding(.top, 100)
+                    Spacer()
+                }
+            }
+
+            // ----- Layer 11: Person detection unavailable -----
+            // Shown whether or not a search is running, so the missing model is
+            // never silent.
+            if let reason = viewModel.detectionUnavailableReason {
+                VStack {
+                    DetectionUnavailableBanner(reason: reason)
+                        .padding(.horizontal, 16)
                         .padding(.top, 100)
                     Spacer()
                 }
@@ -254,5 +270,43 @@ struct SearchView: View {
                 )
             }
         }
+    }
+}
+
+// MARK: - Detection Unavailable Banner (Layer 11)
+
+/// A persistent warning that person detection is off, with the reason.
+/// It cannot be dismissed: it goes away only when the model loads.
+struct DetectionUnavailableBanner: View {
+    let reason: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.headline)
+                .foregroundStyle(.yellow)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Person detection unavailable")
+                    .font(.subheadline)
+                    .fontWeight(.bold)
+                Text(reason)
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(FlightRiskTheme.hudWhite)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.black.opacity(0.85))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.yellow.opacity(0.8), lineWidth: 1)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Warning: person detection unavailable. \(reason)")
     }
 }
