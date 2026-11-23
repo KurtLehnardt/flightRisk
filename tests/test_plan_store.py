@@ -126,3 +126,53 @@ def test_a_wrong_version_is_refused(tmp_path, version):
         plan_store.load_plan("p", base=tmp_path)
     with pytest.raises(PlanStoreError, match="version"):
         plan_store.save_plan("q", dict(SPEC, version=version), base=tmp_path)
+
+
+def _flaky_replace(monkeypatch, failures, error=None):
+    """Make os.replace raise PermissionError *failures* times, then work; returns the call counter."""
+    real = os.replace
+    calls = [0]
+
+    def replace(src, dst):
+        calls[0] += 1
+        if calls[0] <= failures:
+            raise error or PermissionError(32, "The process cannot access the file because it is being used by another process")
+        return real(src, dst)
+
+    monkeypatch.setattr(plan_store.os, "replace", replace)
+    monkeypatch.setattr(plan_store.time, "sleep", lambda _s: None)
+    return calls
+
+
+def test_a_held_file_is_retried_on_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(plan_store.sys, "platform", "win32")
+    calls = _flaky_replace(monkeypatch, 3)
+    plan_store.save_plan("held", SPEC, base=tmp_path)
+    assert calls[0] == 4
+    assert plan_store.load_plan("held", base=tmp_path)["plan"]["paths"] == SPEC["paths"]
+    assert not list(tmp_path.glob(".plan-*.tmp"))
+
+
+def test_a_file_held_for_good_raises_after_five_tries_and_leaves_no_temp_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(plan_store.sys, "platform", "win32")
+    calls = _flaky_replace(monkeypatch, 99, PermissionError(5, "Access is denied"))
+    with pytest.raises(PermissionError):
+        plan_store.save_plan("held", SPEC, base=tmp_path)
+    assert calls[0] == 5
+    assert not list(tmp_path.glob(".plan-*.tmp"))
+
+
+def test_a_permission_error_is_not_retried_off_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(plan_store.sys, "platform", "linux")
+    calls = _flaky_replace(monkeypatch, 1)
+    with pytest.raises(PermissionError):
+        plan_store.save_plan("held", SPEC, base=tmp_path)
+    assert calls[0] == 1
+
+
+def test_other_errors_are_not_retried_on_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(plan_store.sys, "platform", "win32")
+    calls = _flaky_replace(monkeypatch, 1, OSError(28, "No space left on device"))
+    with pytest.raises(OSError):
+        plan_store.save_plan("full", SPEC, base=tmp_path)
+    assert calls[0] == 1

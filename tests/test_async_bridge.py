@@ -246,3 +246,41 @@ class TestThreadNaming:
             assert bridge.loop_thread.daemon is True
         finally:
             bridge.stop_loop()
+
+
+def _stop_with_a_pending_task(caplog):
+    import gc
+    import logging
+
+    caplog.set_level(logging.DEBUG, logger="asyncio")
+    bridge = AsyncBridge(name="pending-task")
+    bridge.start_loop()
+    started = threading.Event()
+
+    async def forever():
+        started.set()
+        await asyncio.sleep(60)
+
+    future = asyncio.run_coroutine_threadsafe(forever(), bridge.loop)
+    assert started.wait(5)
+    bridge.stop_loop()
+    del future
+    gc.collect()
+    return [r.getMessage() for r in caplog.records if "Task was destroyed" in r.getMessage()]
+
+
+@pytest.mark.filterwarnings("error")
+def test_stop_loop_cancels_pending_tasks_so_none_is_destroyed_pending(caplog):
+    assert _stop_with_a_pending_task(caplog) == []
+
+
+def test_stop_loop_from_a_task_on_the_loop_does_not_wait_for_itself():
+    bridge = AsyncBridge(name="self-stop")
+    bridge.start_loop()
+
+    async def stop_from_inside():
+        bridge.stop_loop()
+
+    # Run on the loop's own thread: the drain is skipped (it would wait on itself) and nothing raises.
+    asyncio.run_coroutine_threadsafe(stop_from_inside(), bridge.loop).result(timeout=10)
+    assert bridge.loop is None

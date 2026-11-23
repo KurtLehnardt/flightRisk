@@ -3,8 +3,8 @@
 The step runs ``python -m flightrisk.drone.midas_model install`` with the install's venv
 Python, from the app folder. A stand-in venv Python records how it was called and exits
 with the code the real module uses (0 installed, 2 download failed, 1 refused), so no
-network and no torch are needed. Windows' install.ps1 runs under PowerShell 7 and is
-skipped where ``pwsh`` is not installed.
+network and no torch are needed. Windows' install.ps1 runs under PowerShell 7 (``pwsh``) or,
+on Windows, Windows PowerShell 5.1 (``powershell.exe``), and is skipped where neither exists.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -24,9 +25,18 @@ EXPECTED_ARGS = "-E -s -m flightrisk.drone.midas_model install"
 
 def _fake_venv_python(app_dir: Path, exit_code: int) -> Path:
     """A venv Python that logs "cwd|args" and exits with *exit_code*; returns the log path."""
+    calls = app_dir.parent / "python-calls.txt"
+    if sys.platform == "win32":
+        # The Windows layout install.ps1 expects is venv\Scripts\python.exe. An .exe cannot be a
+        # script, so the empty file satisfies the layout check and python.cmd does the work;
+        # _windows() points Get-VenvPython at the .cmd.
+        scripts = app_dir / "venv" / "Scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "python.exe").write_bytes(b"")
+        (scripts / "python.cmd").write_text(f'@echo off\r\necho %CD%^|%*>> "{calls}"\r\nexit /b {exit_code}\r\n')
+        return calls
     python = app_dir / "venv" / "bin" / "python"
     python.parent.mkdir(parents=True)
-    calls = app_dir.parent / "python-calls.txt"
     python.write_text(f'#!/bin/bash\necho "$PWD|$*" >> "{calls}"\nexit {exit_code}\n')
     python.chmod(0o755)
     return calls
@@ -44,8 +54,22 @@ def _macos(snippet: str, env: dict[str, str]) -> subprocess.CompletedProcess:
     return subprocess.run(["/bin/bash", "-c", script], env=env, capture_output=True, text=True, timeout=30, check=False)
 
 
+def _powershell() -> str | None:
+    """PowerShell 7 if present, else Windows PowerShell 5.1 on Windows (it is what the installer meets there)."""
+    found = shutil.which("pwsh")
+    if found is None and sys.platform == "win32":
+        found = shutil.which("powershell")
+    return found
+
+
 def _windows(snippet: str, env: dict[str, str]) -> subprocess.CompletedProcess:
-    return subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-Command", f". '{WINDOWS_INSTALL}'\n{snippet}"],
+    shell = _powershell()
+    assert shell is not None
+    override = ""
+    if sys.platform == "win32":
+        # Run the stand-in .cmd where install.ps1 would run Scripts\python.exe.
+        override = "function Get-VenvPython { Join-Path $script:VenvDir 'Scripts\\python.cmd' }\n"
+    return subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command", f". '{WINDOWS_INSTALL}'\n{override}{snippet}"],
                           env=env, capture_output=True, text=True, timeout=60, check=False)
 
 
@@ -56,7 +80,7 @@ RUNNERS = {
 
 
 def _skip_without_pwsh(platform: str) -> None:
-    if platform == "windows" and shutil.which("pwsh") is None:
+    if platform == "windows" and _powershell() is None:
         pytest.skip("PowerShell not installed")
     if platform == "macos" and not os.path.exists("/bin/bash"):
         pytest.skip("/bin/bash not present (the macOS installer is sourced by bash)")

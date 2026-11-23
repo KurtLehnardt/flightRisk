@@ -25,6 +25,19 @@ __all__ = ["AsyncBridge"]
 DEFAULT_CMD_TIMEOUT = 30.0  # seconds for sync-over-async calls
 
 
+_DRAIN_TIMEOUT_S = 2.0  # how long stop_loop waits for cancelled tasks to unwind
+
+
+async def _cancel_pending_tasks() -> None:
+    """Cancel every other task on the running loop and wait for each to finish."""
+    current = asyncio.current_task()
+    pending = [task for task in asyncio.all_tasks() if task is not current]
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
 class AsyncBridge:
     """Runs an asyncio event loop on a background thread for sync-over-async patterns."""
 
@@ -73,6 +86,14 @@ class AsyncBridge:
             thread = self.loop_thread
             try:
                 if loop is not None and loop.is_running():
+                    if thread is not threading.current_thread():
+                        # A task still pending when the loop closes is reported later as
+                        # "Task was destroyed but it is pending!" (an ERROR log, and a
+                        # RuntimeWarning in the tests), so cancel and await them first.
+                        try:
+                            asyncio.run_coroutine_threadsafe(_cancel_pending_tasks(), loop).result(timeout=_DRAIN_TIMEOUT_S)
+                        except Exception:
+                            logger.debug("[%s] Pending tasks did not unwind before the loop was stopped", self._name, exc_info=True)
                     try:
                         loop.call_soon_threadsafe(loop.stop)
                     except RuntimeError:

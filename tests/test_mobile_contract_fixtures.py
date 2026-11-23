@@ -123,8 +123,14 @@ def _committed() -> dict[str, dict]:
 
 
 def _without_commit(doc: dict) -> dict:
+    """The document without what legitimately differs between machines: the commit and the installed library versions.
+
+    Library versions drift whenever a venv is newer than the lock files (installer/locks). What the phones depend on
+    is the frames themselves, which are still compared in full, so the versions are only checked for being recorded.
+    """
     out = json.loads(json.dumps(doc))
     out["_meta"].pop("generated_at_commit", None)
+    out["_meta"].pop("library_versions", None)
     return out
 
 
@@ -168,6 +174,15 @@ def test_regenerated_fixtures_match_the_committed_files(regenerated):
         "regenerate them (venv/bin/python scripts/export_mobile_contract_fixtures.py), update "
         "docs/mobile-contract.md and tell both app teams."
     )
+
+
+def test_the_library_versions_are_recorded_but_not_compared(regenerated):
+    for doc in (_committed()["socketio_frames.json"], regenerated["socketio_frames.json"]):
+        assert set(doc["_meta"]["library_versions"]) == {"python-engineio", "python-socketio", "flask-socketio"}
+        assert all(doc["_meta"]["library_versions"].values())
+    open_frame = regenerated["socketio_frames.json"]["cases"]["engineio_open"]
+    assert "EIO=4" in regenerated["socketio_frames.json"]["_meta"]["description"]
+    assert open_frame == _committed()["socketio_frames.json"]["cases"]["engineio_open"]
 
 
 def test_committed_files_are_rendered_deterministically():

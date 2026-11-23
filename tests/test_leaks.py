@@ -134,3 +134,13 @@ def test_a_leaked_thread_named_like_the_logging_listener_is_still_found():
         assert snapshot().leaked_since(before, settle_s=0.3) == {"threads": ["Thread-1 (_monitor)"]}
     finally:
         impostor.stop()
+
+
+def test_handle_noise_is_ignored_only_on_windows(monkeypatch):
+    from tests.support import leaks
+
+    monkeypatch.setattr(leaks.sys, "platform", "linux")
+    assert leaks.fd_delta_is_leak(1) and not leaks.fd_delta_is_leak(0)
+    monkeypatch.setattr(leaks.sys, "platform", "win32")
+    assert not leaks.fd_delta_is_leak(3)
+    assert leaks.fd_delta_is_leak(leaks.WINDOWS_HANDLE_NOISE + 1)

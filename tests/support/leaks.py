@@ -73,6 +73,17 @@ def process_wide_threads() -> frozenset[threading.Thread]:
     return frozenset({thread}) if thread is not None else frozenset()
 
 
+# Windows counts kernel handles, not descriptors. The count moves by a few for reasons that are not
+# leaks (thread and event objects, the threadpool, DLL loads), so a delta is reported there only when
+# it is larger than this. Descriptor counts on macOS and Linux stay exact.
+WINDOWS_HANDLE_NOISE = 8
+
+
+def fd_delta_is_leak(delta: int) -> bool:
+    """Whether *delta* more open descriptors (handles on Windows) than before counts as a leak."""
+    return delta > (WINDOWS_HANDLE_NOISE if sys.platform == "win32" else 0)
+
+
 @dataclass(frozen=True)
 class ResourceSnapshot:
     fds: int
@@ -86,7 +97,7 @@ class ResourceSnapshot:
         while True:
             now = snapshot()
             leaks: dict[str, object] = {}
-            if now.fds > before.fds:
+            if fd_delta_is_leak(now.fds - before.fds):
                 leaks["fds"] = now.fds - before.fds
             if now.tasks > before.tasks:
                 leaks["tasks"] = list(now.task_names)

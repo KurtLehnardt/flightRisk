@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import tempfile
 import time
 from collections.abc import Mapping
@@ -128,6 +129,28 @@ def _document(name: str, spec: Any, anchor: Any, view: Any) -> dict:
     return doc
 
 
+_REPLACE_TRIES = 5
+_REPLACE_PAUSE_S = 0.075
+
+
+def _replace_with_retry(src: str, dst: Path) -> None:
+    """``os.replace``, retried briefly on Windows when another handle holds the file.
+
+    Windows raises PermissionError (WinError 5 or 32) while a virus scanner, indexer or
+    reader has the target open; the hold is normally gone within a few tens of
+    milliseconds. After the last try the error is raised so the dashboard can report it.
+    """
+    tries = _REPLACE_TRIES if sys.platform == "win32" else 1
+    for attempt in range(1, tries + 1):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == tries:
+                raise
+            time.sleep(_REPLACE_PAUSE_S)
+
+
 def save_plan(name: Any, spec: Any, anchor: Any = None, view: Any = None, *, base: Path | None = None) -> dict:
     """Validate and save a plan under *name*, replacing a plan of the same name. Returns the document."""
     name = _check_name(name)
@@ -144,7 +167,7 @@ def save_plan(name: Any, spec: Any, anchor: Any = None, view: Any = None, *, bas
     try:
         with os.fdopen(fd, "wb") as handle:
             handle.write(data)
-        os.replace(tmp, path)
+        _replace_with_retry(tmp, path)
     except BaseException:
         try:
             os.unlink(tmp)
