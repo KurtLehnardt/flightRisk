@@ -124,14 +124,14 @@ capture times; without it a frame counts from its arrival (an edge refuses to
 fly that way while obstacle sensing is required).
 
 ```bash
-venv/bin/python scripts/obstacle_record.py --out rec/plant_150cm --seconds 5 --label "plant 150 cm"
+venv/bin/python scripts/obstacle_record.py --out rec/plant_150cm --seconds 5 --label "plant 150 cm" --height-cm 100
 venv/bin/python scripts/obstacle_record.py --out rec/wall_300cm --tello-local-ip 192.168.10.2
 venv/bin/python scripts/obstacle_record.py --clock
 ```
 
 It writes `frame_000001.png` and onwards, `frames.csv` (`index`, `file`,
 `captured_at_s`, `arrived_at_s`, `decode_lag_ms`, `wall_time`, `wall_clock`) and
-`meta.json` (the label, the channel order, the settle time, the decoder's
+`meta.json` (the label, the optional `--height-cm` camera height, the channel order, the settle time, the decoder's
 `FLIGHTRISK_MAX_DECODE_LAG_S` and the frame, stale and decoder counts). The
 output directory must not already hold a recording. `decode_lag_ms` (called
 `capture_to_arrival_ms` in older recordings) is the time from the frame's first
