@@ -50,6 +50,7 @@ from flightrisk.drone.safety import (
     slot_above_ceiling,
     validate_ceiling,
 )
+from flightrisk.drone.temp_preflight import TempLimits
 from flightrisk.fleet_protocol import is_identifier
 from flightrisk.launcher.netinfo import Adapter, adapters_for_host
 
@@ -222,7 +223,8 @@ class LauncherSettings:
             otel_enabled=_bool(data, "otel_enabled", defaults.otel_enabled),
             otel_endpoint=_text(data, "otel_endpoint", defaults.otel_endpoint),
             obstacle_sensing=_text(data, "obstacle_sensing", defaults.obstacle_sensing).lower(),
-            obstacle_min_safe_depth=_decimal(data, "obstacle_min_safe_depth", defaults.obstacle_min_safe_depth),
+            obstacle_min_safe_depth=_decimal(data, "obstacle_min_safe_depth", defaults.obstacle_min_safe_depth,
+                                             OBSTACLE_MIN_SAFE_DEPTH_RANGE),
         )
 
 
@@ -264,8 +266,12 @@ def _int(data: Mapping[str, Any], key: str, default: int | None, *, optional: bo
     raise SettingsError(f"{key} must be a whole number, got {value!r}")
 
 
-def _decimal(data: Mapping[str, Any], key: str, default: float) -> float:
-    """A finite number (a JSON number or a plain decimal string), rounded to ``_DEPTH_DECIMALS`` places."""
+def _decimal(data: Mapping[str, Any], key: str, default: float, valid: tuple[float, float]) -> float:
+    """A finite number (a JSON number or a plain decimal string), rounded to ``_DEPTH_DECIMALS`` places.
+
+    Only a value inside *valid* is rounded. One outside it is kept as it is, so ``validate`` refuses
+    it and rounding can never pull it into the range (0.9004 is not 0.9).
+    """
     value = data.get(key, default)
     if value is None or (isinstance(value, str) and not value.strip()):
         raise SettingsError(f"{key} is required")
@@ -278,6 +284,9 @@ def _decimal(data: Mapping[str, Any], key: str, default: float) -> float:
         value = float(text)
     if not isinstance(value, (int, float)) or not math.isfinite(value):
         raise SettingsError(f"{key} must be a number, got {value!r}")
+    lo, hi = valid
+    if not lo <= value <= hi:
+        return float(value)
     return round(float(value), _DEPTH_DECIMALS)
 
 
@@ -415,6 +424,7 @@ def validate(
             err("otel_endpoint", f"the observability endpoint must start with http:// or https://, got {endpoint!r}")
 
     _validate_obstacle(settings, os.environ if environ is None else environ, err, warn)
+    _validate_temp_limits(settings, os.environ if environ is None else environ, err)
 
     if settings.role == "ground" and settings.llm:
         env = os.environ if environ is None else environ
@@ -436,7 +446,7 @@ SOURCE_ENVIRONMENT = "environment"
 
 #: The preflight warning and the window's note for a required sensor still on the shipped threshold.
 UNCALIBRATED_DEPTH_NOTE = (
-    "The obstacle threshold has not been calibrated (H1), so lanes will be cut on every gate until it is set "
+    "The obstacle threshold has not been calibrated (H1), so lanes may be cut on every gate until it is set "
     f"from recordings. The min safe depth is still the shipped default {OBSTACLE_MIN_SAFE_DEPTH:g}; set the value "
     "calibrated for this site (docs/obstacle-sensing.md, \"Calibration procedure\")."
 )
@@ -587,6 +597,21 @@ def _validate_obstacle(settings: LauncherSettings, environ: Mapping[str, str], e
         warn("obstacle_min_safe_depth", f"min safe depth {format_depth(eff.depth)} is above the default "
              f"{OBSTACLE_MIN_SAFE_DEPTH:g}: the depth cue stops only for closer obstacles; use a value calibrated "
              "for this site (docs/obstacle-sensing.md)")
+
+
+def _validate_temp_limits(settings: LauncherSettings, environ: Mapping[str, str], err: Callable) -> None:
+    """An inherited ``FLIGHTRISK_TELLO_TEMP_WARN_C`` or ``..._REFUSE_C`` the edges would refuse is an error.
+
+    Every flying edge reads both at its start (``edge_device._temp_limits``) and refuses to start on a
+    bad value, so the launcher checks them the same way (``TempLimits.from_env``) before it starts one.
+    """
+    if not settings.local_drones():
+        return  # no edge starts here
+    try:
+        TempLimits.from_env(environ)
+    except ValueError as exc:
+        err("tello_temp", f"{exc} (in the launcher's environment): the edges would refuse to start. Unset or fix it "
+            "and restart the launcher (docs/fleet-setup.md, \"Takeoff temperature check\")")
 
 
 def local_tellos_without_adapter(settings: LauncherSettings, adapters: list[Adapter]) -> list[tuple[int, DroneSettings, list[Adapter]]]:

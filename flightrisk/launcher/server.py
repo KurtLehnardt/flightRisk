@@ -19,6 +19,7 @@ import secrets
 import socket
 import sys
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from http import HTTPStatus
@@ -75,8 +76,14 @@ MAX_BODY = 256 * 1024
 #: The ``/api/start`` body key that confirms a start with weaker obstacle sensing; its value must be
 #: the mode the edges will use (``off``), so a confirmation never carries over to another mode.
 CONFIRM_SENSING = "confirm_sensing"
+#: The ``/api/start`` body key that must echo the one-time nonce of the refusal being confirmed.
+CONFIRM_NONCE = "confirm_nonce"
 #: ``needs_confirmation`` of the refusal that asks for it.
 NEEDS_SENSING_CONFIRMATION = "obstacle_sensing"
+#: A confirmation nonce is valid this long after its refusal, in seconds, and for one start only.
+SENSING_NONCE_TTL_S = 300.0
+#: At most this many confirmation nonces are outstanding; a new one drops the oldest.
+MAX_SENSING_NONCES = 16
 
 
 class ApiError(Exception):
@@ -135,6 +142,11 @@ class LauncherApp:
         self._adapters_cache: list[dict[str, Any]] | None = None
         self._start_lock = threading.Lock()
         self._stop_threads: list[threading.Thread] = []
+        #: Outstanding sensing confirmation nonces (``_require_sensing_confirmation``): nonce to the mode,
+        #: the edges and the ``_clock()`` time it expires. Guarded by ``_nonce_lock``.
+        self._sensing_nonces: dict[str, tuple[str, tuple[str, ...], float]] = {}
+        self._nonce_lock = threading.Lock()
+        self._clock: Callable[[], float] = time.monotonic
 
     # ---- helpers ---------------------------------------------------------
 
@@ -187,24 +199,48 @@ class LauncherApp:
         }
 
     def _require_sensing_confirmation(self, settings: LauncherSettings, body: dict[str, Any]) -> None:
-        """Refuse a start whose edges would fly with weaker obstacle sensing unless the body confirms that mode.
+        """Refuse a start whose edges would fly with weaker obstacle sensing unless the body confirms it now.
 
-        Raises ``ApiError`` 409 with ``needs_confirmation`` and the warning text when the effective mode
-        (the window's, or an inherited ``FLIGHTRISK_OBSTACLE_SENSING``, which wins) is not ``required``
-        and ``confirm_sensing`` does not name exactly that mode. Nothing to confirm when no edge starts here.
+        Raises ``ApiError`` 409 with ``needs_confirmation``, the mode, the warning text and a new one-time
+        ``confirm_nonce`` when the effective mode (the window's, or an inherited
+        ``FLIGHTRISK_OBSTACLE_SENSING``, which wins) is not ``required``, unless the body carries
+        ``confirm_sensing`` equal to exactly that mode and ``confirm_nonce`` equal to a nonce this
+        launcher issued for that mode and these edges less than ``SENSING_NONCE_TTL_S`` ago. A nonce is
+        used up by the attempt that presents it, whatever the outcome, and Stop forgets every nonce, so
+        a confirmation can never be replayed for a later start. Nothing to confirm when no edge starts
+        here.
         """
         local = tuple(d.drone_id for d in settings.local_drones())
         eff = effective_obstacle(settings, self.environ)
         if not local or not eff.downgraded:
             return
-        if body.get(CONFIRM_SENSING) == eff.mode:
+        now = self._clock()
+        nonce = body.get(CONFIRM_NONCE)
+        with self._nonce_lock:
+            self._sensing_nonces = {n: v for n, v in self._sensing_nonces.items() if v[2] > now}
+            issued = self._sensing_nonces.pop(nonce, None) if isinstance(nonce, str) else None
+            if body.get(CONFIRM_SENSING) == eff.mode and issued is not None and issued[:2] == (eff.mode, local):
+                confirmed = True
+            else:
+                confirmed = False
+                nonce = secrets.token_urlsafe(16)
+                while len(self._sensing_nonces) >= MAX_SENSING_NONCES:
+                    del self._sensing_nonces[next(iter(self._sensing_nonces))]
+                self._sensing_nonces[nonce] = (eff.mode, local, now + SENSING_NONCE_TTL_S)
+        if confirmed:
             self.manager._event(f"obstacle sensing {eff.mode} confirmed by the operator for {', '.join(local)} "
                                 f"(from the {eff.mode_source})")
             return
         raise ApiError(
             HTTPStatus.CONFLICT, sensing_warning(eff, local),
             needs_confirmation=NEEDS_SENSING_CONFIRMATION, mode=eff.mode, mode_source=eff.mode_source,
+            confirm_nonce=nonce,
         )
+
+    def _forget_sensing_confirmations(self) -> None:
+        """Drop every outstanding confirmation nonce (on Stop)."""
+        with self._nonce_lock:
+            self._sensing_nonces.clear()
 
     def profiles(self) -> list[dict[str, Any]]:
         rows = []
@@ -371,6 +407,7 @@ class LauncherApp:
     def stop(self, body: dict[str, Any]) -> dict[str, Any]:
         if body.get("confirm") is not True:
             raise ApiError(HTTPStatus.BAD_REQUEST, "stopping needs confirmation")
+        self._forget_sensing_confirmations()
         if self.manager.stopping():
             return {"stopping": True}  # already stopping; a second signal would interrupt a landing
         thread = threading.Thread(target=self.manager.stop_all, daemon=True, name="launcher-stop")

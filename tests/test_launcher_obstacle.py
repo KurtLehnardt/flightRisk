@@ -5,9 +5,12 @@
 * precedence: ``FLIGHTRISK_OBSTACLE_SENSING`` and ``FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH`` in the launcher's
   environment win over the window, reach the edge unchanged, and are shown as the effective value;
 * the edges' environment: the window's values when the environment does not set them, never the ground's;
-* ``/api/start`` refuses a start with weaker sensing until the operator confirms that exact mode, before any
-  drone is probed or process started;
-* the window's page and script carry the controls, the "applies on next Start" note and the confirmation.
+* ``/api/start`` refuses a start with weaker sensing until the operator confirms that exact mode with the one-time
+  nonce of the refusal, before any drone is probed or process started; a confirmation is never replayed;
+* inherited ``FLIGHTRISK_TELLO_TEMP_WARN_C`` and ``..._REFUSE_C`` the edges would refuse block Start, and the drone
+  probe marks a hot drone;
+* the window's script (``chooseSensing``, ``startRequest``, ``renderObstacle``) runs under Node with stand-ins for
+  the page and the API; the page carries the controls and the "applies on next Start" note.
 
 The children are stand-in sleepers and no drone is contacted.
 """
@@ -16,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -31,10 +35,11 @@ from flightrisk.drone.obstacle_sensor import (
 )
 from flightrisk.edge_device import ObstacleSettings
 from flightrisk.drone.safety import SafetyEnvelope
+from flightrisk.drone.temp_preflight import ENV_TELLO_TEMP_REFUSE_C, ENV_TELLO_TEMP_WARN_C
 from flightrisk.launcher.commands import EdgeToken, Redactor, build_plan
-from flightrisk.launcher.preflight import INFO, PASS, WARN, obstacle_threshold_check, run_preflight
+from flightrisk.launcher.preflight import INFO, PASS, WARN, TelloProbe, obstacle_threshold_check, run_preflight
 from flightrisk.launcher.processes import ProcessManager
-from flightrisk.launcher.server import STATIC_DIR, LauncherApp, make_server
+from flightrisk.launcher.server import SENSING_NONCE_TTL_S, STATIC_DIR, LauncherApp, make_server
 from flightrisk.launcher.settings import (
     ERROR,
     DroneSettings,
@@ -87,6 +92,15 @@ def test_a_settings_file_from_before_the_obstacle_settings_loads_with_the_defaul
 ])
 def test_the_depth_is_read_as_a_number(raw, value):
     assert LauncherSettings.from_json({**REHEARSAL.to_json(), "obstacle_min_safe_depth": raw}).obstacle_min_safe_depth == value
+
+
+@pytest.mark.parametrize("raw", [0.9004, "0.9004", 0.0496, 0.04999])
+def test_rounding_never_pulls_a_depth_into_the_range(raw):
+    """A value outside 0.05 to 0.9 is kept as it is, so validation refuses it instead of the rounded value."""
+    settings = LauncherSettings.from_json({**REHEARSAL.to_json(), "obstacle_min_safe_depth": raw})
+    assert settings.obstacle_min_safe_depth == float(raw)
+    (issue,) = _issues(settings, level=ERROR)
+    assert "min safe depth must be from 0.05 to 0.9" in issue.message
 
 
 @pytest.mark.parametrize("raw", ["abc", "0,77", "5_0", "nan", "inf", True, None, "", [0.5], float("nan"), float("inf")])
@@ -267,7 +281,20 @@ def _settings(**changes):
     return replace(REHEARSAL, **changes).to_json()
 
 
-def test_start_with_sensing_off_is_refused_until_confirmed(launcher_with):
+def _refused(client, body):
+    """POST /api/start expecting the sensing refusal; its one-time nonce."""
+    status, data = client.post("/api/start", body)
+    assert status == 409 and data["needs_confirmation"] == "obstacle_sensing", data
+    assert isinstance(data["confirm_nonce"], str) and len(data["confirm_nonce"]) >= 16
+    return data["confirm_nonce"]
+
+
+def _stopped(client):
+    assert client.post("/api/stop", {"confirm": True})[0] == 200
+    assert _wait(lambda: not client.get("/api/state")[1]["busy"])
+
+
+def test_start_with_sensing_off_is_refused_until_confirmed_with_the_refusals_nonce(launcher_with):
     client, app, _ = launcher_with()
     body = {"settings": _settings(obstacle_sensing="off")}
     status, data = client.post("/api/start", body)
@@ -276,10 +303,15 @@ def test_start_with_sensing_off_is_refused_until_confirmed(launcher_with):
     assert data["mode_source"] == "window"
     assert data["error"].startswith("Obstacle sensing will be OFF for the edges this launcher starts (drone-1, drone-2).")
     assert app.manager.snapshot() == []  # nothing started
-    # A confirmation of anything but the exact mode is no confirmation.
+    nonce = data["confirm_nonce"]
+    # A confirmation of anything but the exact mode is no confirmation, and it uses up the nonce it presents.
     for wrong in (True, "yes", "required", "OFF", None):
-        assert client.post("/api/start", {**body, "confirm_sensing": wrong})[0] == 409
-    status, data = client.post("/api/start", {**body, "confirm_sensing": "off"})
+        used, nonce = nonce, _refused(client, {**body, "confirm_sensing": wrong, "confirm_nonce": nonce})
+    # The exact mode without a nonce, with one this launcher never issued, or with a used one, is not enough either.
+    _refused(client, {**body, "confirm_sensing": "off"})
+    _refused(client, {**body, "confirm_sensing": "off", "confirm_nonce": "made-up-nonce-0123456789"})
+    _refused(client, {**body, "confirm_sensing": "off", "confirm_nonce": used})
+    status, data = client.post("/api/start", {**body, "confirm_sensing": "off", "confirm_nonce": nonce})
     assert status == 200 and data["started"] is True, data
     assert _wait(lambda: [p["status"] for p in client.get("/api/state")[1]["processes"]] == ["running"] * 3)
     state = client.get("/api/state")[1]
@@ -287,6 +319,49 @@ def test_start_with_sensing_off_is_refused_until_confirmed(launcher_with):
     assert any("obstacle sensing off confirmed by the operator for drone-1, drone-2" in e for e in state["events"])
     edges = [p for p in state["processes"] if p["name"].startswith("edge-")]
     assert all(p["env"][ENV_OBSTACLE_SENSING] == "off" for p in edges)
+
+
+def test_a_confirmed_start_cannot_be_replayed_after_stop(launcher_with):
+    """Confirm, start, stop, then the very same start request again: refused, and asked again."""
+    client, app, _ = launcher_with()
+    body = {"settings": _settings(obstacle_sensing="off")}
+    confirmed = {**body, "confirm_sensing": "off", "confirm_nonce": _refused(client, body)}
+    status, data = client.post("/api/start", confirmed)
+    assert status == 200 and data["started"] is True
+    _stopped(client)
+    status, data = client.post("/api/start", confirmed)
+    assert status == 409 and data["needs_confirmation"] == "obstacle_sensing"
+    assert data["confirm_nonce"] != confirmed["confirm_nonce"]
+
+
+def test_stop_forgets_an_outstanding_nonce(launcher_with):
+    client, app, _ = launcher_with()
+    body = {"settings": _settings(obstacle_sensing="off")}
+    nonce = _refused(client, body)
+    assert client.post("/api/stop", {"confirm": True})[0] == 200
+    _refused(client, {**body, "confirm_sensing": "off", "confirm_nonce": nonce})
+
+
+def test_a_nonce_expires_after_five_minutes(launcher_with):
+    client, app, _ = launcher_with()
+    now = [1000.0]
+    app._clock = lambda: now[0]
+    body = {"settings": _settings(obstacle_sensing="off")}
+    nonce = _refused(client, body)
+    now[0] += SENSING_NONCE_TTL_S + 1
+    nonce = _refused(client, {**body, "confirm_sensing": "off", "confirm_nonce": nonce})
+    now[0] += SENSING_NONCE_TTL_S - 1  # still valid
+    status, data = client.post("/api/start", {**body, "confirm_sensing": "off", "confirm_nonce": nonce})
+    assert status == 200 and data["started"] is True
+    assert SENSING_NONCE_TTL_S == 300
+
+
+def test_a_nonce_only_confirms_the_edges_it_was_issued_for(launcher_with):
+    client, _, _ = launcher_with()
+    nonce = _refused(client, {"settings": _settings(obstacle_sensing="off")})
+    one = _settings(obstacle_sensing="off", drones=(
+        DroneSettings(drone_id="drone-1", source="fake", alt_slot_cm=100),))
+    _refused(client, {"settings": one, "confirm_sensing": "off", "confirm_nonce": nonce})
 
 
 def test_the_refusal_comes_before_any_drone_is_probed(launcher_with):
@@ -313,7 +388,8 @@ def test_an_inherited_off_needs_the_same_confirmation(launcher_with):
     status, data = client.post("/api/start", {"settings": _settings(obstacle_sensing="required")})
     assert status == 409 and data["mode"] == "off" and data["mode_source"] == "environment"
     assert ENV_OBSTACLE_SENSING in data["error"]
-    status, data = client.post("/api/start", {"settings": _settings(), "confirm_sensing": "off"})
+    status, data = client.post("/api/start", {"settings": _settings(), "confirm_sensing": "off",
+                                              "confirm_nonce": data["confirm_nonce"]})
     assert status == 200 and data["started"] is True
 
 
@@ -356,19 +432,6 @@ def test_the_page_has_both_controls_and_says_when_a_change_applies():
     assert "wins over this window" in PAGE
 
 
-def test_the_script_asks_before_a_weaker_mode_and_sends_the_confirmation():
-    # Choosing off goes through chooseSensing, which asks; the generic field wiring skips the mode.
-    assert 'if (key === "obstacle_sensing") continue;' in SCRIPT
-    assert "async function chooseSensing(select)" in SCRIPT
-    assert 'select.value = settings.obstacle_sensing;' in SCRIPT  # Cancel puts the old mode back
-    assert "confirm_sensing: sensingConfirmed" in SCRIPT
-    assert 'e.data.needs_confirmation === "obstacle_sensing"' in SCRIPT
-    # Loading a preset forgets an earlier confirmation, so a saved "off" is asked again.
-    load = SCRIPT[SCRIPT.index("function loadPreset()"):SCRIPT.index("async function savePreset()")]
-    assert "sensingConfirmed = null;" in load
-    assert "Applies on next Start." in SCRIPT
-
-
 # ---------------------------------------------------------------------------
 # Preflight: a threshold that was never calibrated
 # ---------------------------------------------------------------------------
@@ -378,7 +441,7 @@ def test_the_shipped_threshold_with_sensing_required_is_a_preflight_warning():
     check = obstacle_threshold_check(REHEARSAL, {})
     assert (check.name, check.status) == ("Obstacle threshold", WARN)
     assert check.detail == UNCALIBRATED_DEPTH_NOTE
-    assert check.detail.startswith("The obstacle threshold has not been calibrated (H1), so lanes will be cut on "
+    assert check.detail.startswith("The obstacle threshold has not been calibrated (H1), so lanes may be cut on "
                                    "every gate until it is set from recordings.")
     assert "0.35" in check.detail and check.detail.endswith(".")
 
@@ -419,4 +482,279 @@ def test_the_window_shows_the_same_note_next_to_the_threshold(launcher_with):
     ob = client.post("/api/validate", {"settings": _settings(obstacle_sensing="off")})[1]["obstacle"]
     assert ob["uncalibrated_note"] is None
     assert 'id="obstacle-uncalibrated"' in PAGE
-    assert 'note.textContent = ob.uncalibrated_note || "";' in SCRIPT
+
+
+# ---------------------------------------------------------------------------
+# The edges' temperature levels and the drone probe
+# ---------------------------------------------------------------------------
+
+
+def _temp_issues(settings, environ):
+    found = validate(settings, profile_names=PROFILES, environ=environ, is_windows=False)
+    return [i for i in found if i.field == "tello_temp"]
+
+
+@pytest.mark.parametrize("environ, named", [
+    ({ENV_TELLO_TEMP_WARN_C: "abc"}, "FLIGHTRISK_TELLO_TEMP_WARN_C='abc' must be a whole number"),
+    ({ENV_TELLO_TEMP_REFUSE_C: "200"}, "FLIGHTRISK_TELLO_TEMP_REFUSE_C='200' must be a whole number"),
+    ({ENV_TELLO_TEMP_REFUSE_C: "70"}, "the refusal level (70 C) is below the warn level (92 C)"),
+])
+def test_an_inherited_temperature_level_the_edge_would_refuse_blocks_the_start(environ, named):
+    (issue,) = _temp_issues(REHEARSAL, environ)
+    assert issue.level == ERROR
+    assert named in issue.message
+    assert "in the launcher's environment" in issue.message and "the edges would refuse to start" in issue.message
+
+
+def test_good_or_absent_temperature_levels_and_a_computer_without_edges_pass():
+    assert _temp_issues(REHEARSAL, {}) == []
+    assert _temp_issues(REHEARSAL, {ENV_TELLO_TEMP_WARN_C: "60", ENV_TELLO_TEMP_REFUSE_C: "off"}) == []
+    remote_only = builtin_presets()["Layout A (ground here)"]
+    assert _temp_issues(remote_only, {ENV_TELLO_TEMP_WARN_C: "abc"}) == []
+
+
+def test_a_bad_inherited_temperature_level_starts_nothing(launcher_with):
+    client, app, probes = launcher_with({ENV_TELLO_TEMP_REFUSE_C: "hot"})
+    status, data = client.post("/api/start", {"settings": REHEARSAL.to_json()})
+    assert status == 200 and data["started"] is False
+    assert [i["field"] for i in data["issues"] if i["level"] == "error"] == ["tello_temp"]
+    assert app.manager.snapshot() == [] and probes == []
+
+
+@pytest.mark.parametrize("temp, status, note", [
+    ("53~56C", PASS, None),
+    ("90~91C", PASS, None),
+    ("92~93C", WARN, "at or above the 92 C warn level: power it on last or set it on a fan"),
+    ("96~98℃", WARN, "at or above the 95 C refusal level: its edge refuses the takeoff until it cools"),
+    ("error", PASS, None),
+    (None, PASS, None),
+])
+def test_the_drone_probe_marks_a_hot_drone(temp, status, note):
+    from tests.test_launcher_server import _preflight_env as env_with
+
+    settings = replace(REHEARSAL, drones=(
+        DroneSettings(drone_id="drone-1", source="tello", local_ip="192.168.10.2", alt_slot_cm=100),))
+    env = env_with(lambda d: TelloProbe(True, battery=77, temp=temp, detail="fake"))
+    (row,) = [c for c in run_preflight(settings, EdgeToken(TOKEN, "environment"), env, probe_drones=True)
+              if c.name == "Drone drone-1"]
+    assert row.status == status
+    assert (note in row.detail) if note else ("level" not in row.detail)
+
+
+# ---------------------------------------------------------------------------
+# The window's script under Node
+# ---------------------------------------------------------------------------
+
+NODE = shutil.which("node")
+JS_HARNESS = r"""
+const fs = require('fs');
+const block = fs.readFileSync(process.argv[2], 'utf8');
+const scenario = fs.readFileSync(process.argv[3], 'utf8');
+function fakeEl(id) {
+  return { id, value: '', disabled: false, hidden: false, textContent: '', className: '', title: '', children: [],
+    replaceChildren(...c) { this.children = c; }, appendChild(c) { this.children.push(c); return c; } };
+}
+const elements = {};
+const $ = (sel) => elements[sel] || (elements[sel] = fakeEl(sel));
+const el = (tag, attrs, text) => ({ tag, attrs: attrs || {}, textContent: text === undefined || text === null ? '' : String(text) });
+const calls = [], asks = [], changes = [];
+let responses = [], answers = [];
+async function api(path, body) {
+  calls.push({ path, body: body === undefined ? null : JSON.parse(JSON.stringify(body)) });
+  const r = responses.shift();
+  if (!r) throw new Error('no scripted answer for ' + path);
+  if (r.status !== 200) {
+    const e = new Error((r.data && r.data.error) || ('HTTP ' + r.status));
+    e.status = r.status; e.data = r.data; throw e;
+  }
+  return r.data;
+}
+async function ask(title, text, buttons) { asks.push({ title, text }); return answers.shift() ? { value: 'confirm' } : null; }
+function changed(rerender) { changes.push(!!rerender); }
+const settings = { obstacle_sensing: 'required', obstacle_min_safe_depth: 0.35 };
+const f = new Function('$', 'el', 'api', 'ask', 'changed', 'settings', block +
+  '\nreturn { chooseSensing, startRequest, renderObstacle, renderRunningObstacle, forgetSensingConfirmation, ' +
+  'state: () => ({ sensingConfirmed, lastObstacle }) };')($, el, api, ask, changed, settings);
+const script = (r, a) => { responses = r; answers = a || []; };
+const run = new Function('f', '$', 'settings', 'calls', 'asks', 'changes', 'script',
+  'return (async () => {\n' + scenario + '\n})();');
+run(f, $, settings, calls, asks, changes, script).then(
+  (out) => console.log(JSON.stringify(out === undefined ? null : out)),
+  (e) => { console.error(e && e.stack ? e.stack : e); process.exit(1); });
+"""
+
+
+def _launcher_block() -> str:
+    return SCRIPT[SCRIPT.index("// BEGIN obstacle-sensing"):SCRIPT.index("// END obstacle-sensing")]
+
+
+def _node(tmp_path, scenario: str):
+    block = tmp_path / "block.js"
+    block.write_text(_launcher_block(), encoding="utf-8")
+    harness = tmp_path / "harness.js"
+    harness.write_text(JS_HARNESS, encoding="utf-8")
+    run = tmp_path / "scenario.js"
+    run.write_text(scenario, encoding="utf-8")
+    out = subprocess.run([NODE, str(harness), str(block), str(run)], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+REFUSAL = {"status": 409, "data": {"error": "Obstacle sensing will be OFF ...", "needs_confirmation": "obstacle_sensing",
+                                   "mode": "off", "mode_source": "window", "confirm_nonce": "n1"}}
+STARTED = {"status": 200, "data": {"started": True}}
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
+class TestWindowScript:
+    def test_choosing_off_asks_and_cancel_keeps_required(self, tmp_path):
+        out = _node(tmp_path, """
+            const select = $('#obstacle_sensing');
+            select.value = 'off';
+            script([{ status: 200, data: { obstacle: { warning: 'The launcher warning.' } } }], [false]);
+            await f.chooseSensing(select);
+            const cancelled = { mode: settings.obstacle_sensing, shown: select.value, confirmed: f.state().sensingConfirmed };
+            select.value = 'off';
+            script([{ status: 200, data: { obstacle: { warning: 'The launcher warning.' } } }], [true]);
+            await f.chooseSensing(select);
+            const accepted = { mode: settings.obstacle_sensing, confirmed: f.state().sensingConfirmed };
+            select.value = 'required';
+            await f.chooseSensing(select);
+            return { cancelled, accepted, back: { mode: settings.obstacle_sensing, confirmed: f.state().sensingConfirmed },
+                     asks, calls: calls.map((c) => c.path) };
+        """)
+        assert out["cancelled"] == {"mode": "required", "shown": "required", "confirmed": None}
+        assert out["accepted"] == {"mode": "off", "confirmed": "off"}
+        assert out["back"] == {"mode": "required", "confirmed": None}  # choosing required again asks nothing
+        assert [a["text"] for a in out["asks"]] == ["The launcher warning."] * 2
+        assert out["calls"] == ["/api/validate", "/api/validate"]
+
+    def test_a_required_start_sends_no_confirmation(self, tmp_path):
+        out = _node(tmp_path, """
+            script([{ status: 200, data: { started: true } }]);
+            const res = await f.startRequest();
+            return { res, calls, asks };
+        """)
+        assert out["res"] == {"started": True} and out["asks"] == []
+        assert out["calls"] == [{"path": "/api/start", "body": {"settings": {"obstacle_sensing": "required",
+                                                                              "obstacle_min_safe_depth": 0.35}}}]
+
+    def test_the_refusal_is_asked_and_the_nonce_echoed_once(self, tmp_path):
+        out = _node(tmp_path, f"""
+            script([{json.dumps(REFUSAL)}, {json.dumps(STARTED)}], [true]);
+            const res = await f.startRequest();
+            return {{ res, calls, asks, confirmed: f.state().sensingConfirmed }};
+        """)
+        assert out["res"] == {"started": True}
+        assert len(out["asks"]) == 1 and out["asks"][0]["text"] == "Obstacle sensing will be OFF ..."
+        first, second = out["calls"]
+        assert "confirm_sensing" not in first["body"] and "confirm_nonce" not in first["body"]
+        assert (second["body"]["confirm_sensing"], second["body"]["confirm_nonce"]) == ("off", "n1")
+        assert out["confirmed"] is None
+
+    def test_cancel_starts_nothing(self, tmp_path):
+        out = _node(tmp_path, f"""
+            script([{json.dumps(REFUSAL)}], [false]);
+            const res = await f.startRequest();
+            return {{ res, calls: calls.length }};
+        """)
+        assert out == {"res": None, "calls": 1}
+
+    def test_a_confirmation_in_the_mode_control_counts_for_the_next_start_only(self, tmp_path):
+        out = _node(tmp_path, f"""
+            const select = $('#obstacle_sensing');
+            select.value = 'off';
+            script([{{ status: 200, data: {{}} }}], [true]);
+            await f.chooseSensing(select);
+            const asked = asks.length;
+            script([{json.dumps(REFUSAL)}, {json.dumps(STARTED)}], []);
+            await f.startRequest();
+            const afterFirst = {{ asks: asks.length, confirmed: f.state().sensingConfirmed }};
+            // The next Start (after a Stop, say) is asked again: the confirmation is not replayed.
+            script([{json.dumps(REFUSAL)}], [false]);
+            const res = await f.startRequest();
+            return {{ asked, afterFirst, asks: asks.length, res,
+                      nonces: calls.filter((c) => c.path === '/api/start').map((c) => c.body.confirm_nonce || null) }};
+        """)
+        assert out["asked"] == 1
+        assert out["afterFirst"] == {"asks": 1, "confirmed": None}  # the control's yes spared the second question
+        assert out["asks"] == 2 and out["res"] is None
+        assert out["nonces"] == [None, "n1", None]
+
+    def test_stop_and_a_preset_load_forget_the_confirmation(self, tmp_path):
+        out = _node(tmp_path, f"""
+            const select = $('#obstacle_sensing');
+            select.value = 'off';
+            script([{{ status: 200, data: {{}} }}], [true]);
+            await f.chooseSensing(select);
+            f.forgetSensingConfirmation();
+            script([{json.dumps(REFUSAL)}], [false]);
+            const res = await f.startRequest();
+            return {{ res, asks: asks.length }};
+        """)
+        assert out == {"res": None, "asks": 2}
+        load = SCRIPT[SCRIPT.index("function loadPreset()"):SCRIPT.index("async function savePreset()")]
+        stop = SCRIPT[SCRIPT.index("async function stop()"):SCRIPT.index("async function stop()") + 600]
+        assert "forgetSensingConfirmation();" in load and "forgetSensingConfirmation();" in stop
+
+    def test_a_confirmation_that_expired_says_so(self, tmp_path):
+        out = _node(tmp_path, f"""
+            script([{json.dumps(REFUSAL)}, {json.dumps(REFUSAL)}], [true]);
+            try {{ await f.startRequest(); return 'started'; }} catch (e) {{ return e.message; }}
+        """)
+        assert out.startswith("Not started: the confirmation of obstacle sensing off expired")
+
+    def test_an_environment_override_shows_the_effective_value_in_the_disabled_control(self, tmp_path):
+        ob = {"mode": "off", "mode_source": "environment", "mode_variable": ENV_OBSTACLE_SENSING,
+              "min_safe_depth": 0.77, "min_safe_depth_source": "environment",
+              "min_safe_depth_variable": ENV_OBSTACLE_MIN_SAFE_DEPTH, "min_safe_depth_default": 0.35,
+              "edges": ["drone-1"], "downgraded": True, "uncalibrated_note": None}
+        out = _node(tmp_path, f"""
+            const controls = () => ({{
+                mode: [$('#obstacle_sensing').value, $('#obstacle_sensing').disabled],
+                depth: [$('#obstacle_min_safe_depth').value, $('#obstacle_min_safe_depth').disabled],
+                note: [$('#obstacle-uncalibrated').hidden, $('#obstacle-uncalibrated').textContent],
+                text: $('#obstacle-effective').children.map((c) => c.textContent).join(' ') }});
+            f.renderObstacle({json.dumps(ob)});
+            const overridden = controls();
+            f.renderObstacle(null);
+            const cleared = controls();
+            f.renderObstacle({json.dumps({**ob, "mode": "required", "mode_source": "window",
+                                          "min_safe_depth": 0.35, "min_safe_depth_source": "window",
+                                          "downgraded": False, "uncalibrated_note": "Not calibrated."})});
+            return {{ overridden, cleared, window: controls() }};
+        """)
+        overridden, cleared, window = out["overridden"], out["cleared"], out["window"]
+        # The window still holds required and 0.35; the disabled controls show what the edges will use.
+        assert overridden["mode"] == ["off", True] and overridden["depth"] == ["0.77", True]
+        assert "mode off (from FLIGHTRISK_OBSTACLE_SENSING in the launcher's environment" in overridden["text"]
+        assert overridden["note"] == [True, ""]
+        # No answer from /api/validate: nothing stays disabled, and the window's values are back.
+        assert cleared["mode"] == ["required", False] and cleared["depth"] == ["0.35", False]
+        assert cleared["text"] == ""
+        assert window["mode"] == ["required", False] and window["depth"] == ["0.35", False]
+        assert window["note"] == [False, "Not calibrated."]
+
+    def test_an_answer_from_validate_keeps_what_the_operator_is_typing(self, tmp_path):
+        ob = {"mode": "required", "mode_source": "window", "mode_variable": ENV_OBSTACLE_SENSING,
+              "min_safe_depth": 0, "min_safe_depth_source": "window",
+              "min_safe_depth_variable": ENV_OBSTACLE_MIN_SAFE_DEPTH, "min_safe_depth_default": 0.35,
+              "edges": ["drone-1"], "downgraded": False, "uncalibrated_note": None}
+        out = _node(tmp_path, f"""
+            const depth = $('#obstacle_min_safe_depth');
+            depth.value = '0.';            // half typed; the input handler stored Number('0.') = 0
+            settings.obstacle_min_safe_depth = 0;
+            f.renderObstacle({json.dumps(ob)});
+            return depth.value;
+        """)
+        assert out == "0."
+
+    def test_the_running_edges_values_are_shown_while_processes_run(self, tmp_path):
+        out = _node(tmp_path, """
+            f.renderRunningObstacle({ mode: 'off', min_safe_depth: 0.77, downgraded: true });
+            const shown = [$('#obstacle-running').hidden, $('#obstacle-running').textContent, $('#obstacle-running').className];
+            f.renderRunningObstacle(null);
+            return { shown, hidden: $('#obstacle-running').hidden };
+        """)
+        assert out["shown"][0] is False and "mode off and min safe depth 0.77" in out["shown"][1]
+        assert out["shown"][2] == "small warning" and out["hidden"] is True

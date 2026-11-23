@@ -156,7 +156,7 @@ ceiling, the margin and each drone's altitude slot from the window, then starts 
 | Language model | off adds `--no-llm` to the ground (the default) |
 | Ports | the ground's `--port` and `--edge-port`; the dashboard always binds 127.0.0.1 |
 | Observability export | `FLIGHTRISK_OTEL_ENABLED`, `OTEL_ENDPOINT` and `OTEL_RESOURCE_ATTRIBUTES` per process; an endpoint on port 4318 uses OTLP over HTTP, anything else OTLP over gRPC |
-| Obstacle sensing mode | the edges' `FLIGHTRISK_OBSTACLE_SENSING`: `required` (the default) or `off`. Choosing `off` asks first, and Start asks again for a mode that was not confirmed in this window (see "Obstacle sensing") |
+| Obstacle sensing mode | the edges' `FLIGHTRISK_OBSTACLE_SENSING`: `required` (the default) or `off`. Choosing `off` asks first, and every Start with `off` must be confirmed again (see "Obstacle sensing") |
 | Min safe depth | the edges' `FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH`, 0.05 to 0.9 (default 0.35; the outdoor field calibration needed 0.77). A value above the default is a warning: the depth cue then stops only for closer obstacles |
 
 ### Obstacle sensing
@@ -169,16 +169,25 @@ badge (next to `PERSON CUE`) for the threshold.
 
 Precedence: `FLIGHTRISK_OBSTACLE_SENSING` or `FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH` in the launcher's own environment
 wins over the window, so a shell or script that sets them keeps working. The window shows the effective value and
-where it comes from, disables the control the environment overrides, and lists the variable among the inherited
-ones. An inherited value the edge would refuse (a mode other than `required` or `off`, a depth outside 0.05 to 0.9)
-is an error that blocks Start. An empty variable counts as unset.
+where it comes from, disables the control the environment overrides and shows the environment's value in it, and
+lists the variable among the inherited ones. An inherited value the edge would refuse (a mode other than `required`
+or `off`, a depth outside 0.05 to 0.9) is an error that blocks Start. An empty variable counts as unset. A depth
+typed outside 0.05 to 0.9 is refused as typed; it is never rounded into the range.
 
-Weaker sensing is never started silently. When the effective mode is not `required` (from the window or from the
-environment) and an edge starts here, `POST /api/start` answers 409 with `needs_confirmation: "obstacle_sensing"`,
-the `mode` and a full-sentence warning, before any drone is probed or any process starts. The window shows that
-warning and, on the operator's yes, sends the start again with `confirm_sensing` set to exactly that mode; any other
-value is no confirmation. Loading a preset or reloading the window forgets the confirmation. The confirmed start is
-recorded in the window's event log.
+Weaker sensing is never started silently, and a confirmation is never replayed. When the effective mode is not
+`required` (from the window or from the environment) and an edge starts here, `POST /api/start` answers 409 with
+`needs_confirmation: "obstacle_sensing"`, the `mode`, a full-sentence warning and a one-time `confirm_nonce`, before
+any drone is probed or any process starts. The window shows that warning and, on the operator's yes, sends the start
+again with `confirm_sensing` set to exactly that mode and `confirm_nonce` echoed. Any other mode, a missing or unknown
+nonce, or a nonce issued for other edges is no confirmation. A nonce is good for one attempt and expires after 5
+minutes, and Stop forgets every outstanding nonce, so a confirm, Start, Stop, Start sequence is asked again. When the
+operator chose `off` in the mode control (which asks first), the next Start skips the second question; that yes then
+counts for that Start only, and Stop or loading a preset forgets it. The confirmed start is recorded in the window's
+event log.
+
+The edges' takeoff temperature levels are checked too: an inherited `FLIGHTRISK_TELLO_TEMP_WARN_C` or
+`FLIGHTRISK_TELLO_TEMP_REFUSE_C` the edges would refuse (see `docs/fleet-setup.md`, "Takeoff temperature check") is an
+error that blocks Start, when an edge starts here.
 
 The ground also gets `--appearance-only`, `FLIGHTRISK_APPEARANCE_ONLY=1`, `FLIGHTRISK_SAVE_CAPTURES=0`
 and `FLIGHTRISK_FLEET_NET` (`ap` in layout A, so it refuses any bind address that is not a literal;
@@ -195,7 +204,7 @@ All checks are read-only; any FAIL blocks Start.
 | Virtual environment | the launcher runs in a virtual environment (otherwise a warning) |
 | Dependencies | the packages the chosen processes import are installed |
 | Detector weights | the chosen profile's weights are on disk (a stock model that Ultralytics would download is a warning) |
-| Obstacle threshold | an edge starts here and its min safe depth is not the shipped 0.35. With sensing `required` and 0.35 it is a warning, never a block: the threshold has not been calibrated (H1), so lanes will be cut on every gate until it is set from recordings. The window shows the same note under the threshold. With sensing `off` it is INFO |
+| Obstacle threshold | an edge starts here and its min safe depth is not the shipped 0.35. With sensing `required` and 0.35 it is a warning, never a block: the threshold has not been calibrated (H1), so lanes may be cut on every gate until it is set from recordings. The window shows the same note under the threshold. With sensing `off` it is INFO |
 | Dashboard port, edge link port | free on 127.0.0.1 (a port in use is reported, never freed: the launcher only stops what it started) |
 | Cable address | in layout A, the address is on one of this computer's adapters and the edge port is free on it |
 | Ground station | edges only: something listens at the ground host and port (otherwise a warning; the edges keep retrying) |
@@ -203,7 +212,7 @@ All checks are read-only; any FAIL blocks Start.
 | Network adapters | lists the adapters with their IPv4 addresses and indexes |
 | Adapter for each drone | its local IP is on exactly one adapter, with the interface index given. A real drone with no local IP fails ("choose the adapter") when more than one adapter has an address in its Tello host's network, because a packet sent from all addresses could reach another drone; that drone is then not probed |
 | Ceiling | the dashboard's saved ceiling and margin match the launcher's (otherwise a warning that Start will write the launcher's values) |
-| Drone (each real Tello here) | it answers `command`, `battery?` and `temp?`; its battery is shown, and below 30 % is a warning |
+| Drone (each real Tello here) | it answers `command`, `battery?` and `temp?`; its battery and temperature are shown. Below 30 % battery is a warning, and so is a temperature at or above the edges' warn level (`FLIGHTRISK_TELLO_TEMP_WARN_C`, default 92 C): power that drone on last or set it on a fan |
 
 The drone check sends only `command` (the SDK handshake), `battery?` and `temp?`, from one UDP socket
 bound to the drone's local IP (and pinned to its interface index on Windows), and closes the socket
