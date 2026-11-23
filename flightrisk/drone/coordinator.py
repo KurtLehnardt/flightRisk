@@ -101,6 +101,7 @@ from flightrisk.drone.obstacle_sensor import (
     TELEMETRY_STATE,
 )
 from flightrisk.drone.plan_paths import closest_approach
+from flightrisk.drone.safety import min_takeoff_battery_from_env
 from flightrisk.drone.search import split_parallel_track_zones
 
 logger = logging.getLogger(__name__)
@@ -118,9 +119,6 @@ Both are at or below the default ceiling limit of 140 cm (200 cm ceiling
 minus 60 cm margin, ``flightrisk.drone.safety``). The second slot was 160 cm
 until a Tello at that slot hit a ceiling (docs/ceiling-and-altitude.md).
 """
-
-MIN_START_BATTERY = 30
-"""Lowest battery percentage that lets a drone take part in ``start()``."""
 
 TELEMETRY_FRESH_S = 2.0
 # Edge refusals of an assign_lanes that are only true for now: the chunk waits
@@ -709,7 +707,7 @@ class FleetCoordinator:
         dedup_radius_cm: float = 80,
         *,
         zone_gap_cm: int = DEFAULT_ZONE_GAP_CM,
-        min_battery: float = MIN_START_BATTERY,
+        min_battery: float | None = None,
         clock: Callable[[], float] = time.monotonic,
         on_event: Callable[[str, dict], None] | None = None,
         geofence_cm: float | None = None,
@@ -747,7 +745,7 @@ class FleetCoordinator:
         self._alt_slot_of = alt_slot_of
         self._dedup_radius_cm = float(dedup_radius_cm)
         self._zone_gap_cm = int(zone_gap_cm)
-        self._min_battery = float(min_battery)
+        self._min_battery = float(min_takeoff_battery_from_env() if min_battery is None else min_battery)
         self._clock = clock
         self._on_event = on_event
         self._geofence_cm = float(geofence_cm) if geofence_cm is not None else None
@@ -2742,8 +2740,8 @@ class FleetCoordinator:
                 why[rid] = "is not flying"
             elif battery is None:
                 why[rid] = "reports no battery"
-            elif battery < MIN_START_BATTERY:
-                why[rid] = f"has battery {battery:g}%, below {MIN_START_BATTERY}%"
+            elif battery < self._min_battery:
+                why[rid] = f"has battery {battery:g}%, below {self._min_battery:g}%"
             elif sensing != SENSING_STEPPED:
                 why[rid] = (f"senses obstacles {sensing:.40}" if isinstance(sensing, str)
                             else "reports no obstacle sensing")
@@ -2763,7 +2761,7 @@ class FleetCoordinator:
         ``_receivers()`` (not lost, part of the plan, not held for manual
         control) without the cutting drone, keeping only drones whose
         telemetry from the last ``TELEMETRY_FRESH_S`` seconds shows
-        ``is_flying: true``, a battery of at least ``MIN_START_BATTERY``
+        ``is_flying: true``, a battery of at least the start minimum (``min_battery``)
         percent, ``obstacle_sensing`` ``stepped``, ``obstacle_sensor_ok:
         true`` and not ``drone_link_ok: false``, and whose lanes no
         ``sensor_down`` cut has ended. A drone that flies unsensed (``off``

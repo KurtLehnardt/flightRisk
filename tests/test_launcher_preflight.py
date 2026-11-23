@@ -267,3 +267,15 @@ def test_unreadable_adapter_list_fails_and_sends_no_probe():
     assert rows["Adapter for drone-1"].status == FAIL and "set the local IP" in rows["Adapter for drone-1"].detail
     assert rows["Drone drone-1"].status == FAIL
     assert probed == []
+
+
+def test_low_battery_check_follows_the_takeoff_minimum_override():
+    probe = lambda d: TelloProbe(True, battery=40, temp="55C", detail="ok")  # noqa: E731
+    default = _by_name(run_preflight(_two_tellos(), EdgeToken(None, None), _env(tello_probe=probe)))
+    assert default["Drone drone-1"].status == PASS
+    raised = _env(tello_probe=probe, environ={"FLIGHTRISK_MIN_TAKEOFF_BATTERY": "50"})
+    rows = _by_name(run_preflight(_two_tellos(), EdgeToken(None, None), raised))
+    assert rows["Drone drone-1"].status == WARN and "below the 50% takeoff minimum" in rows["Drone drone-1"].detail
+    lowered = _env(tello_probe=lambda d: TelloProbe(True, battery=20, temp="55C", detail="ok"),
+                   environ={"FLIGHTRISK_MIN_TAKEOFF_BATTERY": "10"})
+    assert _by_name(run_preflight(_two_tellos(), EdgeToken(None, None), lowered))["Drone drone-1"].status == PASS

@@ -613,3 +613,18 @@ def test_generic_for_n_equals_4():
     assert set(land) == set(edges) and all(v is None for v in land.values())
     for edge in edges.values():
         assert len(edge.of_type("emergency_land_all")) == 1
+
+
+def test_start_battery_minimum_follows_the_takeoff_minimum_override(monkeypatch):
+    monkeypatch.setenv("FLIGHTRISK_MIN_TAKEOFF_BATTERY", "50")
+    coord, edges, clock, _ = make_fleet(n=2)
+    coord.sync()
+    coord.plan()
+    lanes_total = len(coord.lanes("drone-2"))
+    edges["drone-2"].ack_lanes(lanes_total, battery=40)
+    result = coord.start()
+    assert not result.ok
+    assert result.refusals["drone-2"] == "battery 40% below 50%"
+    # An explicit argument still wins over the environment.
+    explicit = FleetCoordinator(edges, area_cm=(400, 400), strip_cm=50, clock=clock, min_battery=35)
+    assert explicit._min_battery == 35

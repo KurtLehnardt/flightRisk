@@ -376,3 +376,15 @@ def test_scheduled_start_refused_after_link_loss(make_executor):
     assert executor.wait_idle(WAIT_S)
     assert drone.calls == []
     assert [m for m in sent if m.get("for") == "start_at"] == []
+
+
+def test_min_takeoff_battery_helper_is_the_single_source():
+    from flightrisk.drone.safety import DEFAULT_MIN_TAKEOFF_BATTERY, min_takeoff_battery_from_env
+
+    assert min_takeoff_battery_from_env({}) == DEFAULT_MIN_TAKEOFF_BATTERY == 30
+    assert min_takeoff_battery_from_env({"FLIGHTRISK_MIN_TAKEOFF_BATTERY": " 45 "}) == 45
+    for bad in ("abc", "101", "-1", "nan"):
+        with pytest.raises(ValueError):
+            min_takeoff_battery_from_env({"FLIGHTRISK_MIN_TAKEOFF_BATTERY": bad})
+    # The edge's envelope reads the same value.
+    assert SafetyEnvelope.from_env(environ={"FLIGHTRISK_MIN_TAKEOFF_BATTERY": "45"}).min_takeoff_battery == 45

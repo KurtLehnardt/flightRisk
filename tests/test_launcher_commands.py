@@ -214,3 +214,16 @@ def test_edges_do_not_inherit_the_claude_key_but_the_ground_does():
     assert plan["ground"].env["FLIGHTRISK_CLAUDE_API_KEY"] == "sk-ant-x"
     edges = [spec for spec in plan.values() if spec.kind == "edge"]
     assert edges and all("FLIGHTRISK_CLAUDE_API_KEY" not in spec.env for spec in edges)
+
+
+def test_ground_plans_against_the_geofence_the_edges_enforce():
+    settings = replace(builtin_presets()["Rehearsal with fake drones"], geofence_cm=450)
+    ground, edge = _plan(settings)[:2]
+    assert edge.env["FLIGHTRISK_GEOFENCE_CM"] == "450"
+    assert ground.env["FLIGHTRISK_GEOFENCE_CM"] == "450"
+
+
+def test_an_inherited_geofence_does_not_override_the_launcher_choice_for_the_ground():
+    settings = replace(builtin_presets()["Rehearsal with fake drones"], geofence_cm=450)
+    ground = _plan(settings, base_env={"PATH": "/usr/bin", "FLIGHTRISK_GEOFENCE_CM": "500"})[0]
+    assert ground.env["FLIGHTRISK_GEOFENCE_CM"] == "450"

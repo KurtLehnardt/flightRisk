@@ -87,6 +87,7 @@ __all__ = [
     "MIN_CEILING_CM",
     "MIN_CEILING_MARGIN_CM",
     "MIN_MOVE_CM",
+    "min_takeoff_battery_from_env",
     "MIN_TAKEOFF_BATTERY_ENV",
     "RelativePose",
     "ROOM_LIMITS",
@@ -342,6 +343,28 @@ class LinkWatchdog:
     def expired(self) -> bool:
         """True once no ground message has arrived for ``timeout_s`` seconds."""
         return self.age_s() >= self.timeout_s
+
+
+def min_takeoff_battery_from_env(environ: Mapping[str, str] | None = None) -> float:
+    """The lowest battery percentage that allows a takeoff or a fleet start.
+
+    This is the single source for the minimum: ``FLIGHTRISK_MIN_TAKEOFF_BATTERY``
+    when it is set, otherwise ``DEFAULT_MIN_TAKEOFF_BATTERY``. The edges, the
+    fleet coordinator and the launcher preflight all call it, so the override
+    applies to each of them. Raises ``ValueError`` for a value that is not a
+    number from 0 to 100.
+    """
+    env = os.environ if environ is None else environ
+    raw = (env.get(MIN_TAKEOFF_BATTERY_ENV) or "").strip()
+    if not raw:
+        return float(DEFAULT_MIN_TAKEOFF_BATTERY)
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{MIN_TAKEOFF_BATTERY_ENV} must be a number, got {raw!r}") from exc
+    if not is_finite_number(value) or not 0 <= value <= 100:
+        raise ValueError(f"{MIN_TAKEOFF_BATTERY_ENV} must be within 0-100, got {raw!r}")
+    return value
 
 
 class SafetyEnvelope:

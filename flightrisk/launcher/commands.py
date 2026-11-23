@@ -230,6 +230,8 @@ def ground_spec(settings: LauncherSettings, token: EdgeToken, python: str, base_
         "FLIGHTRISK_FLEET_NET": "ap" if settings.network == "cable" else "station",
         "FLIGHTRISK_APPEARANCE_ONLY": "1",
         "FLIGHTRISK_SAVE_CAPTURES": "0",
+        # The ground plans re-tasks against the geofence the edges enforce, not its own default.
+        "FLIGHTRISK_GEOFENCE_CM": str(settings.geofence_cm),
         **_otel_env(settings, "ground"),
     }
     return ProcessSpec(

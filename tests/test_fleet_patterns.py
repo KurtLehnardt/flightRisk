@@ -454,7 +454,7 @@ def test_split_square_matches_the_plan_example_geometry():
     left, right = plan.drones
     assert plan.placements() == {"drone-1": (900, 1000, 0), "drone-2": (1100, 1000, 0)}
     assert (left.start_offset_s, right.start_offset_s) == (0.0, 2.0)
-    assert (left.alt_cm, right.alt_cm) == (100, 160)
+    assert (left.alt_cm, right.alt_cm) == (100, 130)
     pattern = right.without_transit()
     # Rings at radii 200, 600 and 800 (the last clamped to keep the pass inside the area).
     corners = [(1050, 800), (1200, 800), (1200, 1200), (1050, 1200), (1050, 1600), (1600, 1600),
@@ -595,3 +595,19 @@ def test_invalid_inputs_are_rejected():
     # The footprint is a required, explicit choice.
     with pytest.raises(TypeError):
         fp.plan_parallel_split(["a", "b"], 2000, 400)
+
+
+def test_default_altitude_slots_match_the_coordinator_and_pass_the_room_ceiling():
+    from flightrisk.drone.coordinator import DEFAULT_ALT_SLOTS_CM
+
+    assert tuple(fp.DEFAULT_ALT_SLOTS_CM) == tuple(DEFAULT_ALT_SLOTS_CM)
+    envelope = SafetyEnvelope()
+    for slot in fp.DEFAULT_ALT_SLOTS_CM:
+        envelope.check_alt_slot(slot)
+
+
+def test_every_planned_altitude_passes_the_room_ceiling():
+    envelope = SafetyEnvelope()
+    for case, plan in _all_plans(seed=3, cases=30):
+        for drone in plan.drones:
+            envelope.check_alt_slot(drone.alt_cm)
