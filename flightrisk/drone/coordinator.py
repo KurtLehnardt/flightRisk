@@ -30,7 +30,12 @@ What an obstacle cut leaves unsearched rides on the same machinery: once
 the cutting drone has finished its lanes, the segments of each cut are
 offered once to another drone that senses obstacles, which flies them
 reversed at its own altitude slot (``lane_reflight``); the ``reflight_*``
-events follow each offer to ``reflown`` or ``blocked_again``.
+events follow each offer to ``reflown`` or ``blocked_again``. A stretch a
+drone flew beside its lane to get past an obstacle (an offset segment of a
+sidestep, ``lane_avoid``, reported in ``obstacle_avoid``) is listed, announced
+(``lane_offset``) and offered the same way. A drone that could not get back
+to its lane after a sidestep and hovers under manual control is announced as
+``sidestep_held``.
 
 Clock convention: the offset of a link is the median over the sync rounds of
 ``((t2 - t1) + (t3 - t4)) / 2``, which is the edge clock minus the ground
