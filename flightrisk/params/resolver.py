@@ -94,6 +94,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Optional, Union
 
@@ -101,7 +102,15 @@ from flightrisk.hardware.catalogue import BUILTIN_MODELS, SCALES, DroneModel
 from flightrisk.params.constraints import FILE_SOURCES, check_constraints, stored_feature_off, stored_switch_off
 from flightrisk.params.messages import render_refused_input, render_unavailable_capability
 from flightrisk.params.spec import Bound, Confirm, EffectiveValue, Edit, Kind, ParamSpec, Safer, Source, Unit
-from flightrisk.params.table import TABLE
+from flightrisk.params.table import (
+    PARSE_AREA,
+    PARSE_ASCII_FLOAT,
+    PARSE_ASCII_INT,
+    PARSE_CHOICE,
+    TABLE,
+    TODAY_READS,
+    TodayRead,
+)
 
 log = logging.getLogger(__name__)
 
@@ -170,6 +179,9 @@ class TodayRange:
     lo: Optional[float]
     hi: Optional[float]
     policy: str = "refuse"
+    #: True when today refuses the end itself (``geofence_cm <= 0`` is refused, so 0 is an open end).
+    lo_open: bool = False
+    hi_open: bool = False
 
 
 #: ``{name: {profile: TodayRange or None}}``; a ``None`` range means today's range is not known.
@@ -184,7 +196,8 @@ def today_accepts_from_golden(golden: Mapping[str, Any]) -> dict[str, dict[str, 
             per: dict[str, Optional[TodayRange]] = {}
             for profile, accepts in (alias.get("today_accepts") or {}).items():
                 per[profile] = None if accepts is None else TodayRange(
-                    accepts.get("lo"), accepts.get("hi"), accepts.get("policy") or "refuse"
+                    accepts.get("lo"), accepts.get("hi"), accepts.get("policy") or "refuse",
+                    bool(accepts.get("lo_open")), bool(accepts.get("hi_open")),
                 )
             out[name] = per
     return out
@@ -199,6 +212,8 @@ class _Name:
     scale: float
     scales: frozenset[str]
     canonical: bool
+    #: How today's code reads this name (``table.TODAY_READS``), or None to read it as the row's kind.
+    read: Optional[TodayRead] = None
 
 
 def _flag_scale(spec: ParamSpec, flag: str) -> float:
@@ -216,13 +231,14 @@ def _build_names() -> tuple[dict[str, _Name], dict[str, _Name]]:
         alias_scales = {a.applies_to_scale for a in spec.env_aliases if a.applies_to_scale}
         if spec.env:
             env_scale = _METRE_SCALE if spec.unit in _CENTIMETRE_UNITS and spec.env.endswith(_METRE_ENV_SUFFIXES) else 1.0
-            env[spec.env] = _Name(spec, spec.env, env_scale, all_scales - alias_scales, True)
+            env[spec.env] = _Name(spec, spec.env, env_scale, all_scales - alias_scales, True,
+                                  TODAY_READS.get(spec.env))
         for alias in spec.env_aliases:
             scales = frozenset({alias.applies_to_scale}) if alias.applies_to_scale else all_scales
-            env[alias.name] = _Name(spec, alias.name, alias.scale_factor, scales, False)
+            env[alias.name] = _Name(spec, alias.name, alias.scale_factor, scales, False, TODAY_READS.get(alias.name))
         for flag in spec.cli:
             scales = frozenset({"field"}) if flag in FIELD_ONLY_FLAGS else all_scales
-            cli[flag] = _Name(spec, flag, _flag_scale(spec, flag), scales, True)
+            cli[flag] = _Name(spec, flag, _flag_scale(spec, flag), scales, True, TODAY_READS.get(flag))
     return env, cli
 
 
@@ -289,6 +305,53 @@ def _from_text(spec: ParamSpec, text: str, scale: float) -> Any:
     if spec.kind is Kind.INT and scale == 1.0 and not number.is_integer():
         raise _WrongType(text)
     return _scaled(number, scale, spec.kind)
+
+
+#: Today's ASCII number patterns (``flightrisk/edge_device.py:1846-1847``).
+_ASCII_INT_RE = re.compile(r"[0-9]+")
+_ASCII_FLOAT_RE = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+
+
+def _from_today_text(spec: ParamSpec, raw: str, read: TodayRead, scale: float) -> Any:
+    """Parse an environment or flag value exactly as today's reader does (``read``); raises ``_WrongType``."""
+    text = raw.strip()
+    if read.parse == PARSE_CHOICE:
+        key = text.lower() if read.fold else raw
+        if key not in read.values:
+            raise _WrongType(raw)
+        return read.values[key]
+    if read.parse == PARSE_AREA:
+        try:
+            values = [int(part) for part in text.lower().replace(" ", "").split("x")]
+        except ValueError as exc:
+            raise _WrongType(raw) from exc
+        if len(values) == 1:
+            values = values * 2
+        if len(values) != 2 or min(values) <= 0:
+            raise _WrongType(raw)
+        return _typed_list(spec, [_scaled(v, scale, Kind.INT) for v in values])
+    number: Union[int, float]
+    if read.parse == PARSE_ASCII_INT:
+        if not _ASCII_INT_RE.fullmatch(text) or (read.max_digits is not None and len(text) > read.max_digits):
+            raise _WrongType(raw)
+        number = int(text)
+    elif read.parse == PARSE_ASCII_FLOAT:
+        if not _ASCII_FLOAT_RE.fullmatch(text):
+            raise _WrongType(raw)
+        number = float(text)
+    else:
+        try:
+            number = float(text)
+        except ValueError as exc:
+            raise _WrongType(raw) from exc
+    if not math.isfinite(number):
+        raise _WrongType(raw)
+    if read.metres_below is not None and 0 < number < read.metres_below:
+        number = number * _METRE_SCALE
+    value = number * scale
+    if read.round_to is not None:
+        value = round(value, read.round_to)
+    return float(value) if spec.kind is Kind.FLOAT else _whole(value)
 
 
 def _scaled(number: float, scale: float, kind: Kind) -> Union[int, float]:
@@ -372,15 +435,23 @@ def _refusal(spec: ParamSpec, model: DroneModel, unit_id: str, value: Any, detai
 
 def _outside(value: Any, lo: Optional[float], hi: Optional[float]) -> Optional[str]:
     """``"lo"`` or ``"hi"`` when a number (or any item of a pair or list) passes that end."""
+    return _outside_range(value, TodayRange(lo, hi))
+
+
+def _outside_range(value: Any, rng: TodayRange) -> Optional[str]:
+    """``"lo"`` or ``"hi"`` when a number (or any item of a pair or list) passes that end of ``rng``."""
     items = value if isinstance(value, tuple) else (value,)
     for item in items:
         if not _is_number(item):
             continue
-        if lo is not None and item < lo:
+        if rng.lo is not None and (item < rng.lo or (rng.lo_open and item == rng.lo)):
             return "lo"
-        if hi is not None and item > hi:
+        if rng.hi is not None and (item > rng.hi or (rng.hi_open and item == rng.hi)):
             return "hi"
     return None
+
+
+_OPEN = TodayRange(None, None)
 
 
 def _today_range(today_accepts: Optional[TodayAccepts], name: str, profile: str) -> Optional[TodayRange]:
@@ -393,9 +464,11 @@ def _check_bound(spec: ParamSpec, model: DroneModel, unit_id: str, value: Any, d
                  name: Optional[str], today_accepts: Optional[TodayAccepts]) -> Any:
     """Return the value to use after the bound check, clamped where today's code clamps; raise if refused."""
     profile = model.profile
-    today = _today_range(today_accepts, name, profile) if name and source in _NAME_LAYERS else None
-    if today is not None:
-        end = _outside(value, today.lo, today.hi)
+    if today_accepts is not None and name and source in _NAME_LAYERS:
+        # Decision 1: an environment or flag value is checked against today's range only. A name with no
+        # recorded range is open, as today's reader accepts any value its parse accepts.
+        today = _today_range(today_accepts, name, profile) or _OPEN
+        end = _outside_range(value, today)
         if end is None:
             return value
         if today.policy == "clamp" and not isinstance(value, tuple):
@@ -433,7 +506,8 @@ def _entries(source: Source, layer: Mapping[str, Any], scale: str, model: DroneM
             continue
         if isinstance(raw, LayerValue):
             raw = raw.value
-        if raw is None or (isinstance(raw, str) and not raw.strip()):
+        empty_refused = name.read is not None and name.read.empty_refused
+        if raw is None or (isinstance(raw, str) and not raw.strip() and not empty_refused):
             continue
         if scale not in name.scales:
             if source is Source.CLI and name.spec.defaults.get(model.profile) is not None:
@@ -461,6 +535,8 @@ def _value_of(spec: ParamSpec, raw: Any, source: Source, name: Optional[_Name]) 
         text = raw if isinstance(raw, str) else str(raw)
         if isinstance(raw, bool) or (raw is not None and not isinstance(raw, (str, int, float))):
             raise _WrongType(raw)
+        if name is not None and name.read is not None:
+            return _from_today_text(spec, text, name.read, name.scale), False
         return _from_text(spec, text, name.scale if name else 1.0), False
     return coerce_typed(spec, raw), False
 

@@ -86,6 +86,11 @@ def test_today_accepts_equals_the_imported_range_constants(row):
             assert rng["policy"] in {"refuse", "clamp"}
             for side in ("lo", "hi"):
                 ref = rng[f"{side}_ref"]
+                assert isinstance(rng[f"{side}_open"], bool)
+                if ref is None and rng[side] is not None:
+                    # A literal end of today's check (LITERAL_ENDS) has no constant; it carries its reason.
+                    assert rng[f"{side}_reason"], (profile, side)
+                    continue
                 assert (rng[side] is None) == (ref is None) or _resolve(ref) is None
                 if ref is not None:
                     assert _resolve(ref) == rng[side]
