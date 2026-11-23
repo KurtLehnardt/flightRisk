@@ -68,3 +68,14 @@ targets:
     settings:
       base:
         INFOPLIST_FILE: FlightRiskTests/Info.plist
+  FlightRiskUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - FlightRiskUITests
+    dependencies:
+      - target: FlightRisk
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: FlightRisk

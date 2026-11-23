@@ -43,6 +43,7 @@
 		7770863F21ADB6FF49C25A20 /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = 44B591CBF45FFA639742AD36 /* MLX */; };
 		7994E766648D7E32A6DBD323 /* CameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E207121F168B27516A42FBAC /* CameraPreviewView.swift */; };
 		79D56D575F2E967189B331B0 /* PrivacyComplianceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D702C4636D657F33A1A06D4B /* PrivacyComplianceTests.swift */; };
+		83311E405D293114CACA202A /* DemoUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DBC39CAEC49912772833E0B /* DemoUITests.swift */; };
 		8582BCACBE3402BD283A6749 /* CloudClaudeLlmBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 317FF40E5834CBCC978BB422 /* CloudClaudeLlmBackend.swift */; };
 		863E2CA269FEA140DEDD2D2D /* GroundText+Shorten.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DA457EBB373ECA1F572E20F /* GroundText+Shorten.swift */; };
 		876B99F8A11AAC74041B7DCD /* PhotoPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 055B0C6026AFD5EE5FF38D68 /* PhotoPreviewView.swift */; };
@@ -95,6 +96,13 @@
 			remoteGlobalIDString = 26600B6E30CEF74C316886F7;
 			remoteInfo = FlightRisk;
 		};
+		A411C2FF803D644AF309D81F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = F88E9F64F2982F727627EBFC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 26600B6E30CEF74C316886F7;
+			remoteInfo = FlightRisk;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
@@ -109,6 +117,7 @@
 		0850BA245B55AC2813FD6D1A /* InsightFaceMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InsightFaceMatcher.swift; sourceTree = "<group>"; };
 		0A4323FB3838BCED8CE6672A /* GroundTopBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroundTopBar.swift; sourceTree = "<group>"; };
 		0ABF221D3B9799CBE796B48D /* FlightRiskApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlightRiskApp.swift; sourceTree = "<group>"; };
+		0DBC39CAEC49912772833E0B /* DemoUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoUITests.swift; sourceTree = "<group>"; };
 		0E4CB7F79453D26921B7BB81 /* VideoTileDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoTileDecodeTests.swift; sourceTree = "<group>"; };
 		14B4251664E956AD316034AF /* MatchScorerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MatchScorerTests.swift; sourceTree = "<group>"; };
 		1579D100580E363B8D28F94E /* SearchPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchPipeline.swift; sourceTree = "<group>"; };
@@ -166,6 +175,7 @@
 		8EA01304114DEE9C4A1ACC64 /* TargetPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TargetPickerView.swift; sourceTree = "<group>"; };
 		902776655DE043AA56400A70 /* FlightRiskTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = FlightRiskTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		946E04275416BB1466C3C680 /* NoOpLlmBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoOpLlmBackend.swift; sourceTree = "<group>"; };
+		AC0449B2AFC9EB1F420B0E1F /* FlightRiskUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = FlightRiskUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		ACCF3E8A05108AFA37D5A1BA /* PlanCurrentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanCurrentTests.swift; sourceTree = "<group>"; };
 		B191F1BA99C2BE70899B22C8 /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
 		B41E4944564A749A40B2F1AE /* AVCaptureFrameSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AVCaptureFrameSource.swift; sourceTree = "<group>"; };
@@ -434,6 +444,7 @@
 			children = (
 				DB1B56CF1671883797BA7506 /* FlightRisk.app */,
 				902776655DE043AA56400A70 /* FlightRiskTests.xctest */,
+				AC0449B2AFC9EB1F420B0E1F /* FlightRiskUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -457,6 +468,7 @@
 			children = (
 				BDDD43E843468FCD7F14A5CE /* FlightRisk */,
 				3658B56FE3DD369AB70330AE /* FlightRiskTests */,
+				F8115A8E787D4F4D255BC8A2 /* FlightRiskUITests */,
 				08C8A1FA3C2F7BB3DFAB1FAB /* Packages */,
 				D63EB7FAD1009AC95314462C /* Products */,
 			);
@@ -478,6 +490,14 @@
 				581C04115FE79D1192573A6D /* LocationProvider.swift */,
 			);
 			path = Location;
+			sourceTree = "<group>";
+		};
+		F8115A8E787D4F4D255BC8A2 /* FlightRiskUITests */ = {
+			isa = PBXGroup;
+			children = (
+				0DBC39CAEC49912772833E0B /* DemoUITests.swift */,
+			);
+			path = FlightRiskUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -524,6 +544,24 @@
 			productReference = DB1B56CF1671883797BA7506 /* FlightRisk.app */;
 			productType = "com.apple.product-type.application";
 		};
+		73F83C3C1446F278A6F8A8F6 /* FlightRiskUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 708AB9C534C44D7582D71325 /* Build configuration list for PBXNativeTarget "FlightRiskUITests" */;
+			buildPhases = (
+				5500DA21B3C3A3B925D9A3F9 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				1B849367BF369D7793CD6F26 /* PBXTargetDependency */,
+			);
+			name = FlightRiskUITests;
+			packageProductDependencies = (
+			);
+			productName = FlightRiskUITests;
+			productReference = AC0449B2AFC9EB1F420B0E1F /* FlightRiskUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -539,6 +577,10 @@
 					26600B6E30CEF74C316886F7 = {
 						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
+					};
+					73F83C3C1446F278A6F8A8F6 = {
+						DevelopmentTeam = "";
+						TestTargetID = 26600B6E30CEF74C316886F7;
 					};
 				};
 			};
@@ -563,11 +605,20 @@
 			targets = (
 				26600B6E30CEF74C316886F7 /* FlightRisk */,
 				165F9BF6663DD2D0C84D5F4E /* FlightRiskTests */,
+				73F83C3C1446F278A6F8A8F6 /* FlightRiskUITests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXSourcesBuildPhase section */
+		5500DA21B3C3A3B925D9A3F9 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				83311E405D293114CACA202A /* DemoUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		657C6045B0A0DD0997C6553E /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -658,6 +709,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		1B849367BF369D7793CD6F26 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 26600B6E30CEF74C316886F7 /* FlightRisk */;
+			targetProxy = A411C2FF803D644AF309D81F /* PBXContainerItemProxy */;
+		};
 		B72EA4BCCA4412B4BC108364 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 26600B6E30CEF74C316886F7 /* FlightRisk */;
@@ -808,6 +864,23 @@
 			};
 			name = Debug;
 		};
+		4F04B975DE7ECDB2660271A0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.flightrisk.FlightRiskUITests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = FlightRisk;
+			};
+			name = Release;
+		};
 		5FCAD2ADC4B563143E6DA183 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -842,6 +915,23 @@
 			};
 			name = Debug;
 		};
+		9419C6DEE84B4B58A292F913 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.flightrisk.FlightRiskUITests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = FlightRisk;
+			};
+			name = Debug;
+		};
 		EDFBEA79B279543BFC4CFCB1 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -867,6 +957,15 @@
 			buildConfigurations = (
 				8C6E02CAADA2A84C75139FAA /* Debug */,
 				EDFBEA79B279543BFC4CFCB1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		708AB9C534C44D7582D71325 /* Build configuration list for PBXNativeTarget "FlightRiskUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9419C6DEE84B4B58A292F913 /* Debug */,
+				4F04B975DE7ECDB2660271A0 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

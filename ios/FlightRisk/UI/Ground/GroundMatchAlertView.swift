@@ -16,7 +16,6 @@ struct GroundAlertRow: Equatable, Identifiable {
     let timeText: String
     /// "Score 86% (ReID 86%, face 0%)".
     let scoreText: String
-    let reasonText: String?
     /// True for a `match_alert_reminder` that the ground has not since reported as answered.
     let isReminder: Bool
     /// How the operator answered on the laptop, or nil while the ground has not said it was answered.
@@ -29,7 +28,6 @@ struct GroundAlertRow: Equatable, Identifiable {
         if let trackText { parts.append(trackText) }
         parts.append("at " + timeText)
         parts.append(scoreText)
-        if let reasonText { parts.append(reasonText) }
         if let verdict {
             parts.append(verdict.headline)
             if let r = verdict.rowRationale { parts.append(r) }
@@ -73,12 +71,13 @@ struct GroundAlertsState: Equatable {
         notLiveNote = MissionFormat.notLiveNote(isStale: isStale)
     }
 
+    /// The level as the dashboard names it. `no_match` reads "Weak signal", as the dashboard
+    /// shows every level below a possible match: an alert is never a "no".
     static func level(_ level: AlertLevel?) -> String {
         switch level {
-        case .confirmedMatch?: return "Strong match"
+        case .confirmedMatch?: return "Strong match: verify in person"
         case .possibleMatch?: return "Possible match"
-        case .weakSignal?: return "Weak signal"
-        case .noMatch?: return "No match"
+        case .weakSignal?, .noMatch?: return "Weak signal"
         case let .unknown(raw)?: return GroundText.shorten(raw, max: 40)
         case nil: return "Match alert"
         }
@@ -94,9 +93,10 @@ struct GroundAlertsState: Equatable {
         let id = a.alertId.map { GroundText.shortId($0) }.flatMap { $0.isEmpty ? nil : $0 } ?? fallbackID
         let track = a.trackId.flatMap { $0.isEmpty ? nil : "Track " + GroundText.shortId($0) }
         let time = a.time.flatMap { $0.isEmpty ? nil : GroundText.shorten($0, max: 40) } ?? "--"
-        let verdict = verdicts.display(for: a)
-        // A verdict replaces the alert's own reasoning text ("Awaiting ... reasoning...").
-        let reason = verdict != nil ? nil : a.reasoning.flatMap { $0.isEmpty ? nil : GroundText.shorten($0) }
+        // The book's verdict, or, for an alert the book does not keep (no usable `alert_id`), the
+        // verdict the alert carries. The alert's raw `reasoning` is never shown: with an error it
+        // can be an exception message, which may contain part of a key. Only the verdict text is.
+        let verdict = verdicts.display(for: a) ?? AlertVerdict(alert: a).map(AlertVerdictText.display)
         return GroundAlertRow(
             id: id,
             // The level only goes up: an `alert_upgrade` or a higher earlier copy wins.
@@ -104,7 +104,6 @@ struct GroundAlertsState: Equatable {
             trackText: track,
             timeText: time,
             scoreText: "Score \(percent(a.score)) (ReID \(percent(a.reidScore)), face \(percent(a.faceScore)))",
-            reasonText: reason,
             isReminder: a.renotify == true && answer == nil,
             answer: answer,
             verdict: verdict
@@ -144,12 +143,6 @@ struct GroundMatchAlertView: View {
                         Text(row.scoreText)
                             .font(.footnote)
                             .foregroundStyle(MissionPalette.color(MissionPalette.text))
-                        if let reason = row.reasonText {
-                            Text(reason)
-                                .font(.footnote)
-                                .foregroundStyle(MissionPalette.color(MissionPalette.text))
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
                         if let verdict = row.verdict {
                             Text(verdict.headline)
                                 .font(.footnote.weight(verdict.isNeutral ? .regular : .semibold))

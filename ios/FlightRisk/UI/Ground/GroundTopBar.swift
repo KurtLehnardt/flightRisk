@@ -5,7 +5,8 @@ import SwiftUI
 ///
 /// LAND ALL is always visible and always enabled, in every connection and fleet state, and it
 /// is the only element of the Ground tab in the danger colour. One tap sends it, as on the
-/// dashboard; the result line below it always says what happened.
+/// dashboard; the result line below it always says what happened. While the demo runs it reads
+/// "LAND ALL (demo)" and its result starts with "DEMO:", so it is never taken for a live one.
 struct GroundTopBar: View {
     let viewModel: GroundViewModel
     /// The most height the scrolling text area may take (`GroundLayout.feedbackMaxHeight`).
@@ -13,18 +14,18 @@ struct GroundTopBar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                LinkPill(status: viewModel.linkStatus)
-                if viewModel.groundStatus?.appearanceOnly == true {
-                    Text("APPEARANCE ONLY")
-                        .font(.caption2.weight(.bold))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(Color.secondary.opacity(0.2), in: Capsule())
-                        .accessibilityLabel("Appearance-only matching")
+            // LAND ALL beside the chips when it fits on one line; otherwise on its own row, full
+            // width, where its text wraps and is never cut ("LAND ALL (demo)" at large sizes).
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    chips
+                    Spacer(minLength: 8)
+                    landAllButton(fullWidth: false)
                 }
-                Spacer(minLength: 8)
-                landAllButton
+                VStack(alignment: .leading, spacing: 8) {
+                    chips
+                    landAllButton(fullWidth: true)
+                }
             }
             // The texts from the ground scroll inside a height cap; LAND ALL and every Retry,
             // Dismiss and "Send again" button stay outside it, always visible.
@@ -43,30 +44,61 @@ struct GroundTopBar: View {
         .background(.bar)
     }
 
-    private var landAllButton: some View {
-        Button {
+    /// The link pill and the appearance-only badge, side by side or stacked. They stop growing
+    /// at the `accessibility2` text size, so they leave room for LAND ALL.
+    private var chips: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) { chipViews }
+            VStack(alignment: .leading, spacing: 6) { chipViews }
+        }
+        .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+    }
+
+    @ViewBuilder
+    private var chipViews: some View {
+        LinkPill(status: viewModel.linkStatus)
+        if viewModel.groundStatus?.appearanceOnly == true {
+            Text("APPEARANCE ONLY")
+                .font(.caption2.weight(.bold))
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(Color.secondary.opacity(0.2), in: Capsule())
+                .accessibilityLabel("Appearance-only matching")
+        }
+    }
+
+    private func landAllButton(fullWidth: Bool) -> some View {
+        let demo = viewModel.isDemoActive
+        return Button {
             Task { await viewModel.landAll() }
         } label: {
-            Text("LAND ALL")
+            Text(demo ? GroundUIText.landAllButtonDemo : GroundUIText.landAllButton)
                 .font(.headline.weight(.heavy))
                 .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 18)
                 .padding(.vertical, 10)
+                .frame(maxWidth: fullWidth ? .infinity : nil)
                 .background(FlightRiskTheme.alertRed, in: RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Land all drones")
-        .accessibilityHint("Sends LAND ALL to the ground station at once, without a confirmation.")
+        .accessibilityLabel(demo ? GroundUIText.landAllButtonDemo : GroundUIText.landAllLabel)
+        .accessibilityHint(demo ? GroundUIText.landAllHintDemo : GroundUIText.landAllHint)
         .accessibilityIdentifier("ground.landAll")
     }
 
-    /// The connection text and the LAND ALL result, which can be long and scroll.
+    /// The connection text and the LAND ALL result, which can be long and scroll. In the demo the
+    /// result comes first: the demo's connection text is two lines that the banner already says,
+    /// and it must not push the result out of the visible part of the area.
     private var textArea: some View {
         VStack(alignment: .leading, spacing: 8) {
-            connectionBanner
+            if viewModel.linkStatus != .demo { connectionBanner }
             if let feedback = viewModel.landAllFeedback {
-                LandAllFeedbackText(feedback: feedback)
+                LandAllFeedbackText(feedback: feedback, text: viewModel.shownCommandText(feedback.text))
             }
+            if viewModel.linkStatus == .demo { connectionBanner }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -144,12 +176,14 @@ private struct LinkPill: View {
 /// The text of the latest LAND ALL result. It scrolls with the bar's text area.
 private struct LandAllFeedbackText: View {
     let feedback: GroundCommandFeedback
+    /// `feedback.text` as shown ("DEMO: " in front while the demo runs).
+    let text: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: icon)
-                Text(feedback.text)
+                Text(text)
                     .font(.subheadline.weight(feedback.isFailure ? .bold : .regular))
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("ground.landAllResult")
@@ -188,8 +222,10 @@ private struct LandAllFeedbackActions: View {
 
     var body: some View {
         HStack {
-            Button("Send LAND ALL again") { Task { await viewModel.landAll() } }
-                .buttonStyle(.bordered)
+            Button(viewModel.isDemoActive ? GroundUIText.landAllAgainDemo : GroundUIText.landAllAgain) {
+                Task { await viewModel.landAll() }
+            }
+            .buttonStyle(.bordered)
             if feedback.isFailure || feedback.phase == .partial {
                 Button("Dismiss") { viewModel.dismissLandAllFeedback() }
                     .buttonStyle(.borderless)
