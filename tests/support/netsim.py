@@ -43,6 +43,7 @@ import math
 import random
 import socket
 import struct
+import sys
 import threading
 import time
 from collections import deque
@@ -175,6 +176,34 @@ async def _read_frame(reader: asyncio.StreamReader) -> _Frame:
     mask = await reader.readexactly(4) if masked else b""
     payload = await reader.readexactly(length)
     return _Frame(head + ext + mask + payload, opcode, fin)
+
+
+def new_event_loop() -> asyncio.AbstractEventLoop:
+    """A new loop whose ``abort()`` on a socket with SO_LINGER 0 sends a bare RST.
+
+    On Windows the default Proactor loop sends a FIN before the reset, which the simulator's fault model must not
+    see, so Windows gets the selector loop. Every other platform keeps its default loop.
+    """
+    return asyncio.SelectorEventLoop() if sys.platform == "win32" else asyncio.new_event_loop()
+
+
+def run(coro):
+    """``asyncio.run`` on the loop from ``new_event_loop`` (``asyncio.run(loop_factory=...)`` needs Python 3.12)."""
+    if sys.platform != "win32":
+        return asyncio.run(coro)
+    loop = new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        try:
+            pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        finally:
+            loop.close()
 
 
 def _reset(transport: asyncio.BaseTransport) -> None:
@@ -585,7 +614,7 @@ class NetSim:
     def start(self) -> NetSim:
         if self._loop is not None:
             return self
-        self._loop = asyncio.new_event_loop()
+        self._loop = new_event_loop()
         self._thread = threading.Thread(target=self._serve, name="netsim-loop", daemon=True)
         self._thread.start()
         return self

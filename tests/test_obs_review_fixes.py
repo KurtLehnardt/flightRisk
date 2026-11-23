@@ -10,6 +10,7 @@ import asyncio
 import io
 import json
 import logging
+import os
 import queue
 import re
 import threading
@@ -30,6 +31,7 @@ from flightrisk.obs_artifacts import ArtifactStore
 from flightrisk.obs_log import ContextFilter, DropQueueHandler, Throttle, log_event
 from flightrisk.obs_redact import redact_text, safe_token
 from flightrisk.observability import StructuredLogger
+from tests.support.symlinks import symlink_or_skip
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -292,7 +294,7 @@ def test_a_symlink_in_the_store_is_not_followed_when_serving(store, tmp_path):
     secret.write_bytes(b"not a thumbnail")
     sha = "c" * 64
     store._ensure_dirs()
-    (store.targets / f"{sha}.thumb.jpg").symlink_to(secret)
+    symlink_or_skip(store.targets / f"{sha}.thumb.jpg", secret)
     assert store.thumbnail_bytes(sha) is None
 
 
@@ -343,6 +345,7 @@ def test_cleanup_removes_stale_temporary_files_but_only_inside_the_store(tmp_pat
     assert not old.exists() and outside.exists()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission modes do not exist on Windows")
 def test_an_existing_artifact_directory_keeps_its_mode(tmp_path):
     root = tmp_path / "shared"
     root.mkdir(mode=0o755)

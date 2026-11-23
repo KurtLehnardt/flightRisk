@@ -1,6 +1,7 @@
 """Face model identity on the wire, model loading, and detector threshold handling."""
 
 import logging
+import os
 import threading
 import types
 
@@ -109,7 +110,7 @@ class TestLoadModels:
         from insightface.model_zoo import model_zoo
 
         def fake_get_model(path, **kw):
-            loaded.append((path.rsplit("/", 1)[-1], tuple(kw["providers"])))
+            loaded.append((os.path.basename(path), tuple(kw["providers"])))
             return object()
 
         monkeypatch.setattr(model_zoo, "get_model", fake_get_model)

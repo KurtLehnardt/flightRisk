@@ -15,7 +15,7 @@ import pytest
 import websockets
 from websockets.exceptions import ConnectionClosed
 
-from tests.support.netsim import BOTH, DOWN, UP, Faults, NetSim
+from tests.support.netsim import BOTH, DOWN, UP, Faults, NetSim, run as run_loop
 
 HEAD = b"GET / HTTP/1.1\r\nHost: sim\r\n\r\n"
 REPLY = b"HTTP/1.1 101 Switching Protocols\r\n\r\n"
@@ -132,7 +132,7 @@ def outcomes():
     async def run_all():
         results = await asyncio.gather(*(_scenario(c, e, m, _direction(c, d)) for c, e, m, d in CASES))
         return dict(zip(CASES, results))
-    return asyncio.run(run_all())
+    return run_loop(run_all())
 
 
 @pytest.mark.parametrize("closer", ["client", "server"])
@@ -175,7 +175,7 @@ def test_a_partition_is_not_ended_by_one_side_closing_and_the_link_stays_open():
             srv.close("rst")
             await server.wait_closed()
             return result
-    open_while_down, srv_end, open_after = asyncio.run(run())
+    open_while_down, srv_end, open_after = run_loop(run())
     assert open_while_down == 1
     assert srv_end == "fin" and open_after == 0
 
@@ -210,7 +210,7 @@ def test_a_websocket_client_that_dies_in_a_held_partition_still_delivers_its_mes
         server.close()
         await server.wait_closed()
 
-    asyncio.run(run())
+    run_loop(run())
     assert got == ["one", "two", "three"]
     assert codes == [1006]
 
@@ -241,7 +241,7 @@ def test_a_reordered_message_is_not_delivered_after_the_close_frame():
         await server.wait_closed()
         return stats, client_code
 
-    stats, client_code = asyncio.run(run())
+    stats, client_code = run_loop(run())
     assert got == ["last-words"]
     assert ends == [(1000, "")] and client_code == 1000
     assert stats.reordered == 1
@@ -295,7 +295,7 @@ def _stalled_sender(mode: str):
         await server.wait_closed()
         return blocked, mid, sent_after, state["sent"], stats
 
-    blocked, mid, sent_after, total, stats = asyncio.run(run())
+    blocked, mid, sent_after, total, stats = run_loop(run())
     return blocked, mid, sent_after, total, received, stats
 
 

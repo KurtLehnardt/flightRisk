@@ -9,6 +9,7 @@ import pytest
 
 from flightrisk.dashboard import plan_store
 from flightrisk.dashboard.plan_store import PlanStoreError
+from tests.support.symlinks import symlink_or_skip
 
 SPEC = {
     "pattern": "sector",
@@ -34,6 +35,7 @@ def test_save_and_load_round_trip(tmp_path):
 def test_the_default_directory_is_under_home(tmp_path, monkeypatch):
     monkeypatch.delenv(plan_store.PLANS_DIR_ENV, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))  # Path.home() reads this one on Windows
     assert plan_store.plans_dir() == tmp_path / "home" / ".flightrisk" / "plans"
     plan_store.save_plan("p1", SPEC)
     assert (tmp_path / "home" / ".flightrisk" / "plans" / "p1.json").is_file()
@@ -95,7 +97,7 @@ def test_a_symlinked_plan_is_not_followed(tmp_path):
     secret.write_text('{"plan": {}}')
     plans = tmp_path / "plans"
     plans.mkdir()
-    (plans / "link.json").symlink_to(secret)
+    symlink_or_skip(plans / "link.json", secret)
     with pytest.raises(PlanStoreError, match="no saved plan"):
         plan_store.load_plan("link", base=plans)
 

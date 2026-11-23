@@ -728,12 +728,14 @@ def test_encode_decode_round_trip_for_every_message():
     '{"type": "clock", "offset_s": NaN, "epoch": 7, "leader_id": "mac"}',
     '{"type": "clock", "offset_s": Infinity, "epoch": 7, "leader_id": "mac"}',
     '{"type": "clock", "offset_s": 1e999, "epoch": 7, "leader_id": "mac"}',
-    '{"type": "heartbeat", "seq": ' + "9" * 5000 + ', "epoch": 7, "leader_id": "mac"}',
-    "[" * 50_000 + "]" * 50_000,
-    '{"type": "land", "x": ' + "[" * 30_000 + "]" * 30_000 + "}",
-    " " * (fp.MAX_MESSAGE_BYTES + 1),
-    b" " * (fp.MAX_MESSAGE_BYTES + 1),
-    "é" * (fp.MAX_MESSAGE_BYTES // 2 + 1),
+    pytest.param('{"type": "heartbeat", "seq": ' + "9" * 5000 + ', "epoch": 7, "leader_id": "mac"}', id="huge-integer"),
+    # The long inputs get short ids: pytest puts the id in PYTEST_CURRENT_TEST, and a 100k-character value there
+    # is over the 32767-character limit for a Windows environment variable.
+    pytest.param("[" * 50_000 + "]" * 50_000, id="deeply-nested-array"),
+    pytest.param('{"type": "land", "x": ' + "[" * 30_000 + "]" * 30_000 + "}", id="deeply-nested-field"),
+    pytest.param(" " * (fp.MAX_MESSAGE_BYTES + 1), id="oversized-text"),
+    pytest.param(b" " * (fp.MAX_MESSAGE_BYTES + 1), id="oversized-bytes"),
+    pytest.param("é" * (fp.MAX_MESSAGE_BYTES // 2 + 1), id="oversized-multibyte-text"),
     12,
     None,
 ])
