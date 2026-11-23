@@ -64,7 +64,10 @@ def _pid_alive(pid: int) -> bool:
     if sys.platform == "win32":
         # os.kill(pid, 0) would terminate the process on Windows, so ask psutil instead.
         psutil = pytest.importorskip("psutil", reason="psutil is needed to tell whether a process is alive on Windows")
-        return psutil.pid_exists(pid) and psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+        try:
+            return psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:  # it exited between the check and the status call
+            return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -171,6 +174,8 @@ _STUBBORN = (
 
 
 def test_terminate_all_leaves_no_orphans(tmp_path):
+    if sys.platform == "win32":
+        psutil = pytest.importorskip("psutil", reason="psutil is needed to find and clean up the grandchild on Windows")
     group = launcher.ProcessGroup()
     grandchild = None
     try:
@@ -196,8 +201,6 @@ def test_terminate_all_leaves_no_orphans(tmp_path):
             if proc.poll() is None:
                 _kill_leftover(proc)
         if sys.platform == "win32" and grandchild is not None:
-            import psutil
-
             try:
                 psutil.Process(grandchild).kill()
             except psutil.Error:

@@ -28,7 +28,7 @@ def _fake_venv_python(app_dir: Path, exit_code: int) -> Path:
     calls = app_dir.parent / "python-calls.txt"
     if sys.platform == "win32":
         # The Windows layout install.ps1 expects is venv\Scripts\python.exe. An .exe cannot be a
-        # script, so the empty file satisfies the layout check and python.cmd does the work;
+        # script, so the empty file only makes the path exist (Get-VenvPython's callers test for it) and python.cmd does the work;
         # _windows() points Get-VenvPython at the .cmd.
         scripts = app_dir / "venv" / "Scripts"
         scripts.mkdir(parents=True)

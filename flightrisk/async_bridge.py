@@ -15,8 +15,10 @@ timeout handling.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import threading
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -28,14 +30,32 @@ DEFAULT_CMD_TIMEOUT = 30.0  # seconds for sync-over-async calls
 _DRAIN_TIMEOUT_S = 2.0  # how long stop_loop waits for cancelled tasks to unwind
 
 
-async def _cancel_pending_tasks() -> None:
-    """Cancel every other task on the running loop and wait for each to finish."""
-    current = asyncio.current_task()
-    pending = [task for task in asyncio.all_tasks() if task is not current]
-    for task in pending:
-        task.cancel()
-    if pending:
-        await asyncio.gather(*pending, return_exceptions=True)
+def _drain_and_close(loop: asyncio.AbstractEventLoop, name: str) -> None:
+    """Finish a stopped loop the way ``asyncio.run`` does, then close it.
+
+    Runs on the calling thread, after the loop thread has stopped, so nothing is scheduled across
+    threads. Every task is cancelled and awaited, repeating while new tasks appear (a task may start
+    another while it unwinds), within ``_DRAIN_TIMEOUT_S``. A task still pending when the bound passes
+    is logged by name. Async generators are then shut down and the loop is closed.
+    """
+    deadline = time.monotonic() + _DRAIN_TIMEOUT_S
+    try:
+        while True:
+            tasks = [task for task in asyncio.all_tasks(loop) if not task.done()]
+            if not tasks:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.warning("[%s] Tasks still pending after %.0fs: %s", name, _DRAIN_TIMEOUT_S, sorted(repr(t.get_coro()) for t in tasks))
+                break
+            for task in tasks:
+                task.cancel()
+            loop.run_until_complete(asyncio.wait(tasks, timeout=remaining))
+        loop.run_until_complete(asyncio.wait_for(loop.shutdown_asyncgens(), timeout=1.0))
+    except Exception:
+        logger.debug("[%s] Draining the event loop failed", name, exc_info=True)
+    finally:
+        loop.close()
 
 
 class AsyncBridge:
@@ -86,14 +106,6 @@ class AsyncBridge:
             thread = self.loop_thread
             try:
                 if loop is not None and loop.is_running():
-                    if thread is not threading.current_thread():
-                        # A task still pending when the loop closes is reported later as
-                        # "Task was destroyed but it is pending!" (an ERROR log, and a
-                        # RuntimeWarning in the tests), so cancel and await them first.
-                        try:
-                            asyncio.run_coroutine_threadsafe(_cancel_pending_tasks(), loop).result(timeout=_DRAIN_TIMEOUT_S)
-                        except Exception:
-                            logger.debug("[%s] Pending tasks did not unwind before the loop was stopped", self._name, exc_info=True)
                     try:
                         loop.call_soon_threadsafe(loop.stop)
                     except RuntimeError:
@@ -101,7 +113,7 @@ class AsyncBridge:
                 if thread is not None and thread.is_alive() and thread is not threading.current_thread():
                     thread.join(timeout=5.0)
                 if loop is not None and not loop.is_closed() and not loop.is_running():
-                    loop.close()
+                    _drain_and_close(loop, self._name)
                 elif loop is not None and loop.is_running():
                     logger.warning("[%s] Event loop still running after stop; not closing it", self._name)
             except Exception:
@@ -116,7 +128,9 @@ class AsyncBridge:
         Raises ``RuntimeError`` if the loop isn't running, or ``TimeoutError``
         if *coro* doesn't complete within *timeout* seconds (defaulting to
         this bridge's ``cmd_timeout``); the pending future is cancelled in
-        that case.
+        that case. ``stop_loop()`` cancels a command that is still running, and
+        the caller then gets ``RuntimeError("event loop stopped")`` rather than
+        a bare ``CancelledError``.
         """
         # Snapshot self.loop into a local: another thread could set it to
         # None (e.g. via stop_loop()) between the is_running check and
@@ -139,6 +153,8 @@ class AsyncBridge:
             raise
         try:
             return future.result(timeout=effective_timeout)
+        except concurrent.futures.CancelledError:
+            raise RuntimeError("event loop stopped") from None
         except TimeoutError:
             future.cancel()
             logger.error("[%s] Command timed out after %.0fs", self._name, effective_timeout)

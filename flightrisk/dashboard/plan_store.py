@@ -129,26 +129,44 @@ def _document(name: str, spec: Any, anchor: Any, view: Any) -> dict:
     return doc
 
 
+_IS_WINDOWS = sys.platform == "win32"
 _REPLACE_TRIES = 5
 _REPLACE_PAUSE_S = 0.075
+_STALE_TEMP_S = 60.0
 
 
-def _replace_with_retry(src: str, dst: Path) -> None:
-    """``os.replace``, retried briefly on Windows when another handle holds the file.
+def _retry_when_held(operation, *args) -> None:
+    """Call ``operation(*args)``, retrying briefly on Windows when another handle holds the file.
 
     Windows raises PermissionError (WinError 5 or 32) while a virus scanner, indexer or
-    reader has the target open; the hold is normally gone within a few tens of
-    milliseconds. After the last try the error is raised so the dashboard can report it.
+    reader has the file open; the hold is normally gone within a few tens of
+    milliseconds. There are 5 tries, so 4 retries 75 ms apart (300 ms at most). After the
+    last try the error is raised so the dashboard can report it. Elsewhere there is one try.
     """
-    tries = _REPLACE_TRIES if sys.platform == "win32" else 1
+    tries = _REPLACE_TRIES if _IS_WINDOWS else 1
     for attempt in range(1, tries + 1):
         try:
-            os.replace(src, dst)
+            operation(*args)
             return
         except PermissionError:
             if attempt == tries:
                 raise
             time.sleep(_REPLACE_PAUSE_S)
+
+
+def _replace_with_retry(src: str, dst: Path) -> None:
+    _retry_when_held(os.replace, src, dst)
+
+
+def _remove_stale_temp_files(folder: Path) -> None:
+    """Delete ``.plan-*.tmp`` files older than a minute, left by a save that was killed or could not clean up."""
+    cutoff = time.time() - _STALE_TEMP_S
+    for stale in folder.glob(".plan-*.tmp"):
+        try:
+            if stale.stat().st_mtime < cutoff:
+                stale.unlink()
+        except OSError:
+            pass
 
 
 def save_plan(name: Any, spec: Any, anchor: Any = None, view: Any = None, *, base: Path | None = None) -> dict:
@@ -161,6 +179,7 @@ def save_plan(name: Any, spec: Any, anchor: Any = None, view: Any = None, *, bas
         raise PlanStoreError(f"the plan is {len(data)} bytes, above the {MAX_PLAN_BYTES} byte limit")
     path = _path(name, base)
     path.parent.mkdir(parents=True, exist_ok=True)
+    _remove_stale_temp_files(path.parent)
     if not path.exists() and len(list(path.parent.glob("*.json"))) >= MAX_PLANS:
         raise PlanStoreError(f"there are already {MAX_PLANS} saved plans; delete some first")
     fd, tmp = tempfile.mkstemp(prefix=".plan-", suffix=".tmp", dir=str(path.parent))
@@ -170,7 +189,7 @@ def save_plan(name: Any, spec: Any, anchor: Any = None, view: Any = None, *, bas
         _replace_with_retry(tmp, path)
     except BaseException:
         try:
-            os.unlink(tmp)
+            _retry_when_held(os.unlink, tmp)
         except OSError:
             pass
         raise

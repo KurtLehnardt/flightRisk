@@ -233,7 +233,7 @@ def test_restart_of_an_edge_is_refused_on_windows(launcher):
     assert app.manager.can_restart(app.manager._procs["edge-drone-1"]) is False
     status, data = client.post("/api/restart", {"name": "edge-drone-1"})
     assert status == 409
-    assert WINDOWS_EDGE_RESTART_REFUSED in json.dumps(data)
+    assert data["error"] == WINDOWS_EDGE_RESTART_REFUSED
 
 
 def test_start_refused_on_errors_or_failed_checks(launcher):

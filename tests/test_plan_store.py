@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 
 import pytest
 
@@ -145,7 +146,7 @@ def _flaky_replace(monkeypatch, failures, error=None):
 
 
 def test_a_held_file_is_retried_on_windows(tmp_path, monkeypatch):
-    monkeypatch.setattr(plan_store.sys, "platform", "win32")
+    monkeypatch.setattr(plan_store, "_IS_WINDOWS", True)
     calls = _flaky_replace(monkeypatch, 3)
     plan_store.save_plan("held", SPEC, base=tmp_path)
     assert calls[0] == 4
@@ -154,7 +155,7 @@ def test_a_held_file_is_retried_on_windows(tmp_path, monkeypatch):
 
 
 def test_a_file_held_for_good_raises_after_five_tries_and_leaves_no_temp_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(plan_store.sys, "platform", "win32")
+    monkeypatch.setattr(plan_store, "_IS_WINDOWS", True)
     calls = _flaky_replace(monkeypatch, 99, PermissionError(5, "Access is denied"))
     with pytest.raises(PermissionError):
         plan_store.save_plan("held", SPEC, base=tmp_path)
@@ -163,7 +164,7 @@ def test_a_file_held_for_good_raises_after_five_tries_and_leaves_no_temp_file(tm
 
 
 def test_a_permission_error_is_not_retried_off_windows(tmp_path, monkeypatch):
-    monkeypatch.setattr(plan_store.sys, "platform", "linux")
+    monkeypatch.setattr(plan_store, "_IS_WINDOWS", False)
     calls = _flaky_replace(monkeypatch, 1)
     with pytest.raises(PermissionError):
         plan_store.save_plan("held", SPEC, base=tmp_path)
@@ -171,8 +172,40 @@ def test_a_permission_error_is_not_retried_off_windows(tmp_path, monkeypatch):
 
 
 def test_other_errors_are_not_retried_on_windows(tmp_path, monkeypatch):
-    monkeypatch.setattr(plan_store.sys, "platform", "win32")
+    monkeypatch.setattr(plan_store, "_IS_WINDOWS", True)
     calls = _flaky_replace(monkeypatch, 1, OSError(28, "No space left on device"))
     with pytest.raises(OSError):
         plan_store.save_plan("full", SPEC, base=tmp_path)
     assert calls[0] == 1
+
+
+def test_a_temp_file_held_open_is_still_removed_when_the_replace_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(plan_store, "_IS_WINDOWS", True)
+    _flaky_replace(monkeypatch, 99, PermissionError(5, "Access is denied"))
+    real_unlink = os.unlink
+    unlinks = [0]
+
+    def unlink(path):
+        unlinks[0] += 1
+        if unlinks[0] <= 2:
+            raise PermissionError(32, "in use")
+        real_unlink(path)
+
+    monkeypatch.setattr(plan_store.os, "unlink", unlink)
+    with pytest.raises(PermissionError):
+        plan_store.save_plan("held", SPEC, base=tmp_path)
+    assert unlinks[0] == 3
+    assert not list(tmp_path.glob(".plan-*.tmp"))
+
+
+def test_old_temp_files_are_removed_at_the_start_of_a_save_and_fresh_ones_are_kept(tmp_path):
+    old = tmp_path / ".plan-old.tmp"
+    fresh = tmp_path / ".plan-fresh.tmp"
+    other = tmp_path / "notes.tmp"
+    for f in (old, fresh, other):
+        f.write_bytes(b"x")
+    long_ago = time.time() - 3600
+    os.utime(old, (long_ago, long_ago))
+    os.utime(other, (long_ago, long_ago))
+    plan_store.save_plan("p", SPEC, base=tmp_path)
+    assert not old.exists() and fresh.exists() and other.exists()

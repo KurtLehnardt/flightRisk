@@ -47,18 +47,16 @@ def test_a_thread_that_ends_before_the_check_is_not_reported():
 
 
 def test_a_leaked_socket_is_found():
-    from tests.support import leaks
-
     before = snapshot()
-    # Windows counts handles with a noise tolerance (WINDOWS_HANDLE_NOISE), so one socket is below it by
-    # design; plant more than the tolerance there. macOS and Linux count descriptors exactly: one is enough.
-    count = leaks.WINDOWS_HANDLE_NOISE + 2 if sys.platform == "win32" else 1
-    socks = [socket.socket() for _ in range(count)]
+    sock = socket.socket()
+    if sys.platform == "win32":
+        # Windows counts sockets exactly, but only once they have an address (psutil lists those).
+        sock.bind(("127.0.0.1", 0))
     try:
-        assert "fds" in snapshot().leaked_since(before, settle_s=0.2)
+        found = snapshot().leaked_since(before, settle_s=0.2)
+        assert "sockets" in found if sys.platform == "win32" else "fds" in found
     finally:
-        for sock in socks:
-            sock.close()
+        sock.close()
     assert snapshot().leaked_since(before, settle_s=1.0) == {}
 
 
@@ -146,8 +144,20 @@ def test_a_leaked_thread_named_like_the_logging_listener_is_still_found():
 def test_handle_noise_is_ignored_only_on_windows(monkeypatch):
     from tests.support import leaks
 
-    monkeypatch.setattr(leaks.sys, "platform", "linux")
+    monkeypatch.setattr(leaks, "_IS_WINDOWS", False)
     assert leaks.fd_delta_is_leak(1) and not leaks.fd_delta_is_leak(0)
-    monkeypatch.setattr(leaks.sys, "platform", "win32")
-    assert not leaks.fd_delta_is_leak(3)
+    monkeypatch.setattr(leaks, "_IS_WINDOWS", True)
+    assert not leaks.fd_delta_is_leak(leaks.WINDOWS_HANDLE_NOISE)
     assert leaks.fd_delta_is_leak(leaks.WINDOWS_HANDLE_NOISE + 1)
+
+
+def test_a_new_socket_is_a_leak_on_windows_whatever_the_handle_tolerance(monkeypatch):
+    from tests.support import leaks
+
+    monkeypatch.setattr(leaks, "_IS_WINDOWS", True)
+    monkeypatch.setattr(leaks, "open_fds", lambda: 100)
+    monkeypatch.setattr(leaks, "_warm_up", lambda: None)
+    counts = iter([4, 5])  # before, then the snapshot inside leaked_since
+    monkeypatch.setattr(leaks, "open_sockets", lambda: next(counts))
+    before = leaks.snapshot()
+    assert before.leaked_since(before, settle_s=0) == {"sockets": 1}

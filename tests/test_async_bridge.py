@@ -274,13 +274,74 @@ def test_stop_loop_cancels_pending_tasks_so_none_is_destroyed_pending(caplog):
     assert _stop_with_a_pending_task(caplog) == []
 
 
-def test_stop_loop_from_a_task_on_the_loop_does_not_wait_for_itself():
+def test_stop_loop_from_the_loop_thread_returns_at_once_and_the_loop_can_then_be_closed():
     bridge = AsyncBridge(name="self-stop")
     bridge.start_loop()
+    loop, thread = bridge.loop, bridge.loop_thread
+    elapsed = []
 
     async def stop_from_inside():
-        bridge.stop_loop()
+        start = time.monotonic()
+        bridge.stop_loop()  # on the loop's own thread: no join, no drain, nothing waits on itself
+        elapsed.append(time.monotonic() - start)
 
-    # Run on the loop's own thread: the drain is skipped (it would wait on itself) and nothing raises.
-    asyncio.run_coroutine_threadsafe(stop_from_inside(), bridge.loop).result(timeout=10)
+    asyncio.run_coroutine_threadsafe(stop_from_inside(), loop).result(timeout=10)
+    assert elapsed and elapsed[0] < 0.5
     assert bridge.loop is None
+    thread.join(5)
+    assert not thread.is_alive()
+    loop.close()
+
+
+def test_a_task_that_swallows_cancellation_does_not_hang_or_break_stop_loop(caplog):
+    import logging
+
+    caplog.set_level(logging.WARNING, logger="flightrisk.async_bridge")
+    bridge = AsyncBridge(name="stubborn")
+    bridge.start_loop()
+    started = threading.Event()
+
+    async def stubborn():
+        started.set()
+        while True:
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                pass
+
+    future = asyncio.run_coroutine_threadsafe(stubborn(), bridge.loop)
+    assert started.wait(5)
+    # This task can never finish, so the loop closes with it pending. Silence asyncio's later
+    # "Task was destroyed" report (private flag, the one asyncio itself uses) so it cannot land in another test.
+    for task in asyncio.all_tasks(bridge.loop):
+        task._log_destroy_pending = False
+    begin = time.monotonic()
+    bridge.stop_loop()  # must not raise
+    assert time.monotonic() - begin < 4.0
+    assert bridge.loop is None and bridge.loop_thread is None
+    assert any("stubborn" in r.getMessage() for r in caplog.records)
+    future.cancel()
+
+
+def test_a_command_cancelled_by_stop_loop_raises_runtime_error():
+    bridge = AsyncBridge(name="cancelled-cmd", cmd_timeout=30)
+    bridge.start_loop()
+    started = threading.Event()
+    outcome = []
+
+    async def slow():
+        started.set()
+        await asyncio.sleep(60)
+
+    def caller():
+        try:
+            bridge.run(slow())
+        except BaseException as exc:  # noqa: BLE001 - the type is what is being checked
+            outcome.append(exc)
+
+    thread = threading.Thread(target=caller)
+    thread.start()
+    assert started.wait(5)
+    bridge.stop_loop()
+    thread.join(10)
+    assert len(outcome) == 1 and isinstance(outcome[0], RuntimeError) and "event loop stopped" in str(outcome[0])
