@@ -33,11 +33,31 @@ except ImportError:
     HAS_OLLAMA = False
 
 
+class ReasoningCallSkipped(RuntimeError):
+    """The backend chose not to send this call, for example while a cloud API is paused.
+
+    Nothing was sent. ``str(exc)`` is plain operator text; the result carries
+    ``confidence="skipped"`` so a skip never reads as a failure.
+    """
+
+
+class ReasoningUnavailable(RuntimeError):
+    """The backend can no longer answer (for example its API key was rejected).
+
+    ``str(exc)`` is plain operator text; the result carries
+    ``confidence="unavailable"``.
+    """
+
+
 class FlightRiskAgent:
     """LLM-powered reasoning for person matching and scene analysis."""
 
     provider = "gemma"
     label = "Gemma"  # shown in the dashboard ("Awaiting Gemma reasoning...")
+    #: Result text while ``_available`` is False.
+    _unavailable_reason = "Model not loaded"
+    #: ``(reference array, base64 JPEG)`` of the last read-only reference photo encoded.
+    _ref_cache: tuple[np.ndarray, str] | None = None
 
     def __init__(self, model: str | None = None):
         """Initialize the reasoning agent.
@@ -83,6 +103,26 @@ class FlightRiskAgent:
         _, buffer = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 85])
         return base64.b64encode(buffer).decode("utf-8")
 
+    def _reference_b64(self, reference: np.ndarray) -> str:
+        """``_image_to_base64(reference)``, reused while the same read-only photo comes back.
+
+        The dashboard hands every job the same cached, read-only reference
+        array (``load_reference_photo``), so it is resized and encoded once,
+        not once per call. The cache holds the array itself, so identity can't
+        be confused with a recycled ``id``; a writable array is never cached
+        because it could change in place.
+        """
+        cached = self._ref_cache
+        if cached is not None and cached[0] is reference:
+            return cached[1]
+        b64 = self._image_to_base64(reference)
+        if not reference.flags.writeable:
+            self._ref_cache = (reference, b64)
+        return b64
+
+    def _admit(self) -> None:
+        """Hook run before any image is encoded; raise ReasoningCallSkipped to skip the call."""
+
     def _ask(self, prompt: str, images_b64: list[str]) -> str:
         """Send one prompt with JPEG images (base64) and return the reply text.
 
@@ -108,6 +148,15 @@ class FlightRiskAgent:
         _log.warning("reasoning_call_failed provider=%s kind=%s error_type=%s error=%s",
                      self.provider, kind, type(exc).__name__, exc)
 
+    def _call_skipped(self, kind: str, exc: ReasoningCallSkipped) -> dict[str, Any]:
+        """Log a skipped call at INFO (it is expected, not a fault) and return its result."""
+        self.last_usage = {}
+        _log.info("reasoning_call_skipped provider=%s kind=%s reason=%s", self.provider, kind, exc)
+        return {"match": False, "confidence": "skipped", "reasoning": str(exc)}
+
+    def _unavailable_result(self) -> dict[str, Any]:
+        return {"match": False, "confidence": "unavailable", "reasoning": self._unavailable_reason}
+
     def analyze_match(
         self, reference: np.ndarray, candidate: np.ndarray
     ) -> dict[str, Any]:
@@ -120,10 +169,7 @@ class FlightRiskAgent:
             dict with keys: match (bool), confidence (str), reasoning (str)
         """
         if not self._available:
-            return {"match": False, "confidence": "unavailable", "reasoning": "Model not loaded"}
-
-        ref_b64 = self._image_to_base64(reference)
-        cand_b64 = self._image_to_base64(candidate)
+            return self._unavailable_result()
 
         prompt = (
             "You are helping find a missing person. "
@@ -139,8 +185,16 @@ class FlightRiskAgent:
 
         try:
             self.last_usage = {}
-            text = self._ask(prompt, [ref_b64, cand_b64])
+            # Admit first, so a skipped call never pays for resizing and encoding.
+            self._admit()
+            images = [self._reference_b64(reference), self._image_to_base64(candidate)]
+            text = self._ask(prompt, images)
             return self._parse_match_response(text)
+        except ReasoningCallSkipped as e:
+            return self._call_skipped("analyze", e)
+        except ReasoningUnavailable as e:
+            self._call_failed("analyze", e)
+            return {"match": False, "confidence": "unavailable", "reasoning": str(e)}
         except Exception as e:
             self._call_failed("analyze", e)
             return {"match": False, "confidence": "error", "reasoning": str(e)}
@@ -150,14 +204,16 @@ class FlightRiskAgent:
         if not self._available:
             return "Model not available"
 
-        b64 = self._image_to_base64(image)
         try:
+            self._admit()
             return self._ask(
                 "Describe this person's appearance in one sentence. "
                 "Include: clothing colors, hair, approximate age, "
                 "and any visible accessories (backpack, hat, etc).",
-                [b64],
+                [self._image_to_base64(image)],
             )
+        except (ReasoningCallSkipped, ReasoningUnavailable) as e:
+            return str(e)
         except Exception as e:
             return f"Error: {e}"
 
@@ -166,15 +222,17 @@ class FlightRiskAgent:
         if not self._available:
             return "Model not available"
 
-        b64 = self._image_to_base64(image)
         try:
+            self._admit()
             return self._ask(
                 "Briefly describe this aerial/drone view scene. "
                 "Is it a park, field, forest, crowd, parking lot? "
                 "How many people are visible? Any obstacles? "
                 "One short paragraph.",
-                [b64],
+                [self._image_to_base64(image)],
             )
+        except (ReasoningCallSkipped, ReasoningUnavailable) as e:
+            return str(e)
         except Exception as e:
             return f"Error: {e}"
 
@@ -187,9 +245,8 @@ class FlightRiskAgent:
         the child and Gemma 4 compares against each detection.
         """
         if not self._available:
-            return {"match": False, "confidence": "unavailable", "reasoning": "Model not loaded"}
+            return self._unavailable_result()
 
-        b64 = self._image_to_base64(image)
         prompt = (
             "You are helping find a missing person. "
             f"The person's description: {description}\n\n"
@@ -205,8 +262,14 @@ class FlightRiskAgent:
 
         try:
             self.last_usage = {}
-            text = self._ask(prompt, [b64])
+            self._admit()
+            text = self._ask(prompt, [self._image_to_base64(image)])
             return self._parse_match_response(text)
+        except ReasoningCallSkipped as e:
+            return self._call_skipped("describe", e)
+        except ReasoningUnavailable as e:
+            self._call_failed("describe", e)
+            return {"match": False, "confidence": "unavailable", "reasoning": str(e)}
         except Exception as e:
             self._call_failed("describe", e)
             return {"match": False, "confidence": "error", "reasoning": str(e)}

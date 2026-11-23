@@ -513,19 +513,72 @@ def test_analyze_exception_resolves_entry_to_error(edge_env):
     assert sio.named("alert_upgrade") == []
 
 
-def test_claude_call_skipped_resolves_entry_to_error(edge_env):
-    """A skipped Claude call (breaker open or rate cap) must clear the pending alert, not crash the worker."""
-    from flightrisk.reasoning.claude_agent import BREAKER_OPEN_MESSAGE, ClaudeCallSkipped
+class _Recorder:
+    """Stands in for one OTel instrument and keeps every call."""
 
-    edge_env.analyze_match.side_effect = ClaudeCallSkipped(BREAKER_OPEN_MESSAGE)
+    def __init__(self):
+        self.calls = []
+
+    def add(self, value, attributes=None):
+        self.calls.append((value, dict(attributes or {})))
+
+    record = add
+
+
+@pytest.fixture
+def real_claude(monkeypatch):
+    """A real ClaudeReasoningAgent (mocked SDK client, fixed clock) with cloud use allowed."""
+    import sys
+    from unittest.mock import patch
+
+    from flightrisk.config import reset_config
+    from flightrisk.reasoning.claude_agent import ClaudeReasoningAgent
+
+    monkeypatch.setenv("FLIGHTRISK_ALLOW_CLOUD_LLM", "1")
+    monkeypatch.delenv("FLIGHTRISK_CLAUDE_BASE_URL", raising=False)
+    reset_config()
+    with patch.dict(sys.modules, {"anthropic": MagicMock(name="anthropic")}):
+        agent = ClaudeReasoningAgent(api_key="sk-ant-test-not-a-real-key", clock=lambda: 1000.0)
+    yield agent
+    reset_config()
+
+
+@pytest.mark.parametrize("guard,reasoning", [
+    ("breaker", "AI check paused (Claude unavailable, retrying in 20 s)."),
+    ("rate_cap", "AI check skipped (rate cap)."),
+])
+def test_claude_skip_resolves_entry_as_skipped(edge_env, real_claude, monkeypatch, guard, reasoning):
+    """The worker runs a real Claude agent whose guard is closed to calls; the alert resolves as a skip."""
+    from flightrisk import obs_metrics
+
+    agent = real_claude
+    if guard == "breaker":
+        agent._consecutive_failures = 3
+        agent._open_until = 1020.0  # 20 s of the cool-off left on the agent's clock
+    else:
+        agent._call_times = [999.0] * agent._max_calls_per_minute
+    calls, durations = _Recorder(), _Recorder()
+    monkeypatch.setattr(obs_metrics, "reasoning_calls", calls)
+    monkeypatch.setattr(obs_metrics, "reasoning_duration", durations)
+    app_state.reasoning = agent
+
     sio = FakeSocketIO()
     _fire(sio)
+    assert sio.named("match_alert")[0]["reasoning"] == "Awaiting Claude reasoning..."
     _run_worker(sio)
+
     entry = app_state.match_history[-1]
-    assert entry["gemma_confidence"] == "error"
+    assert entry["gemma_confidence"] == "skipped"
     assert entry["gemma_match"] is False
-    assert sio.named("reasoning_result")[0]["result"]["confidence"] == "error"
+    assert entry["reasoning"] == reasoning
+    result = sio.named("reasoning_result")[0]
+    assert result["alert_id"] == entry["alert_id"]
+    assert result["result"] == {"match": False, "confidence": "skipped", "reasoning": reasoning}
     assert sio.named("alert_upgrade") == []
+    agent._client.beta.messages.stream.assert_not_called()
+    # Telemetry: counted as its own outcome, with no ~0 ms latency sample.
+    assert [attrs for _, attrs in calls.calls] == [{"provider": "claude", "kind": "analyze", "outcome": "skipped"}]
+    assert durations.calls == []
 
 
 def test_alertless_skipped_job_resolves_nothing(edge_env):

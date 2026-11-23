@@ -10,21 +10,47 @@ person's crop and the missing child's reference photo to Anthropic.
 The API key is read only from ``FLIGHTRISK_CLAUDE_API_KEY``. The SDK's usual
 ``ANTHROPIC_API_KEY`` is deliberately ignored so a key exported for other tools
 never enables uploads by accident. The key is never logged or included in
-error results.
+error results. The client is built with every setting explicit, so
+``ANTHROPIC_BASE_URL``, ``ANTHROPIC_CUSTOM_HEADERS`` and the SDK's tracing
+content mode cannot redirect the key or copy the photos elsewhere.
+
+How one call behaves (all of it in ``_ask`` and ``_send``):
+
+* The request is streamed. Each read from the connection may wait at most
+  20 s, so a stalled connection fails fast while a slow reply that keeps
+  sending data is allowed to finish.
+* A wall-clock deadline (``FLIGHTRISK_CLAUDE_DEADLINE``, default 90 s) ends the
+  call even when data keeps arriving. It is checked on every chunk read, so a
+  call ends at the deadline, or at most one read timeout after it when the
+  connection goes silent at that moment.
+* The SDK's own retries are off. ``_ask`` retries once, only after a
+  connection error or a 429/529 response, and waits at most 2 s first. It never
+  retries after a read timeout or the deadline.
+* A circuit breaker and a per-minute cap skip calls before anything is sent.
+  A skipped call returns ``confidence="skipped"`` with plain operator text.
+* A rejected key (HTTP 401 or 403) turns the agent off until it is rebuilt.
 """
 
+import functools
 import logging
+import math
 import os
 import threading
 import time
+from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlsplit
 
-import cv2
 import numpy as np
 
 from flightrisk.config import get_config
 from flightrisk.obs_log import notice
-from flightrisk.reasoning.agent import FlightRiskAgent
+from flightrisk.reasoning.agent import (
+    FlightRiskAgent,
+    ReasoningCallSkipped,
+    ReasoningUnavailable,
+)
+from flightrisk.vision.resize import downscale_long_edge
 
 _log = logging.getLogger(__name__)
 
@@ -34,54 +60,300 @@ _FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
 # Thinking tokens count toward max_tokens. The visible reply is three short
 # lines (well under 200 tokens), so the rest is headroom for adaptive thinking
-# at high effort: a truncated thinking block would leave no text at all.
-_MAX_TOKENS = 8192
+# at high effort. The limit also has to fit inside the call deadline: at a
+# typical streaming rate of 50 to 100 output tokens per second, 4096 tokens take
+# about 40 to 80 s, inside the 90 s default, where 8192 could not finish in
+# time. If thinking does use it all, the reply has no text
+# (stop_reason=max_tokens) and the result is an error rather than a hang.
+_MAX_TOKENS = 4096
 
-# Short timeout and a single retry keep the single serial reasoning worker from
-# stalling for minutes on a sick API (worst case about 2 x 15 s per call).
-_TIMEOUT_S = 15.0
-_MAX_RETRIES = 1
+# Per-read limits for the streamed call. The read timeout applies to each chunk
+# read from the connection, not to the whole reply, so a reply that keeps
+# streaming (including the API's keep-alive pings) is not cut off by it.
+_CONNECT_TIMEOUT_S = 5.0
+_READ_TIMEOUT_S = 20.0
+_WRITE_TIMEOUT_S = 10.0
+_POOL_TIMEOUT_S = 5.0
 
-# Long-edge cap for images sent to the cloud. Smaller uploads are faster and
-# cheaper and also limit how much of the reference photo leaves the machine.
+# The one retry in _ask waits for the server's retry-after when it gives one,
+# but never longer than this. The SDK's own retries are off because they follow
+# retry-after with no upper limit.
+_RETRY_WAIT_CAP_S = 2.0
+_RETRY_DEFAULT_WAIT_S = 1.0
+
+# Long-edge cap for images sent to the cloud. This is a deliberate privacy
+# trade-off: 768 px keeps enough detail to compare clothing, hair and build,
+# while sending Anthropic a much smaller copy of the child's reference photo
+# (and of bystanders in the crop) than the original. Smaller uploads are also
+# faster and cheaper.
 _MAX_IMAGE_EDGE = 768
 
 _RATE_WINDOW_S = 60.0
-RATE_CAP_MESSAGE = "skipped: rate cap"
-BREAKER_OPEN_MESSAGE = "skipped: Claude circuit breaker open"
+
+# Accepted ranges for the hardening settings; values outside are clamped.
+_DEFAULT_COOLOFF_S = 60.0
+_COOLOFF_RANGE_S = (1.0, 3600.0)
+_DEFAULT_DEADLINE_S = 90.0
+_DEADLINE_RANGE_S = (10.0, 600.0)
+
+DEFAULT_BASE_URL = "https://api.anthropic.com"
+BASE_URL_ENV = "FLIGHTRISK_CLAUDE_BASE_URL"
+API_KEY_ENV = "FLIGHTRISK_CLAUDE_API_KEY"
+
+RATE_CAP_MESSAGE = "AI check skipped (rate cap)."
+BREAKER_OPEN_MESSAGE = "AI check paused (Claude unavailable, retrying in {seconds} s)."
+KEY_REJECTED_MESSAGE = "AI check off (Claude rejected the API key)."
+DEADLINE_MESSAGE = "AI check timed out (no answer from Claude within {seconds} s)."
+
+# Error types an SSE ``error`` event can carry mid-stream that mean the API is unhealthy.
+_OUTAGE_BODY_TYPES = {"overloaded_error", "api_error", "rate_limit_error"}
 
 
-class ClaudeCallSkipped(RuntimeError):
+class ClaudeCallSkipped(ReasoningCallSkipped):
     """A Claude call was skipped locally (breaker open or rate cap); nothing was sent."""
 
 
-def _is_outage_error(exc: Exception) -> bool:
-    """True for failures that mean the API is unhealthy: timeout, connection, 429, 5xx."""
+class ClaudeKeyRejected(ReasoningUnavailable):
+    """The API rejected the key (HTTP 401 or 403); the agent is now unavailable."""
+
+
+class ClaudeDeadlineExceeded(RuntimeError):
+    """The call ran past its wall-clock deadline and the stream was closed."""
+
+
+class ClaudeNoVerdict(RuntimeError):
+    """The API answered, but with a refusal or without any text."""
+
+
+def _type_names(exc: BaseException) -> set[str]:
+    return {c.__name__ for c in type(exc).__mro__}
+
+
+def _status(exc: BaseException) -> int | None:
     status = getattr(exc, "status_code", None)
-    if isinstance(status, int) and (status == 429 or status >= 500):
+    return status if isinstance(status, int) else None
+
+
+def _body_error_type(exc: BaseException) -> str | None:
+    """The ``error.type`` of an API error body, such as ``overloaded_error``."""
+    body = getattr(exc, "body", None)
+    error = body.get("error") if isinstance(body, dict) else None
+    kind = error.get("type") if isinstance(error, dict) else None
+    return kind if isinstance(kind, str) else None
+
+
+def _is_auth_rejection(exc: BaseException) -> bool:
+    return _status(exc) in (401, 403)
+
+
+def _is_read_timeout(exc: BaseException) -> bool:
+    """True for a timeout while waiting for data (not for a connect timeout)."""
+    names = _type_names(exc)
+    if "APITimeoutError" in names:
+        cause = exc.__cause__
+        return not (cause is not None and "ConnectTimeout" in _type_names(cause))
+    return bool(names & {"TimeoutException", "TimeoutError"})
+
+
+def _is_outage(exc: BaseException) -> bool:
+    """True for failures that mean the API is unreachable or unhealthy: these open the breaker.
+
+    A call that hit its deadline is not one: the API was answering, just slowly.
+    """
+    if isinstance(exc, ClaudeDeadlineExceeded):
+        return False
+    status = _status(exc)
+    if status is not None and (status == 429 or status >= 500):
         return True
-    names = {c.__name__ for c in type(exc).__mro__}
-    return bool(names & {"APITimeoutError", "APIConnectionError", "TimeoutError"})
+    if _body_error_type(exc) in _OUTAGE_BODY_TYPES:
+        return True
+    if _is_read_timeout(exc):
+        return True  # a stall: nothing arrived within the per-read timeout
+    return bool(_type_names(exc) & {"APIConnectionError", "TransportError", "ConnectionError"})
+
+
+def _api_answered(exc: BaseException) -> bool:
+    """True when the API was reachable and answered (a 4xx such as 400, a refusal, no text)."""
+    if isinstance(exc, ClaudeNoVerdict):
+        return True
+    status = _status(exc)
+    return status is not None and 400 <= status < 500 and status not in (401, 403, 429)
+
+
+def _retry_after(exc: BaseException) -> float:
+    """The server's retry-after for ``exc`` in seconds, capped at ``_RETRY_WAIT_CAP_S``."""
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    wait = None
+    try:
+        if headers is not None:
+            if headers.get("retry-after-ms") is not None:
+                wait = float(headers.get("retry-after-ms")) / 1000.0
+            elif headers.get("retry-after") is not None:
+                wait = float(headers.get("retry-after"))
+    except (TypeError, ValueError):
+        wait = None  # an HTTP date or garbage: use the default
+    if wait is None or not math.isfinite(wait) or wait < 0:
+        wait = _RETRY_DEFAULT_WAIT_S
+    return min(wait, _RETRY_WAIT_CAP_S)
+
+
+def _retry_wait(exc: BaseException, started: bool) -> float | None:
+    """Seconds to wait before the single retry, or None when ``exc`` must not be retried.
+
+    Only a connection error or a 429/529 before the reply started is retried.
+    A read timeout, the deadline, or anything after the stream began is not:
+    the API may already be working on (and billing) that request.
+    """
+    if started or isinstance(exc, ClaudeDeadlineExceeded) or _is_read_timeout(exc):
+        return None
+    status = _status(exc)
+    if status in (429, 529):
+        return _retry_after(exc)
+    if status is None and "APIConnectionError" in _type_names(exc):
+        return _RETRY_DEFAULT_WAIT_S
+    return None
+
+
+def _verdict_text(content: Any) -> str:
+    """The reply text: only text blocks after the last ``fallback`` block.
+
+    With server-side fallback, a model that declined part-way hands over at a
+    ``fallback`` block, and any text before it belongs to the declined attempt,
+    so it must not mix into the verdict. Thinking blocks are never included.
+    """
+    blocks = list(content or [])
+    start = 0
+    for i, block in enumerate(blocks):
+        if getattr(block, "type", None) == "fallback":
+            start = i + 1
+    return "".join(b.text for b in blocks[start:] if getattr(b, "type", None) == "text").strip()
+
+
+def _clamped(setting: str, value: Any, lo: float, hi: float | None, default: float) -> float:
+    """``value`` as a number in ``[lo, hi]``; NaN or junk becomes ``default``. Warns when it changes it."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = math.nan
+    if math.isnan(number) or (hi is None and number == math.inf):
+        used = default  # nothing sensible to clamp to
+    elif hi is not None and number > hi:
+        used = hi
+    elif number < lo:
+        used = lo
+    else:
+        return number
+    _log.warning("claude_setting_clamped setting=%s value=%r used=%s min=%s max=%s",
+                 setting, value, used, lo, hi)
+    return used
+
+
+@functools.cache
+def _deadline_body_type() -> type:
+    """The response-body wrapper that enforces the deadline on every chunk (built once)."""
+    import httpx2
+
+    class DeadlineBody(httpx2.SyncByteStream):
+        """A streamed response body that stops being read once the call's deadline has passed.
+
+        The SDK drops the API's keep-alive pings before ``_send`` sees an
+        event, so a reply that only sends pings (for example while the model
+        thinks with its thinking hidden) would never reach the per-event check.
+        Checking here, on every chunk read from the connection, bounds that
+        case too. It follows the same pattern as the SDK's own tracing wrapper.
+        """
+
+        def __init__(self, body, deadline: float, clock: Callable[[], float], message: str):
+            self._body = body
+            self._deadline = deadline
+            self._clock = clock
+            self._message = message
+            observer = getattr(body, "stream_observer", None)
+            if observer is not None:
+                # The SDK finds its tracing observer on response.stream.
+                self.stream_observer = observer
+
+        @property
+        def elapsed(self):
+            return getattr(self._body, "elapsed", None)
+
+        def __iter__(self):
+            for chunk in self._body:
+                if self._clock() >= self._deadline:
+                    raise ClaudeDeadlineExceeded(self._message)
+                yield chunk
+
+        def close(self) -> None:
+            self._body.close()
+
+    return DeadlineBody
+
+
+def _install_deadline(stream: Any, deadline: float, clock: Callable[[], float], message: str) -> bool:
+    """Wrap the stream's response body so every chunk read checks the deadline.
+
+    Returns False (and changes nothing) when the stream has no real httpx2
+    body, as with a test double; the per-event check in ``_send`` still applies.
+    """
+    try:
+        import httpx2
+    except ImportError:
+        return False
+    response = getattr(stream, "response", None)
+    body = getattr(response, "stream", None)
+    if not isinstance(body, httpx2.SyncByteStream):
+        return False
+    response.stream = _deadline_body_type()(body, deadline, clock, message)
+    return True
 
 
 def downscale_for_upload(image: np.ndarray, max_edge: int = _MAX_IMAGE_EDGE) -> np.ndarray:
-    """Shrink ``image`` so its long edge is at most ``max_edge``; never upscales."""
-    h, w = image.shape[:2]
-    long_edge = max(h, w)
-    if long_edge <= max_edge:
-        return image
-    scale = max_edge / long_edge
-    new_w = max(1, round(w * scale))
-    new_h = max(1, round(h * scale))
-    return cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
-
-
-API_KEY_ENV = "FLIGHTRISK_CLAUDE_API_KEY"
+    """Shrink ``image`` to the cloud upload cap (long edge ``max_edge``); never upscales."""
+    return downscale_long_edge(image, max_edge)
 
 
 def resolve_api_key() -> str | None:
     """The Claude API key from ``FLIGHTRISK_CLAUDE_API_KEY`` (empty counts as unset)."""
     return os.environ.get(API_KEY_ENV) or None
+
+
+def resolve_base_url() -> str:
+    """The API base URL: Anthropic's, unless ``FLIGHTRISK_CLAUDE_BASE_URL`` names an https URL.
+
+    ``ANTHROPIC_BASE_URL`` is never used. An override that is not https, or
+    that carries credentials, is refused so the key is never sent in clear
+    text or to an address the operator did not choose for FlightRisk.
+    """
+    raw = (os.environ.get(BASE_URL_ENV) or "").strip()
+    if not raw:
+        return DEFAULT_BASE_URL
+    parts = urlsplit(raw)
+    if parts.scheme.lower() != "https" or not parts.hostname or parts.username or parts.password:
+        raise RuntimeError(
+            f"{BASE_URL_ENV} must be an https:// URL without credentials; "
+            "the Claude API key is only ever sent over https."
+        )
+    return raw
+
+
+def _build_client(anthropic: Any, api_key: str, base_url: str, *, read_timeout: float = _READ_TIMEOUT_S) -> Any:
+    """The SDK client with every setting passed explicitly, so no ``ANTHROPIC_*`` variable applies."""
+    client = anthropic.Anthropic(
+        api_key=api_key,
+        base_url=base_url,
+        timeout=anthropic.Timeout(
+            connect=_CONNECT_TIMEOUT_S, read=read_timeout, write=_WRITE_TIMEOUT_S, pool=_POOL_TIMEOUT_S),
+        max_retries=0,
+        default_headers={},
+        # Request content (the photos) never goes into trace spans, whatever
+        # ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE says.
+        open_telemetry={"traces": {"content_mode": "metadata_only"}},
+    )
+    # The SDK merges ANTHROPIC_CUSTOM_HEADERS into its headers even when
+    # default_headers is passed, and those headers override the auth header.
+    # Reset them so no header comes from the environment.
+    client._custom_headers = {}
+    return client
 
 
 class ClaudeReasoningAgent(FlightRiskAgent):
@@ -95,6 +367,9 @@ class ClaudeReasoningAgent(FlightRiskAgent):
         model: str | None = None,
         api_key: str | None = None,
         effort: str | None = None,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ):
         from flightrisk.reasoning import cloud_block_reason
 
@@ -110,6 +385,7 @@ class ClaudeReasoningAgent(FlightRiskAgent):
                 "FLIGHTRISK_REASONING_PROVIDER=gemma to use local Ollama."
             )
         key_source = "api_key argument" if api_key else API_KEY_ENV
+        base_url = resolve_base_url()
 
         try:
             import anthropic
@@ -120,66 +396,149 @@ class ClaudeReasoningAgent(FlightRiskAgent):
         self.model = model or cfg.claude_model
         self.effort = effort or cfg.claude_effort
         self._anthropic = anthropic
-        self._client = anthropic.Anthropic(
-            api_key=key, timeout=_TIMEOUT_S, max_retries=_MAX_RETRIES)
-        self._breaker_threshold = max(1, int(cfg.claude_breaker_threshold))
-        self._breaker_cooloff = float(cfg.claude_breaker_cooloff)
-        self._max_calls_per_minute = int(cfg.claude_max_calls_per_minute)
+        self._clock = clock
+        self._sleep = sleep
+        self._key_source = key_source
+        self._client = _build_client(anthropic, key, base_url)
+        self._breaker_threshold = int(_clamped(
+            "FLIGHTRISK_CLAUDE_BREAKER_THRESHOLD", cfg.claude_breaker_threshold, 1, None, 3))
+        self._breaker_cooloff = _clamped(
+            "FLIGHTRISK_CLAUDE_BREAKER_COOLOFF", cfg.claude_breaker_cooloff, *_COOLOFF_RANGE_S, _DEFAULT_COOLOFF_S)
+        self._max_calls_per_minute = int(_clamped(
+            "FLIGHTRISK_CLAUDE_MAX_CALLS_PER_MINUTE", cfg.claude_max_calls_per_minute, 1, None, 20))
+        self._deadline_s = _clamped(
+            "FLIGHTRISK_CLAUDE_DEADLINE", cfg.claude_deadline, *_DEADLINE_RANGE_S, _DEFAULT_DEADLINE_S)
         self._guard = threading.Lock()
         self._consecutive_failures = 0
         self._open_until = 0.0
         self._call_times: list[float] = []
+        self._key_rejected = False
         self._available = True
         self.last_usage: dict[str, Any] = {}
+        host = urlsplit(base_url).hostname
         # Say where the key came from (never the key itself) and that data
         # leaves the device, so the operator can see cloud use is active.
         notice(
             _log, "reasoning_ready",
-            f"[reasoning] Claude ({self.model}) ready; API key from {key_source}. "
-            "Cloud reasoning is ON: person crops and the reference photo are sent to Anthropic.",
-            provider=self.provider, model=self.model, key_source=key_source, cloud=True,
+            f"[reasoning] Claude ({self.model}) ready; API key from {key_source}"
+            + ("" if base_url == DEFAULT_BASE_URL else f"; API host {host} (from {BASE_URL_ENV})")
+            + ". Cloud reasoning is ON: person crops and the reference photo are sent to Anthropic.",
+            provider=self.provider, model=self.model, key_source=key_source, cloud=True, api_host=host,
         )
 
     def _image_to_base64(self, image: np.ndarray) -> str:
         """Downscale to the upload cap, then encode as base64 JPEG."""
         return super()._image_to_base64(downscale_for_upload(image))
 
+    def health(self) -> dict[str, Any]:
+        """Breaker and rate-cap state for the dashboard (no secrets)."""
+        now = self._clock()
+        with self._guard:
+            left = max(0.0, self._open_until - now)
+            recent = sum(1 for t in self._call_times if now - t < _RATE_WINDOW_S)
+            failures = self._consecutive_failures
+            rejected = self._key_rejected
+        return {
+            "breaker": "open" if left > 0 else "closed",
+            "breaker_seconds_left": math.ceil(left),
+            "consecutive_failures": failures,
+            "calls_last_minute": recent,
+            "max_calls_per_minute": self._max_calls_per_minute,
+            "key_rejected": rejected,
+        }
+
     def _admit(self) -> None:
-        """Raise ClaudeCallSkipped if the breaker is open or the minute cap is hit."""
-        now = time.monotonic()
+        """Raise ClaudeCallSkipped if the breaker is open or the minute cap is hit.
+
+        Runs before any image is resized or encoded. The cap counts logical
+        calls: the single retry inside ``_ask`` belongs to the same call and
+        does not take another slot.
+        """
+        now = self._clock()
         with self._guard:
             if now < self._open_until:
-                raise ClaudeCallSkipped(BREAKER_OPEN_MESSAGE)
+                raise ClaudeCallSkipped(BREAKER_OPEN_MESSAGE.format(seconds=math.ceil(self._open_until - now)))
+            # After the cool-off the next call goes out as the probe. There is
+            # no strict half-open state limiting it to one probe at a time,
+            # because one serial reasoning worker makes every call, so only one
+            # can be in flight. The failure count stays at the threshold, so a
+            # failed probe reopens the breaker at once.
             self._call_times = [t for t in self._call_times if now - t < _RATE_WINDOW_S]
             if len(self._call_times) >= self._max_calls_per_minute:
                 raise ClaudeCallSkipped(RATE_CAP_MESSAGE)
             self._call_times.append(now)
 
-    def _record_result(self, exc: Exception | None) -> None:
-        """Update the breaker: success resets it; an outage error counts toward opening it."""
+    def _record_failure(self, exc: Exception) -> None:
+        """Update the breaker for a failed call.
+
+        An outage (connection error, read timeout, 429, 5xx, 529) counts
+        toward opening it. A reply from a reachable API (a 400, a refusal, no
+        text) resets the count. A call that hit its deadline, or an unexpected
+        local error, leaves the count as it is.
+        """
         with self._guard:
-            if exc is None:
-                self._consecutive_failures = 0
-                self._open_until = 0.0
-            elif _is_outage_error(exc):
+            if _is_outage(exc):
                 self._consecutive_failures += 1
                 if self._consecutive_failures >= self._breaker_threshold:
-                    self._open_until = time.monotonic() + self._breaker_cooloff
+                    self._open_until = self._clock() + self._breaker_cooloff
                     _log.warning(
                         "claude_breaker_open failures=%d cooloff_s=%.0f",
                         self._consecutive_failures, self._breaker_cooloff)
+            elif _api_answered(exc):
+                self._consecutive_failures = 0
+
+    def _record_success(self) -> None:
+        with self._guard:
+            self._consecutive_failures = 0
+            self._open_until = 0.0
+
+    def _reject_key(self, exc: Exception) -> None:
+        """Turn the agent off after a 401/403. A new agent (restart or re-selecting Claude) clears it."""
+        status = _status(exc)
+        with self._guard:
+            first = not self._key_rejected
+            self._key_rejected = True
+        self._unavailable_reason = KEY_REJECTED_MESSAGE
+        self._available = False
+        if first:
+            notice(
+                _log, "reasoning_key_rejected",
+                f"[reasoning] Claude rejected the API key from {self._key_source} (HTTP {status}). "
+                "AI checks are off until the key is fixed and the dashboard restarts or Claude is selected again.",
+                level=logging.ERROR, provider=self.provider, model=self.model, status=status,
+                key_source=self._key_source,
+            )
 
     def _ask(self, prompt: str, images_b64: list[str]) -> str:
-        self._admit()
+        """One logical call: a streamed request, at most one retry, all inside the deadline.
+
+        ``_admit`` has already run. Only the final outcome of the call updates
+        the breaker, so a call and its retry count as one failure at most.
+        """
+        deadline = self._clock() + self._deadline_s
         try:
-            text = self._send(prompt, images_b64)
+            started = [False]
+            try:
+                text = self._send(prompt, images_b64, deadline, started)
+            except Exception as first:
+                wait = _retry_wait(first, started[0])
+                if wait is None or self._clock() + wait >= deadline:
+                    raise
+                _log.info("claude_call_retry error_type=%s wait_s=%.1f", type(first).__name__, wait)
+                self._sleep(wait)
+                started = [False]
+                text = self._send(prompt, images_b64, deadline, started)
         except Exception as e:
-            self._record_result(e)
+            if _is_auth_rejection(e):
+                self._reject_key(e)
+                # The SDK error carries the response, never the key; drop it anyway.
+                raise ClaudeKeyRejected(KEY_REJECTED_MESSAGE) from None
+            self._record_failure(e)
             raise
-        self._record_result(None)
+        self._record_success()
         return text
 
-    def _send(self, prompt: str, images_b64: list[str]) -> str:
+    def _send(self, prompt: str, images_b64: list[str], deadline: float, started: list[bool]) -> str:
         content: list[dict[str, Any]] = [
             {
                 "type": "image",
@@ -200,7 +559,17 @@ class ClaudeReasoningAgent(FlightRiskAgent):
             # instead of surfacing as a failed match check.
             kwargs["betas"] = [_FALLBACK_BETA]
             kwargs["fallbacks"] = "default"
-        response = self._client.beta.messages.create(**kwargs)
+
+        message = DEADLINE_MESSAGE.format(seconds=round(self._deadline_s))
+        # Leaving the with block (normally or by an exception) closes the stream.
+        with self._client.beta.messages.stream(**kwargs) as stream:
+            started[0] = True
+            _install_deadline(stream, deadline, self._clock, message)
+            for _event in stream:
+                if self._clock() >= deadline:
+                    raise ClaudeDeadlineExceeded(message)
+            response = stream.get_final_message()
+
         usage = getattr(response, "usage", None)
         self.last_usage = {
             "input_tokens": getattr(usage, "input_tokens", None),
@@ -209,9 +578,9 @@ class ClaudeReasoningAgent(FlightRiskAgent):
 
         if response.stop_reason == "refusal":
             category = getattr(response.stop_details, "category", None)
-            raise RuntimeError(f"Claude declined this request ({category or 'policy'})")
+            raise ClaudeNoVerdict(f"Claude declined this request ({category or 'policy'})")
 
-        text = "".join(b.text for b in response.content if b.type == "text").strip()
+        text = _verdict_text(response.content)
         if not text:
-            raise RuntimeError(f"Claude returned no text (stop_reason={response.stop_reason})")
+            raise ClaudeNoVerdict(f"Claude returned no text (stop_reason={response.stop_reason})")
         return text

@@ -558,7 +558,7 @@ class TestFrameLoopReasoningSkipped:
 
             stamps = _Recent() if stamp_recent else gemma_last_call
             with patch("flightrisk.dashboard.pipeline._save_match_snapshot"), \
-                    patch("flightrisk.dashboard.pipeline.cv2.imread", return_value=ref), \
+                    patch("flightrisk.dashboard.pipeline.load_reference_photo", return_value=ref), \
                     patch("flightrisk.dashboard.pipeline.gemma_last_call", stamps):
                 _frame_loop(sio)
             return events, dict(gemma_last_call)

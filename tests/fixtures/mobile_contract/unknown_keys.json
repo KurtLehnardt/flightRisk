@@ -2,7 +2,7 @@
   "_meta": {
     "description": "Forward compatibility: real payloads with an unknown key added at every object level (never inside maps keyed by drone id or provider name). Decoders must ignore unknown keys everywhere.",
     "file": "unknown_keys.json",
-    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "generated_at_commit": "74c4529192d5ea3868564a93c5222dc1e9a284b0",
     "map_keys": [
       "drones",
       "slots_cm",
@@ -881,6 +881,7 @@
           "off"
         ],
         "cloud_allowed": false,
+        "health": null,
         "label": "Gemma",
         "model": "gemma4:latest",
         "provider": "gemma",
