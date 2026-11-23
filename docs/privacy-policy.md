@@ -8,15 +8,15 @@
 
 ## 1. Overview
 
-FlightRisk is an AI-powered tool designed to help parents and guardians locate a missing child in crowded environments. It uses on-device face recognition and appearance matching via the phone camera. This privacy policy explains what data the app processes, how it is handled, and your rights.
+FlightRisk is an AI-powered tool designed to help parents and guardians locate a missing child in crowded environments. It uses on-device person detection and appearance matching via the phone camera. The iPhone app does not use face recognition: it matches people by their appearance (clothing, colours and build). This privacy policy explains what data the app processes, how it is handled, and your rights.
 
 ---
 
 ## 2. On-Device Processing
 
-All face detection, face recognition (ArcFace), and appearance matching (CLIP ReID) processing runs on your device: on iPhone with Apple's Core ML, and on Android with ONNX Runtime. **Face embeddings and appearance feature vectors never leave your phone under any setting.** Specifically:
+All person detection and matching runs on your device: on iPhone with Apple's Core ML, and on Android with ONNX Runtime. On iPhone, matching uses appearance only (CLIP ReID); the iPhone app has no face detection or face recognition model and makes no face embeddings. The Android app may also run face detection and face recognition. **Face embeddings and appearance feature vectors never leave your phone under any setting.** Specifically:
 
-- Face embeddings (numerical representations of facial features) are computed locally and exist only in device memory during the active session.
+- Where face recognition is used (Android), face embeddings (numerical representations of facial features) are computed locally and exist only in device memory during the active session.
 - Body detection and appearance feature extraction happen locally.
 - No biometric templates or embeddings are transmitted to any server, cloud service, or third party.
 - **Images are different from templates.** With the default settings, no image of any person leaves your device. Images leave the phone in two cases only, both optional and off by default. First, if you turn on cloud reasoning, save a Claude API key and select Cloud Claude (Section 5), the reference photo you provided and the cropped image of each candidate person are sent for analysis. Second, on Android with phone-as-edge turned on (Section 5B), a small picture of the whole camera view, which can show people, is sent to the ground station you entered when that ground station asks for video. Those images can show a face.
@@ -126,7 +126,7 @@ This section applies to the Android app. Everything in Section 5 about cloud rea
 
 ## 7. Camera Usage
 
-- The camera is used solely for real-time person detection and face matching to help locate a missing child.
+- The camera is used solely for real-time person detection and matching to help locate a missing child (appearance matching on iPhone; on Android, face matching too).
 - On iPhone, camera frames are processed on-device in real time and are not recorded or stored. On Android, a search is recorded as a video of the camera view in the app's private storage, and match images are saved as files, only if you turn on "Record search video" in Settings (off by default; Section 4). Camera frames are not transmitted, except for the crops, reference photo and description sent when the optional cloud reasoning feature is enabled (Section 5) and, on Android with phone-as-edge on, a small picture of the whole camera view sent to your ground station when it asks for video (Section 5B).
 
 ---
@@ -156,6 +156,7 @@ The only exceptions are the optional features you turn on or start yourself: clo
 ## 10. Data Retention and Deletion
 
 - **Biometric templates and embeddings:** Not retained. Ephemeral and session-scoped. Discarded when the session ends.
+- **A person detector you import on iPhone (optional, off by default):** A model file, not personal data. It is kept in the app's own storage, excluded from device backups and never sent anywhere, until you remove it in Settings or uninstall the app.
 - **Session data on Android (video, match images, scores, reasoning text, description):** Stored locally until removed. Video and match images exist only if "Record search video" is on. Use "Delete saved sessions and recordings" in Settings, clear the app's storage in the system Settings, or uninstall the app. On iPhone no session data is stored.
 - **App deletion:** Uninstalling the app removes all locally stored data (backups made by the operating system are separate).
 

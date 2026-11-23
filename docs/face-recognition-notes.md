@@ -187,13 +187,13 @@ enrols with a multiple-faces warning; noise gives `no_face`.
 
 ## Follow-ups and mobile parity
 
-* `ios/FlightRisk/Vision/FaceRecognizer.swift` and
-  `InsightFaceMatcher.swift` use SCRFD-500M + MobileFaceNet, i.e. the
-  `buffalo_s` family, with a fixed 640x640 detector, largest-face selection and
-  a single-embedding target. Worth porting: subject-face selection with
-  centrality, fitted detection size, per-track embedding aggregation, and the
-  reference quality report (use the same codes and messages). The Android app
-  (`mobile/`, see `MatchingAlgorithmConfig.kt`) should get the same.
+* The iOS app no longer does face recognition: its SCRFD-500M + MobileFaceNet
+  (`buffalo_s` family) code was removed, because no InsightFace or other face
+  recogniser can ship in a store build (`docs/mobile-models.md`). It matches by
+  appearance only. Nothing here is to be ported to iOS.
+* The Android app (`mobile/`, see `MatchingAlgorithmConfig.kt`) is in the same
+  position for store builds; its integration with the store-safe models removes
+  its InsightFace code paths too.
 * Thresholds (0.35 dashboard / 0.45 config) are shared across `buffalo_l` and
   MobileFaceNet; MobileFaceNet scores are slightly higher for genuine pairs at
   small sizes in this benchmark, but retune on a real validation set before

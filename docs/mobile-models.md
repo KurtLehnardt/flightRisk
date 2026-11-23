@@ -254,13 +254,8 @@ Each iOS package records how it must be loaded as its
 
 ### For the app integration PRs
 
-- iOS: `ios/project.yml` excludes `Models/**` from the FlightRisk target, so
-  nothing from `ios/FlightRisk/Models` reaches the app today. The iOS
-  integration PR must add the installed `YOLOXs.mlpackage` and
-  `CLIPViTB16LAION.mlpackage` to the target as optional sources (so a checkout
-  without them still builds, and Xcode compiles them to `.mlmodelc`), and
-  copy `mobile-models.json` and `model-notices.md` as resources.
-- Both: load the files with the contracts below, show `model-notices.md` in
+- iOS: done; see "The iOS app" below.
+- Android: load the files with the contracts below, show `model-notices.md` in
   full on the licences screen, remove the YOLO, InsightFace, MobileCLIP and
   OSNet code paths, and test each stage against the golden fixtures.
 
@@ -375,6 +370,150 @@ RGB drops the embedding's cosine to 0.957 (`golden.json`,
 `channel_order_check`; `verify` fails if either stops being clear). That is
 the check of the channel order; the YOLOX demo picture's sanity check below
 does not check the channel order (its objects are found either way).
+
+## The iOS app
+
+The iPhone app loads the default iOS outputs, `YOLOXs.mlpackage` (fp32) and
+`CLIPViTB16LAION.mlpackage` (the 8-bit palettised embedder), and nothing else.
+It has no face detection or face recognition model and no YOLO (Ultralytics),
+InsightFace, MobileCLIP or OSNet code path: matching is by appearance only.
+
+**Bundling.** `ios/project.yml` keeps `Models/**` out of the target's sources,
+because Xcode fails a build whose sources name a missing file (XcodeGen's
+`optional` only skips its own check) and the models are not committed.
+Instead the FlightRisk target's build phase "Core ML models (optional)" runs
+before the licence guard on every build: for each of `YOLOXs` and
+`CLIPViTB16LAION` it removes the compiled model left by an earlier build and,
+when `ios/FlightRisk/Models/<name>.mlpackage` exists, compiles it into the app
+with `xcrun coremlc compile ... --platform ios --container bundle-resources`
+(the command Xcode itself runs for a model in the sources; under a second per
+model). It copies `mobile-models.json` and `model-notices.md` beside them. A
+missing package is a note in Debug and a warning in Release; the build still
+succeeds and the Search tab shows "Person detection unavailable". The compiled
+`.mlmodelc` folders keep the `flightrisk.weights_sha256` metadata, so the
+Release licence guard checks them as it checks the packages. The detector is
+loaded with the compute units `mobile-models.json` names for it (`all` for the
+default fp32 detector, `cpuAndGPU` for the fp16 one).
+
+**Where the contract lives.** The preprocessing and postprocessing are plain
+Swift in the `PersonVision` library of the `ios/FlightRiskGround` package, with
+no Core ML, so `swift test` checks them on a Mac:
+
+- `Letterbox` and `LetterboxGeometry`: the YOLOX canvas (ratio, sides
+  truncated, top-left, padding 114). The resize is bilinear with OpenCV's
+  sampling positions but rounds in floating point, where OpenCV rounds in
+  fixed point (and its arm64 build takes yet another path), so about a tenth
+  of the canvas values of the golden frame differ from `detector_input.f32`,
+  each by exactly one level; none by more.
+- `YOLOXDecoder` and `NonMaxSuppression`: upstream's postprocess (best class
+  per row, objectness times class score, NMS per class at 0.45, boxes divided
+  by the ratio in float32). On the golden output it reproduces `golden.json`'s
+  detections exactly, scores and boxes bit for bit.
+- `CropRule`: the crop rule above.
+- `CLIPPreprocess` and `PillowBicubic`: a port of Pillow's bicubic resampler
+  (`Resample.c`, fixed point), so the embedder input is the ground's bit for
+  bit: its SHA-256 equals `embedder_input.f32`'s.
+- `PersonBoxFilter`: which person boxes are kept (below).
+
+The app's `PersonDetector` letterboxes each camera frame, hands the canvas to
+Core ML as a 32BGRA pixel buffer (the model's input is declared BGR, so Core
+ML orders the channels), decodes the persons (class 0) at the app's score
+threshold (0.4, `FlightRiskConfig.vision.detectorConfidence`), filters the
+boxes and cuts each crop from the full frame by the crop rule. `PersonReID`
+embeds each crop and the reference photo (the whole photo, as the ground does)
+and compares them by cosine similarity (match at 0.55). The phone compares
+only embeddings it made itself, so the palettised embedder's small shared
+offset from PyTorch does not affect a match.
+
+**Box filter.** The app used to drop every box under 12% of the frame height
+or 0.8% of its area, which dropped people who are small in the frame: the
+normal case from altitude. The default is now `PersonBoxFilter.aerial`: at
+least 1% of the frame height (11 pixels of a 1080-pixel frame) and 0.01% of
+its area, and between 0.15 and 3 times as wide as tall (3 rather than 1.5, so
+that a person lying down, seen from the side or from above, is kept). Each
+limit can be changed with `FLIGHTRISK_MIN_BOX_HEIGHT_RATIO`,
+`FLIGHTRISK_MIN_BOX_AREA_RATIO`, `FLIGHTRISK_MIN_BOX_ASPECT_RATIO` and
+`FLIGHTRISK_MAX_BOX_ASPECT_RATIO` in the app's `flightrisk_config` defaults
+suite.
+
+**Tests.** `PersonVisionTests` (package) run without any model: the golden
+numbers in `Tests/PersonVisionTests/Fixtures/golden-subset.json` (the 54
+detector output rows whose best class scores 0.2 or more, the detections,
+the crop's pixels and the embedder input's digest, all from the drawn frame)
+and synthetic tensors for the letterbox, decoding, NMS, filter, crop rule,
+the user-model checks and the zip reader. With the full fixtures they also
+check the letterbox against `detector_input.f32`. The app's
+`OnDeviceModelTests` and `CustomDetectorTests` check the Core ML glue always,
+and, in a build with the models installed, the models themselves: the
+detector's output on the exact golden input against `detector_output.f32`
+(scores within 1e-3, boxes within 0.05 px: the fp32 gate of `verify`), the
+persons found from `frame.png` against the golden detections (IoU 0.95 or
+more; scores within 0.05, because of the one-level canvas differences), the
+embedder on `embedder_input.f32` and on `crop.png` (cosine 0.99 or more with
+`embedding.f32`, the palettised gate, and the two within 1e-4 of each other),
+and that YOLOX-S finds a person in the check picture. The full fixtures are
+found at `$FLIGHTRISK_GOLDEN_DIR` (for the app tests, pass
+`TEST_RUNNER_FLIGHTRISK_GOLDEN_DIR` to `xcodebuild`) or at
+`build/mobile_models/golden`; the tests that need them or the models are
+skipped otherwise. In the PR's run (iOS 26.4 simulator, which runs Core ML on
+the CPU) every one of them passed.
+
+```bash
+cd ios/FlightRiskGround && FLIGHTRISK_GOLDEN_DIR=$PWD/../../build/mobile_models/golden swift test
+cd ios && TEST_RUNNER_FLIGHTRISK_GOLDEN_DIR=$PWD/../build/mobile_models/golden xcodebuild test \
+  -scheme FlightRisk -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:FlightRiskTests
+```
+
+### Your own person detector (iOS)
+
+Settings > Person Detector can use a person detector the user already has
+instead of YOLOX-S. FlightRisk never bundles, hosts, downloads or logs such a
+model, and the feature is off by default.
+
+- **Gate.** "Import my own detector" opens a screen that says YOLO models from
+  Ultralytics (YOLOv8, YOLO11 and later) are AGPL-3.0 or need an Ultralytics
+  Enterprise licence, links to Ultralytics' licensing page and to the AGPL
+  text, lists what the model must be, and asks the user to confirm they have
+  the right to use the model. The file picker is disabled until they do.
+- **File.** `UIDocumentPickerViewController` (a copy, so no security scope is
+  kept) for a `.mlmodel`, or a `.mlpackage` folder compressed into a `.zip`.
+  iOS has no public unzip API, so `PersonVision.ZipExtractor` reads the zip
+  itself: stored or deflated entries only, no encryption, ZIP64, symbolic
+  links, absolute paths or `..`, sizes capped before unpacking and every
+  entry's CRC-32 checked; the Finder's `__MACOSX` entries are skipped. The
+  archive must hold exactly one `.mlpackage` at its top level.
+- **Checks** (`CustomModelValidator`), in order: the file is at most 100 MB
+  (and so is the unpacked model); its SHA-256 is computed and shown in
+  Settings; `MLModel.compileModel(at:)` compiles it on the phone (documented
+  for `.mlmodel` and `.mlpackage` from iOS 16, so on the app's iOS 17 minimum;
+  checked on the iOS 26.4 simulator, the oldest runtime available here); it
+  has exactly one input, a 640 x 640 image; exactly one output is a YOLOv8 or
+  YOLO11 head without NMS (`[1, 4 + classes, 8400]`, or transposed) or an
+  NMS-free head (`[1, N, 6]`: `x1, y1, x2, y2, score, class`); when it names
+  its classes (an Ultralytics export records `names` in its metadata), class 0
+  is "person"; and it finds a person (class 0, score 0.25 or more) in the
+  bundled check picture.
+- **Check picture.** `ios/FlightRisk/Resources/person-check-scene.png` is
+  drawn, not photographed: thirteen figures 24 to 120 pixels tall on a
+  grass-like texture, made by `make_models.silhouette_scene` (seed 20261205;
+  `ios/scripts/make_person_check_scene.py`). YOLOX-S finds seven people in it
+  (best 0.73) and a YOLO11n export nine at 0.25 or more (best 0.64).
+- **Running it.** A user model expects the frame centred on the canvas
+  (Ultralytics' `LetterBox`: sides rounded, padding split), so the app
+  letterboxes it that way, decodes persons (best class per anchor, class 0)
+  and runs NMS at 0.45. The size filter, crop rule and embedder are the same.
+- **Storage.** The compiled model and a small record (digest, size, interface,
+  test score, import time) go to Application Support/CustomDetector, excluded
+  from backups, and the model is switched on. Switching it off, removing it,
+  or a model that no longer loads goes back to YOLOX-S; with no bundled model
+  either, the Search tab says detection is unavailable.
+- **Tests.** The validator, the head decoders and the zip reader have unit
+  tests on synthetic data. `CustomDetectorTests` check the refusals (no
+  statement, wrong file type, over 100 MB, empty, not a zip, no package, not
+  a model) and, only when `$FLIGHTRISK_TEST_CUSTOM_DETECTOR` names a model on
+  the test machine, a whole import. For the PR it was run with a YOLO11n Core
+  ML export made locally for the test and deleted afterwards (input `image`,
+  RGB; output `[1, 84, 8400]`; best score 0.64 on the check picture).
 
 ## Parity
 
@@ -526,13 +665,11 @@ ground's dependencies:
 - **HERIDAL fine-tune.** Fine-tune the detector on HERIDAL (aerial
   search-and-rescue imagery; `scripts/finetune_heridal.py` and
   `docs/altitude-benchmark.md`) after checking the dataset's licence.
-- **Loosen the 12% / 0.8% box filters** in both `PersonDetector` files
-  (`mobile/app/src/main/java/com/flightrisk/app/vision/PersonDetector.kt` and
-  `ios/FlightRisk/Vision/PersonDetector.swift`: a box must be at least 12% of
-  the frame height and 0.8% of its area, `MIN_BBOX_HEIGHT_RATIO = 0.12f` and
-  `MIN_BBOX_AREA_RATIO = 0.008f` in Kotlin, `minBboxHeightRatio` and
-  `minBboxAreaRatio` in Swift). They drop people who are small in the frame,
-  which is the normal case from altitude.
+- **Loosen the 12% / 0.8% box filters on Android**
+  (`mobile/app/src/main/java/com/flightrisk/app/vision/PersonDetector.kt`:
+  `MIN_BBOX_HEIGHT_RATIO = 0.12f` and `MIN_BBOX_AREA_RATIO = 0.008f`). They
+  drop people who are small in the frame, the normal case from altitude. iOS
+  uses `PersonBoxFilter.aerial` (above); Android should match it.
 - **Pin the ground's embedder download.** `flightrisk/vision/reid.py` calls
   `open_clip.create_model_and_transforms(..., pretrained="laion2b_s34b_b88k")`,
   which downloads from Hugging Face without a pinned revision or a digest
@@ -549,11 +686,21 @@ ground's dependencies:
   Neural Engine.
 - **On-device checks.** The Android fp16 detector and every model's speed and
   memory on real phones are unmeasured.
-- **App PRs.** Load these files with these contracts (test against the golden
-  fixtures), add the iOS packages to the target, remove the YOLO, InsightFace,
-  MobileCLIP and OSNet code paths, show `model-notices.md` on the licences
-  screens, and update the privacy disclosures for sending embeddings
-  (`docs/mobile-followups.md`, "Embeddings for phone-as-edge").
+- **Android app PR.** Load these files with these contracts (test against the
+  golden fixtures), remove the YOLO, InsightFace, MobileCLIP and OSNet code
+  paths, show `model-notices.md` on the licences screen, and update the
+  privacy disclosures for sending embeddings (`docs/mobile-followups.md`,
+  "Embeddings for phone-as-edge"). The iOS app is done (above).
+- **iOS on a device.** Speed, memory and heat of both models on a real
+  iPhone, the Neural Engine path of the fp32 detector, and the import of a
+  user's model on iOS 17 itself (the simulator runs Core ML on the CPU only,
+  and no iOS 17 runtime was available).
+- **Embed the person in the reference photo.** The app and the ground embed
+  the whole reference photo; cutting the person out first (with the detector
+  and the crop rule) would compare like with like. It changes the ground too.
+- **A bit-exact letterbox.** The Swift letterbox differs from OpenCV's by one
+  level in about a tenth of the values. Matching OpenCV's fixed-point
+  rounding (on each platform's build) would make the canvas exact.
 
 ## Legal questions
 
