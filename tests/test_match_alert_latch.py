@@ -789,6 +789,8 @@ class TestEndpointsAndAuth:
 class TestSearchPauseResume:
     def test_search_pattern_holds_while_awaiting_and_resumes_on_dismiss(self, clean_app_state):
         drone = FakeDrone()
+        # A single-drone search does not start without a video frame for the obstacle guard.
+        drone.get_frame = lambda: np.zeros((4, 4, 3), dtype=np.uint8)
         app_state.fleet = _fleet_with(drone)
         app_state.obstacle_guard = MagicMock()  # a single-drone search does not start without one
         aid = _open_alert("1_1")

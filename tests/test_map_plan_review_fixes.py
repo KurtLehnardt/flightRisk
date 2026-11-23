@@ -24,6 +24,7 @@ from flightrisk import fleet_protocol as fp
 from flightrisk.dashboard.app import app, socketio
 from flightrisk.dashboard.state import app_state
 from flightrisk.drone import plan_paths as pp
+from tests.single_drone_doubles import ready_single_drone
 from flightrisk.drone.plan_edit import PlanSpec, build_plan, camera_footprint_cm
 from tests.test_fleet_dashboard import (  # noqa: F401
     WAIT_S,
@@ -247,6 +248,7 @@ def test_a_map_plan_stops_and_hovers_at_an_obstacle(clean_app_state, monkeypatch
     drone = MagicMock()
     drone.state.is_flying = True
     drone.get_frame.return_value = np.zeros((4, 4, 3), dtype=np.uint8)
+    ready_single_drone(drone)
     app_state.fleet = MagicMock(primary=drone)
     app_state.fleet_supervisor = None
     guard = MagicMock()
@@ -274,6 +276,7 @@ def test_the_legacy_pattern_still_avoids_obstacles(clean_app_state, monkeypatch)
     drone.state.is_flying = True
     drone.get_frame.return_value = np.zeros((4, 4, 3), dtype=np.uint8)
     drone.move.return_value = True
+    ready_single_drone(drone)
     app_state.fleet = MagicMock(primary=drone)
     app_state.fleet_supervisor = None
     guard = MagicMock()

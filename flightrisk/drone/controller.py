@@ -264,6 +264,30 @@ class DroneLinkStatus:
     detail: str | None = None
 
 
+@dataclass(frozen=True)
+class FrameFreshness:
+    """How current a controller's newest decoded video frame is (read-only, sends nothing).
+
+    A backend that can tell (the Tello controller) exposes it as
+    ``frame_freshness()``; the single-drone search refuses to start on a
+    frame that is not current, because its obstacle guard would check the
+    path on an old picture (``flightrisk/dashboard/single_search.py``).
+
+    * ``decoded``: a frame has been decoded since the video stream started.
+      False while the decoder still hands out its black placeholder.
+    * ``age_s``: seconds since the newest frame was decoded (for a reader
+      that stamps frames, since its first datagram arrived), on the
+      monotonic clock; ``None`` when unknown.
+    * ``stale_cause``: why the newest frame cannot be trusted (the bound
+      reader's ``FrameStamp.stale_cause``, such as ``decoder backlog``), or
+      ``None``.
+    """
+
+    decoded: bool
+    age_s: float | None = None
+    stale_cause: str | None = None
+
+
 def require_executed(value: Any, command: str) -> CommandResult:
     """Normalize ``value`` like :func:`command_result`, raising if it was not executed.
 
@@ -404,6 +428,7 @@ __all__ = [
     "DroneLinkStatus",
     "DroneState",
     "FlightControl",
+    "FrameFreshness",
     "GpsDroneController",
     "Lifecycle",
     "Motion",

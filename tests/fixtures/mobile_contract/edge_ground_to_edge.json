@@ -2,7 +2,7 @@
   "_meta": {
     "description": "Edge link, ground to edge: every message a phone acting as an edge may receive. Unknown types are ignored without closing the connection.",
     "file": "edge_ground_to_edge.json",
-    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "generated_at_commit": "118efe71ebaef531c5c04dbdb2e33d9574537a6f",
     "link": "raw WebSocket ws://HOST:9000 (not Socket.IO)",
     "max_message_bytes": 1048576,
     "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",

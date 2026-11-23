@@ -2,7 +2,7 @@
   "_meta": {
     "description": "The 'fleet_event' event, one case per kind. Read the kind from 'event'; show 'detail' when present. Unknown kinds must be shown by name, never dropped.",
     "file": "fleet_event.json",
-    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "generated_at_commit": "118efe71ebaef531c5c04dbdb2e33d9574537a6f",
     "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
     "sources": [
       "FleetCoordinator._on_nack",
@@ -143,6 +143,38 @@
             "index": 2,
             "reason": "refused by drone-2 (geofence)",
             "x_cm": 75,
+            "y_cm": 400
+          }
+        ]
+      }
+    },
+    "retask_needs_confirmation": {
+      "direction": "server_to_client",
+      "event": "fleet_event",
+      "notes": "The ground landed a drone nobody controlled; its unflown lanes (each with a reason) are offered to no drone until the operator confirms on the dashboard. A phone may show the lanes like retask_failed lanes and must not offer a confirm control.",
+      "payload": {
+        "detail": "drone-2: landed by the ground with no controller; its 2 unflown lanes are offered to another drone only once you confirm it",
+        "drone_id": "drone-2",
+        "event": "retask_needs_confirmation",
+        "lanes": [
+          {
+            "direction": "right",
+            "distance_cm": 75,
+            "end_x_cm": 325,
+            "end_y_cm": 400,
+            "index": 1,
+            "reason": "landed by the ground with no controller",
+            "x_cm": 250,
+            "y_cm": 400
+          },
+          {
+            "direction": "back",
+            "distance_cm": 400,
+            "end_x_cm": 325,
+            "end_y_cm": 0,
+            "index": 2,
+            "reason": "landed by the ground with no controller",
+            "x_cm": 325,
             "y_cm": 400
           }
         ]

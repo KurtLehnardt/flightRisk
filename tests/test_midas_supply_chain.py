@@ -39,6 +39,7 @@ from flightrisk.dashboard.state import app_state
 from flightrisk.drone import midas_model
 from flightrisk.drone.midas_model import DownloadFailed, MidasUnavailable
 from flightrisk.third_party.midas_small import midas_small, small_transform
+from tests.single_drone_doubles import ready_single_drone
 from tests.support.midas_weights import (
     hub_markers,
     output_fingerprint,
@@ -537,6 +538,7 @@ def single_drone(clean_app_state, monkeypatch):
     drone.get_frame.return_value = None
     drone.move.return_value = True
     drone.rotate.return_value = True
+    ready_single_drone(drone)
     app_state.fleet = MagicMock(primary=drone)
     app_state.fleet_supervisor = None
     app_state.obstacle_guard = None
