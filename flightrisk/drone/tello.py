@@ -28,11 +28,13 @@ from flightrisk.drone.controller import (
     BASIC_FLIGHT,
     Capability,
     CommandOutcome,
+    CommandRefusedError,
     CommandResult,
     DroneCapabilities,
     DroneController,
     DroneLinkStatus,
     DroneState,
+    SettledHeight,
 )
 from flightrisk.drone.snapshot import (
     CELSIUS,
@@ -111,6 +113,16 @@ _TAKEOFF_REPLY_TIMEOUT_S = 20.0
 #   the "error" it read, as before.
 # * Any other reply, such as "error Motor stop", is a refusal and fails the
 #   takeoff at once.
+# * Once a land has sent its interrupting ``stop`` (LAND ALL, or the edge's
+#   own land), no reply queued after it is taken as the takeoff's answer. The
+#   land sends ``stop`` and ``land`` without reading their replies, and Tello
+#   replies name no command, so such a reply may be theirs: on 2026-11-22 a
+#   standard Tello answered the interrupting stop with "unknown command:
+#   stop", and that reply was read as the takeoff's refusal. The takeoff then
+#   ends as interrupted by the landing (``takeoff()`` returns False, as for a
+#   land that started before the send), and the land's own guards cover a
+#   drone that may still lift. Replies already queued when the stop was sent
+#   are still read as before.
 _TAKEOFF_CONFIRM_S = 6.0
 _TAKEOFF_GROUND_AFTER_S = 3.0
 # A takeoff reply is cut to this many characters in its log event.
@@ -121,6 +133,8 @@ _TAKEOFF_REPLY_LOG_LEN = 64
 # reply (the interrupting ``stop`` and ``land``).
 _TIME_BETWEEN_COMMANDS_S = 0.1
 _REPLY_POLL_S = 0.01
+# How often ``settled_height`` looks at the state packets again.
+_SETTLE_POLL_S = 0.05
 # A land is sent up to this many times. Repeating a land is always safe.
 _LAND_ATTEMPTS = 3
 # How long each confirming land waits for a fresh reply before it is sent
@@ -150,6 +164,9 @@ _LINK_STATE_MAX_AGE_S = _STATE_LOST_S
 # The link detail text (sent to the ground in nacks and telemetry) is cut to
 # this many characters; the protocol allows 200.
 _LINK_DETAIL_MAX_LEN = 160
+# ``tof`` reads this when the distance is out of the sensor's range. It is no
+# distance, so it never bounds a descent (``settled_height``).
+_TOF_OUT_OF_RANGE_CM = 6553
 # This many recent state packets are kept, enough to cover _MOTOR_OFF_S at
 # up to 20 packets a second.
 _STATE_READINGS_KEPT = 128
@@ -300,6 +317,14 @@ class _StateReading(NamedTuple):
     motor_s: int | None  # ``time``: whole seconds the motors have run
 
 
+class _TakeoffAnswer(NamedTuple):
+    """How the wait for a takeoff's reply ended (see ``TelloController._await_takeoff_reply``)."""
+
+    reply: str | None  # the reply that decides, or None
+    accepted: bool  # the takeoff counts as done
+    interrupted: bool = False  # a reply queued after a land's interrupting command was read; none was taken
+
+
 class _LandAttempt(NamedTuple):
     """The result of one confirming land (see ``TelloController._send_confirming_land``)."""
 
@@ -382,8 +407,13 @@ def _lifted(reading: _StateReading) -> bool:
 
 
 def _stray_reply(reply: str) -> bool:
-    """Whether a reply can never be the answer to a takeoff: "unknown command", empty, or not printable text."""
-    if not reply or reply.lower() == "unknown command":
+    """Whether a reply can never be the answer to a takeoff: "unknown command", empty, or not printable text.
+
+    "unknown command" counts with or without the command it names after it
+    (a standard Tello answers "unknown command: stop"): a takeoff is a
+    command every Tello knows.
+    """
+    if not reply or reply.lower().startswith("unknown command"):
         return True
     return "�" in reply or not reply.isprintable()
 
@@ -645,6 +675,12 @@ class TelloController:
         self._takeoff_in_flight = False
         self._takeoff_sent_at: float | None = None
         self._takeoff_answered_ok = False
+        # While a takeoff waits for its reply: None until a land sends its
+        # first interrupting command, then how many replies were already
+        # queued at that moment, less those read since. A reply read once it
+        # is 0 came after the land's command and may answer it, so it is
+        # never taken as the takeoff's (see _TAKEOFF_CONFIRM_S).
+        self._replies_before_land: int | None = None
         self._lift_guard_until = 0.0
         self._reply_guard_until = 0.0
         self._zero_height_count = 0
@@ -1155,7 +1191,10 @@ class TelloController:
         bare ``error`` is checked against further replies and the state
         stream before it fails the takeoff (see ``_TAKEOFF_CONFIRM_S``). Any
         other reply than ``ok``, a bare ``error`` that is not shown wrong,
-        or no reply raises ``RuntimeError``.
+        or no reply raises ``RuntimeError``. A land that sends its
+        interrupting ``stop`` while the takeoff waits also makes it return
+        False once a reply queued after that stop is read: the reply may be
+        the stop's, so it never decides the takeoff.
         """
         with self._wire_lock:
             land_seq = self._land_seq
@@ -1278,7 +1317,18 @@ class TelloController:
                 self._lands_in_progress -= 1
 
     def _send_land_raw(self, command: str) -> None:
-        """Send ``stop`` or ``land`` for an interrupting land, without reading a reply."""
+        """Send ``stop`` or ``land`` for an interrupting land, without reading a reply.
+
+        The first one sent while a takeoff waits for its reply marks the
+        replies already queued (``_replies_before_land``): only those may
+        still be read as the takeoff's answer.
+        """
+        with self._wire_lock:
+            if self._takeoff_in_flight and self._replies_before_land is None:
+                try:
+                    self._replies_before_land = len(self.tello.get_own_udp_object()["responses"])
+                except Exception:  # noqa: BLE001 - no count: every later reply counts as after the land
+                    self._replies_before_land = 0
         try:
             self.tello.send_command_without_return(command)
         except Exception as e:
@@ -1778,7 +1828,11 @@ class TelloController:
         ``RuntimeError`` on any other reply or none within ``timeout_s``.
         A takeoff's reply is read by ``_await_takeoff_reply``, which skips
         stray replies and checks a bare ``error`` against the state stream.
-        Nothing is retried.
+        A takeoff that reads a reply queued after a land sent its
+        interrupting ``stop`` returns False: that reply may answer the stop.
+        A reply other than ``ok`` raises ``CommandRefusedError`` (a
+        ``RuntimeError`` carrying the command and the reply). Nothing is
+        retried.
         """
         tello = self.tello
         self._pace_commands()
@@ -1800,6 +1854,7 @@ class TelloController:
                     # starts the takeoff guards (see _TAKEOFF_LIFT_GUARD_S).
                     self._takeoff_in_flight = True
                     self._takeoff_answered_ok = False
+                    self._replies_before_land = None
                     self._takeoff_sent_at = time.monotonic()
                     self._lift_guard_until = 0.0
                     self._reply_guard_until = 0.0
@@ -1817,7 +1872,12 @@ class TelloController:
                     self._note_command_outcome(e)
                     raise
             if is_takeoff:
-                reply, accepted = self._await_takeoff_reply(responses, timeout_s, rearm_after_land)
+                reply, accepted, interrupted = self._await_takeoff_reply(responses, timeout_s, rearm_after_land)
+                if interrupted:
+                    # A land sent its stop while the takeoff waited, and the
+                    # reply read may answer that stop or land: the takeoff is
+                    # not decided by it (see _TAKEOFF_CONFIRM_S).
+                    return False
             else:
                 reply = self._await_reply(responses, timeout_s)
                 accepted = reply is not None and reply.lower() == "ok"
@@ -1837,19 +1897,24 @@ class TelloController:
                 f"[{self.name}] no reply to '{command}' within {timeout_s:g} s (not retried)"
             )
         if not accepted:
-            raise RuntimeError(f"[{self.name}] '{command}' answered {reply!r} (not retried)")
+            raise CommandRefusedError(
+                f"[{self.name}] '{command}' answered {reply!r} (not retried)", command=command, reply=reply
+            )
         return True
 
-    def _await_takeoff_reply(
-        self, responses: list, timeout_s: float, land_seq: int
-    ) -> tuple[str | None, bool]:
+    def _await_takeoff_reply(self, responses: list, timeout_s: float, land_seq: int) -> _TakeoffAnswer:
         """Read the reply to the takeoff just sent and decide whether it took off (see ``_TAKEOFF_CONFIRM_S``).
 
         Caller holds ``_cmd_lock``; ``land_seq`` is the land count when the
         takeoff was sent. Returns the reply that decides (None when no reply
         that could answer a takeoff arrived within ``timeout_s`` of the
-        send) and whether the takeoff counts as done. Sends nothing, so the
-        takeoff is never sent twice. Every reply read is logged as a
+        send) and whether the takeoff counts as done. A reply queued after a
+        land sent its interrupting ``stop`` (``_replies_before_land``) is
+        never taken as the takeoff's: it is logged as ``ignored_landing``,
+        and the answer is ``interrupted``. While a bare ``error`` is being
+        confirmed, any reply read once a land has started ends it with that
+        ``error`` unconfirmed, as before. Sends nothing, so the takeoff is
+        never sent twice. Every reply read is logged as a
         ``tello_takeoff_reply`` event with its text and its age in ms.
         """
         sent_at = self._takeoff_sent_at
@@ -1875,17 +1940,25 @@ class TelloController:
             )
             if reply is None:
                 if unconfirmed is None:
-                    return None, False
-                return unconfirmed, self._confirm_takeoff_error(unconfirmed, sent_at, landing())
+                    return _TakeoffAnswer(None, False)
+                return _TakeoffAnswer(unconfirmed, self._confirm_takeoff_error(unconfirmed, sent_at, landing()))
             age_ms = round((time.monotonic() - sent_at) * 1000)
+            after_land_command = self._read_after_land_command()
             if unconfirmed is not None and landing():
                 # Replies read once a land has started may be the land's
                 # own (the interrupting stop's "ok"), so none is taken.
                 self._log_takeoff_reply(reply, age_ms, "ignored_landing")
-                return unconfirmed, self._confirm_takeoff_error(unconfirmed, sent_at, True)
+                return _TakeoffAnswer(unconfirmed, self._confirm_takeoff_error(unconfirmed, sent_at, True))
+            if after_land_command:
+                # The reply arrived after a land sent its interrupting stop
+                # or land, so it may be theirs ("unknown command: stop" from
+                # a standard Tello, or the stop's "ok"): it is not the
+                # takeoff's answer, and the takeoff ends as interrupted.
+                self._log_takeoff_reply(reply, age_ms, "ignored_landing")
+                return _TakeoffAnswer(None, False, interrupted=True)
             if reply.lower() == "ok":
                 self._log_takeoff_reply(reply, age_ms, "accepted")
-                return reply, True
+                return _TakeoffAnswer(reply, True)
             if _stray_reply(reply):
                 self._log_takeoff_reply(reply, age_ms, "skipped_stray")
                 continue
@@ -1896,7 +1969,18 @@ class TelloController:
                     confirm_until = time.monotonic() + _TAKEOFF_CONFIRM_S
                 continue
             self._log_takeoff_reply(reply, age_ms, "refused")
-            return reply, False
+            return _TakeoffAnswer(reply, False)
+
+    def _read_after_land_command(self) -> bool:
+        """Count one reply read by a takeoff; True if it was queued after a land's interrupting command."""
+        with self._wire_lock:
+            before = self._replies_before_land
+            if before is None:
+                return False
+            if before > 0:
+                self._replies_before_land = before - 1
+                return False
+            return True
 
     def _confirm_takeoff_error(self, reply: str, sent_at: float, landing: bool) -> bool:
         """Decide a takeoff answered only with a bare "error": True when fresh state shows the drone in the air.
@@ -2054,6 +2138,69 @@ class TelloController:
             return None
         self._set_measured("battery", battery)
         return battery
+
+    def settled_height(
+        self,
+        *,
+        samples: int,
+        tolerance_cm: float,
+        timeout_s: float,
+        abort: threading.Event | None = None,
+    ) -> SettledHeight | None:
+        """Wait for fresh state that shows the drone holding a steady height. Sends nothing.
+
+        Counts only state packets that arrive after this call starts, so a
+        caller that calls it once a takeoff's reply has been read never sees
+        a height from before that reply. The height read right after a late
+        takeoff ``ok`` was stale twice on real flights: 20 cm with the drone
+        near 80 cm on 2026-10-28 (it then climbed 110 cm, near the ceiling),
+        and 100 cm with the drone 30 to 40 cm above a desk on 2026-11-21 (it
+        was sent down 80 cm). Returns the newest height and the lowest
+        ``tof`` once the last *samples* packets carrying a height all
+        arrived after the call, each within ``_STATE_FRESH_S`` of the one
+        before, the newest still fresh, with ``h`` (and ``tof``, when every
+        one of them has a usable distance) varying by at most
+        *tolerance_cm*. ``tof_cm`` is None when any of them has no usable
+        distance (missing, not positive, or the out-of-range reading).
+        A ``tof`` that varies by more than *tolerance_cm* means the drone is
+        drifting over an edge or still moving, so it does not count as
+        settled. None when that does not happen within *timeout_s*, or when
+        *abort* is set or a land starts first.
+        """
+        started = time.monotonic()
+        deadline = started + timeout_s
+        while True:
+            reading = self._settled_window(started, samples, tolerance_cm)
+            if reading is not None:
+                height, tof = reading
+                return SettledHeight(height, tof, samples, round(time.monotonic() - started, 3))
+            if self._landing or time.monotonic() >= deadline:
+                return None
+            if abort is not None:
+                if abort.wait(_SETTLE_POLL_S):
+                    return None
+            else:
+                time.sleep(_SETTLE_POLL_S)
+
+    def _settled_window(self, since: float, samples: int, tolerance_cm: float) -> tuple[int, int | None] | None:
+        """``(h, lowest tof)`` of the last *samples* height packets after *since* if they show a steady height, else None."""
+        readings = [r for r in self._height_readings() if r.at > since]
+        if samples < 1 or len(readings) < samples:
+            return None
+        window = readings[-samples:]
+        if time.monotonic() - window[-1].at > _STATE_FRESH_S:
+            return None
+        if any(later.at - earlier.at > _STATE_FRESH_S for earlier, later in pairwise(window)):
+            return None
+        heights = [r.height for r in window]
+        if max(heights) - min(heights) > tolerance_cm:
+            return None
+        tofs = [r.tof for r in window]
+        if all(_tof_valid(t) and t < _TOF_OUT_OF_RANGE_CM for t in tofs):
+            if max(tofs) - min(tofs) > tolerance_cm:
+                return None
+            return window[-1].height, min(tofs)
+        return window[-1].height, None
 
     def read_height_cm(self) -> int | None:
         """Height above takeoff in cm from the latest state packet, or None if unknown."""

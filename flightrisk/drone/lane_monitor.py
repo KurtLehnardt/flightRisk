@@ -366,6 +366,11 @@ class MonitorMixin:
                 drone_link_detail=None if link.ok else (link.detail or "drone unreachable"),
             )
         msg.update(self._obstacle_telemetry())
+        refusals = getattr(self, "refusal_status", None)
+        if callable(refusals):
+            # Optional: moves the drone refused (``flight_guards``); absent
+            # until the first one.
+            msg.update(refusals())
         return msg
 
     def _obstacle_telemetry(self) -> dict[str, Any]:

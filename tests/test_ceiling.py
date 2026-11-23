@@ -19,6 +19,7 @@ import pytest
 from flightrisk import fleet_protocol as fp
 from flightrisk.drone.lane_executor import LaneExecutor
 from flightrisk.drone.safety import (
+    MIN_ALT_SLOT_CM,
     CeilingError,
     SafetyEnvelope,
     slot_above_ceiling,
@@ -102,8 +103,8 @@ def test_defaults_give_an_effective_maximum_of_140_cm():
         (149, 30, False),  # takeoff alone would come too close
         (1001, 60, False),
         (200, 29, False),  # margin below the floor
-        (150, 131, False),  # leaves 19 cm: below the lowest slot
-        (150, 130, True),  # leaves exactly the lowest slot (20 cm)
+        (150, 101, False),  # leaves 49 cm: below the lowest slot
+        (150, 100, True),  # leaves exactly the lowest slot (50 cm)
         (math.nan, 60, False),
         (math.inf, 60, False),
         (200, math.nan, False),
@@ -115,12 +116,12 @@ def test_defaults_give_an_effective_maximum_of_140_cm():
 def test_ceiling_and_margin_combinations(ceiling, margin, ok):
     if ok:
         assert validate_ceiling(ceiling, margin) == (float(ceiling), float(margin))
-        SafetyEnvelope(alt_slot_cm=20, ceiling_cm=ceiling, ceiling_margin_cm=margin)
+        SafetyEnvelope(alt_slot_cm=MIN_ALT_SLOT_CM, ceiling_cm=ceiling, ceiling_margin_cm=margin)
     else:
         with pytest.raises(ValueError):
             validate_ceiling(ceiling, margin)
         with pytest.raises(ValueError):
-            SafetyEnvelope(alt_slot_cm=20, ceiling_cm=ceiling, ceiling_margin_cm=margin)
+            SafetyEnvelope(alt_slot_cm=MIN_ALT_SLOT_CM, ceiling_cm=ceiling, ceiling_margin_cm=margin)
 
 
 @pytest.mark.parametrize(
@@ -129,11 +130,11 @@ def test_ceiling_and_margin_combinations(ceiling, margin, ok):
 )
 def test_slot_against_ceiling_combinations(slot, ceiling, margin, above):
     assert (slot_above_ceiling(slot, ceiling, margin) is not None) is above
-    envelope = SafetyEnvelope(alt_slot_cm=20, ceiling_cm=ceiling, ceiling_margin_cm=margin)
+    envelope = SafetyEnvelope(alt_slot_cm=MIN_ALT_SLOT_CM, ceiling_cm=ceiling, ceiling_margin_cm=margin)
     if above:
         with pytest.raises(CeilingError):
             envelope.set_alt_slot(slot)
-        assert envelope.alt_slot_cm == 20  # unchanged
+        assert envelope.alt_slot_cm == MIN_ALT_SLOT_CM  # unchanged
     else:
         envelope.set_alt_slot(slot)
         assert envelope.alt_slot_cm == slot

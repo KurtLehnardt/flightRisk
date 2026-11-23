@@ -187,6 +187,15 @@ const socket = io();
         }
         return null;
     }
+    // The drone card badge for moves the drone refused ("error No valid imu", "error Not joystick"), or null.
+    // A drone that keeps refusing needs a check (IMU calibration, light, floor texture) before it flies again.
+    function refusalBadge(d) {
+        const n = d && d.move_refusals_total;
+        if (typeof n !== 'number' || n < 1) return null;
+        return { text: 'DRONE REFUSED ' + n + (n === 1 ? ' move' : ' moves'), cls: 'held',
+            title: (d.move_refusal_last ? 'Last: ' + d.move_refusal_last + '. ' : '')
+                + 'Check this drone (IMU calibration, light, floor texture) before it flies again.' };
+    }
     function obstacleStopBadge(d) {
         return d && d.obstacle_state === 'blocked' ? { text: 'OBSTACLE STOP', cls: 'held', title: 'This drone stopped a lane because of an obstacle.' } : null;
     }
@@ -275,7 +284,7 @@ const socket = io();
             card.appendChild(meta);
             const mode = modeText(id, d);
             if (mode.text) card.appendChild(el('div', 'dc-mode' + (mode.cls ? ' ' + mode.cls : ''), mode.text));
-            [senseBadge(d), personCueBadge(d), obstacleStopBadge(d)].forEach((b) => {
+            [senseBadge(d), personCueBadge(d), obstacleStopBadge(d), refusalBadge(d)].forEach((b) => {
                 if (!b) return;
                 const node = el('div', 'dc-mode dc-sense' + (b.cls ? ' ' + b.cls : ''), b.text);
                 node.title = b.title;

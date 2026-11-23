@@ -63,6 +63,7 @@ from flightrisk.drone.safety import (
     MIN_CEILING_MARGIN_CM,
     format_cm,
     slot_above_ceiling,
+    slot_below_minimum,
     validate_ceiling,
 )
 from flightrisk.observability import StructuredLogger
@@ -136,7 +137,9 @@ class CeilingSettings:
     def slot_problem(self, drone_id: str, slot_cm: float) -> str | None:
         """Why *slot_cm* cannot be *drone_id*'s slot, or None."""
         if not MIN_ALT_SLOT_CM <= slot_cm <= MAX_ALT_SLOT_CM:
-            return f"{drone_id} slot {format_cm(slot_cm)} cm is outside {MIN_ALT_SLOT_CM}-{MAX_ALT_SLOT_CM} cm"
+            low = slot_below_minimum(slot_cm)
+            return (f"{drone_id} slot {format_cm(slot_cm)} cm is outside {MIN_ALT_SLOT_CM}-{MAX_ALT_SLOT_CM} cm"
+                    + (f" ({low})" if low else ""))
         reason = slot_above_ceiling(slot_cm, self.ceiling_cm, self.margin_cm)
         return None if reason is None else f"{drone_id} {reason}"
 

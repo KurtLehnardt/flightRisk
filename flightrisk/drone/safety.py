@@ -84,6 +84,7 @@ __all__ = [
     "MAX_CEILING_CM",
     "MAX_MOVE_CM",
     "MIN_ALT_SLOT_CM",
+    "MIN_ALT_SLOT_DETAIL",
     "MIN_CEILING_CM",
     "MIN_CEILING_MARGIN_CM",
     "MIN_MOVE_CM",
@@ -92,6 +93,7 @@ __all__ = [
     "ROOM_LIMITS",
     "SafetyEnvelope",
     "slot_above_ceiling",
+    "slot_below_minimum",
     "validate_ceiling",
 ]
 
@@ -117,9 +119,21 @@ DEFAULT_FIELD_LINK_LOSS_HOLD_S = 10.0
 MIN_MOVE_CM = 20
 MAX_MOVE_CM = 500
 
-# Altitude slots must be reachable with a single relative move from the
-# ground and must leave room for the minimum move size.
-MIN_ALT_SLOT_CM = MIN_MOVE_CM
+# The lowest altitude slot of the room profile (the Tello). The Tello's
+# downward Vision Positioning System works from 0.3 m (Tello user manual:
+# effective at 0.3 to 10 m, best at 0.3 to 6 m), and the Tello's own height
+# reading has a few cm of error and overshoots at the end of a move
+# (docs/ceiling-and-altitude.md), so the slot keeps 20 cm above that limit,
+# as the ceiling keeps its margin below the ceiling. A slot far below the
+# takeoff's own hover of about 80 cm also needs a long descent right after
+# takeoff: on 2026-11-21 a 20 cm slot sent a Tello 'down 80' from a stale
+# height, which it answered 'error No valid imu' while it drifted off a desk.
+MIN_ALT_SLOT_CM = 50
+MIN_ALT_SLOT_DETAIL = (
+    f"a Tello's altitude slot must be at least {MIN_ALT_SLOT_CM} cm: below 30 cm its downward vision "
+    "positioning cannot hold it, and the other 20 cm covers its height error and overshoot"
+)
+# A slot must leave room for the longest single relative move.
 MAX_ALT_SLOT_CM = MAX_MOVE_CM
 
 # Ceiling (docs/ceiling-and-altitude.md). Heights are the Tello's own reading
@@ -241,6 +255,18 @@ class CeilingError(ValueError):
 def format_cm(value: float) -> str:
     """A height for messages: ``140`` rather than ``140.0``, one decimal otherwise."""
     return str(int(value)) if float(value).is_integer() else f"{value:.1f}"
+
+
+def slot_below_minimum(slot_cm: float, limits: EnvelopeLimits | None = None) -> str | None:
+    """Operator text for a room-profile (Tello) slot below ``MIN_ALT_SLOT_CM``, or None.
+
+    None for a slot at or above the minimum, and for any other profile,
+    whose own range message says enough.
+    """
+    lim = ROOM_LIMITS if limits is None else limits
+    if lim is not ROOM_LIMITS or not is_finite_number(slot_cm) or slot_cm >= lim.min_alt_slot_cm:
+        return None
+    return f"altitude slot {format_cm(slot_cm)} cm is too low: {MIN_ALT_SLOT_DETAIL}"
 
 
 def validate_ceiling(
@@ -465,8 +491,10 @@ class SafetyEnvelope:
         lim = ROOM_LIMITS if limits is None else limits
         lo, hi = lim.min_alt_slot_cm, lim.max_alt_slot_cm
         if not is_finite_number(alt_slot_cm) or not lo <= alt_slot_cm <= hi:
+            low = slot_below_minimum(alt_slot_cm, lim) if is_finite_number(alt_slot_cm) else None
             raise ValueError(
                 f"altitude slot must be within {format_cm(lo)}-{format_cm(hi)} cm, got {alt_slot_cm!r}"
+                + (f": {low}" if low else "")
             )
         return float(alt_slot_cm)
 

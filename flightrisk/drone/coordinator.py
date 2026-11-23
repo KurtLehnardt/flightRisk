@@ -886,6 +886,11 @@ class FleetCoordinator:
                     "drone_link_ok": telemetry.get("drone_link_ok"),
                     "drone_link_detail": telemetry.get("drone_link_detail"),
                 }
+                if "move_refusals_total" in telemetry:
+                    # Moves the drone refused (flightrisk/drone/flight_guards.py),
+                    # only once there was one, so other status is unchanged.
+                    entry["move_refusals_total"] = telemetry.get("move_refusals_total")
+                    entry["move_refusal_last"] = telemetry.get("move_refusal_last")
                 if state.obstacle_cuts or any(key in telemetry for key in TELEMETRY_FIELDS):
                     # Only for a drone that reports obstacle sensing, so the
                     # status of a fleet without it (and the mobile contract

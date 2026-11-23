@@ -31,6 +31,7 @@ from flightrisk.drone.safety import (
     MAX_ALT_SLOT_CM,
     MIN_ALT_SLOT_CM,
     slot_above_ceiling,
+    slot_below_minimum,
     validate_ceiling,
 )
 from flightrisk.fleet_protocol import is_identifier
@@ -435,7 +436,9 @@ def _validate_drones(settings: LauncherSettings, is_windows: bool, err: Callable
         if drone.source not in SOURCES:
             err(f"{name}.source", f"{label}: source must be tello or fake, got {drone.source!r}")
         if not MIN_ALT_SLOT_CM <= drone.alt_slot_cm <= MAX_ALT_SLOT_CM:
-            err(f"{name}.alt_slot_cm", f"{label}: altitude slot {drone.alt_slot_cm} cm is outside {MIN_ALT_SLOT_CM}-{MAX_ALT_SLOT_CM} cm")
+            low = slot_below_minimum(drone.alt_slot_cm)
+            err(f"{name}.alt_slot_cm", f"{label}: altitude slot {drone.alt_slot_cm} cm is outside {MIN_ALT_SLOT_CM}-{MAX_ALT_SLOT_CM} cm"
+                + (f" ({low})" if low else ""))
         elif ceiling_ok:
             reason = slot_above_ceiling(drone.alt_slot_cm, settings.ceiling_cm, settings.margin_cm)
             if reason is not None:

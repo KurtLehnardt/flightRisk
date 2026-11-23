@@ -2,7 +2,7 @@
   "_meta": {
     "description": "Forward compatibility: real payloads with an unknown key added at every object level (never inside maps keyed by drone id or provider name). Decoders must ignore unknown keys everywhere.",
     "file": "unknown_keys.json",
-    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
+    "generated_at_commit": "3d79bc28f2f9ee66a84cbdb29b42cfff9c224974",
     "map_keys": [
       "drones",
       "slots_cm",
@@ -76,7 +76,7 @@
           "max_slot_cm": 500,
           "min_ceiling_cm": 150,
           "min_margin_cm": 30,
-          "min_slot_cm": 20,
+          "min_slot_cm": 50,
           "x_future_field": "ignore me"
         },
         "load_error": null,

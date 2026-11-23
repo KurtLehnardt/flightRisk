@@ -221,6 +221,12 @@ def _validate_telemetry(msg: Mapping[str, Any], proto: int) -> None:
     # reports its control mode (``flightrisk/fleet_protocol/manual.py``).
     if "control_mode" in msg:
         _require_choice(msg, "control_mode", CONTROL_MODES)
+    # Optional on every version: moves the drone refused with a transient
+    # refusal (``flightrisk/drone/flight_guards.py``), present after the first.
+    if "move_refusals_total" in msg:
+        _require_int_range(msg, "move_refusals_total", 0, 2**31 - 1)
+    if msg.get("move_refusal_last") is not None:
+        _require_text(msg, "move_refusal_last")
 
 
 def _validate_reply_common(msg: Mapping[str, Any], target: str, proto: int) -> None:

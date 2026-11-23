@@ -203,6 +203,39 @@ class CommandNotExecutedError(RuntimeError):
         super().__init__(f"{result.command} not executed ({result.outcome.value}){detail}")
 
 
+class CommandRefusedError(RuntimeError):
+    """Raised by a controller when the drone answered a flight command with a refusal.
+
+    ``command`` is the command as sent (for example ``down 80``) and
+    ``reply`` the drone's answer (for example ``error No valid imu``). It is
+    a ``RuntimeError``, so every caller that already treats a refused
+    command as an error keeps doing so; the lane executor reads ``reply`` to
+    tell a transient refusal it may retry from any other.
+    """
+
+    def __init__(self, message: str, *, command: str, reply: str):
+        super().__init__(message)
+        self.command = command
+        self.reply = reply
+
+
+@dataclass(frozen=True)
+class SettledHeight:
+    """A height the drone held steadily, read from fresh state (``settled_height()``).
+
+    ``height_cm`` is the newest height of the run of packets that showed it
+    steady. ``tof_cm`` is the lowest downward time-of-flight distance of
+    that run, or None when any packet of it had no usable distance.
+    ``samples`` is the number of packets in the run and ``waited_s`` how
+    long the wait took.
+    """
+
+    height_cm: int
+    tof_cm: int | None
+    samples: int
+    waited_s: float
+
+
 def command_result(value: Any, command: str) -> CommandResult:
     """Normalize a command's return value to a :class:`CommandResult`.
 
@@ -398,6 +431,7 @@ __all__ = [
     "Capability",
     "CommandNotExecutedError",
     "CommandOutcome",
+    "CommandRefusedError",
     "CommandResult",
     "DroneCapabilities",
     "DroneController",
@@ -408,6 +442,7 @@ __all__ = [
     "Lifecycle",
     "Motion",
     "Navigation",
+    "SettledHeight",
     "TelemetrySource",
     "VideoSource",
     "capabilities_of",

@@ -347,7 +347,7 @@ final class DecodeFixturesTests: XCTestCase {
         XCTAssertEqual(ok.ceilingCm, 200)
         XCTAssertEqual(ok.marginCm, 60)
         XCTAssertEqual(ok.maxSlotCm, 140)
-        XCTAssertEqual(ok.limits?.minSlotCm, 20)
+        XCTAssertEqual(ok.limits?.minSlotCm, 50)
         XCTAssertEqual(ok.limits?.maxCeilingCm, 1000)
         XCTAssertEqual(ok.editable, true)
         XCTAssertNil(ok.lockedReason)
