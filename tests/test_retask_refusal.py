@@ -527,3 +527,24 @@ def test_a_permanent_nack_is_still_never_reoffered_to_the_same_drone():
     edges["drone-1"].refuse = None
     coord.handle_message("drone-1", _telemetry("drone-1", "idle", False))
     assert len(edges["drone-1"].of_type("assign_lanes")) == count
+
+
+def test_retask_is_never_planned_beyond_the_edges_geofence(executor_fleet, monkeypatch):
+    # The launcher gives the ground the geofence it gives the edges (450 cm), and the dashboard
+    # reads it from the environment, so a re-task path is planned inside it and no edge refuses.
+    from flightrisk.dashboard.app import fleet_geofence_cm
+
+    monkeypatch.setenv("FLIGHTRISK_GEOFENCE_CM", "450")
+    fence = fleet_geofence_cm()
+    assert fence == 450
+    coord, edges, events = executor_fleet(geofence_cm=fence, edge_fence_cm=450.0)
+    plan = coord.plan()
+    before = {d: len(coord.lanes(d)) for d in edges}
+    coord.on_drone_lost("drone-4")
+    # The re-task really happened: a survivor took lanes, so the check below is not vacuous.
+    assert any(len(coord.lanes(d)) > before[d] for d in edges if d != "drone-4")
+    for drone_id in edges:
+        zone = plan.zone_for(drone_id)
+        for x, y in walk((zone.x_cm, zone.y_cm), coord.lanes(drone_id)):
+            assert abs(x - zone.x_cm) <= 450 and abs(y - zone.y_cm) <= 450, (drone_id, x, y)
+        assert edges[drone_id].replies_of_type("nack") == []

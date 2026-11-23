@@ -376,3 +376,29 @@ def test_scheduled_start_refused_after_link_loss(make_executor):
     assert executor.wait_idle(WAIT_S)
     assert drone.calls == []
     assert [m for m in sent if m.get("for") == "start_at"] == []
+
+
+def test_min_takeoff_battery_helper_is_the_single_source():
+    from flightrisk.drone.safety import DEFAULT_MIN_TAKEOFF_BATTERY, min_takeoff_battery_from_env
+
+    assert min_takeoff_battery_from_env({}) == DEFAULT_MIN_TAKEOFF_BATTERY == 30
+    assert min_takeoff_battery_from_env({"FLIGHTRISK_MIN_TAKEOFF_BATTERY": " 45 "}) == 45
+    assert min_takeoff_battery_from_env({"FLIGHTRISK_MIN_TAKEOFF_BATTERY": "15"}) == 15
+    # A minimum below the 15% landing level is refused by the edge envelope, so it is refused here too.
+    for bad in ("abc", "101", "-1", "nan", "10", "14.9"):
+        with pytest.raises(ValueError):
+            min_takeoff_battery_from_env({"FLIGHTRISK_MIN_TAKEOFF_BATTERY": bad})
+    # The edge's envelope reads the same value.
+    assert SafetyEnvelope.from_env(environ={"FLIGHTRISK_MIN_TAKEOFF_BATTERY": "45"}).min_takeoff_battery == 45
+
+
+def test_the_envelope_and_the_outdoor_envelope_use_the_same_parser():
+    bad = {"FLIGHTRISK_MIN_TAKEOFF_BATTERY": "10"}
+    with pytest.raises(ValueError, match="FLIGHTRISK_MIN_TAKEOFF_BATTERY"):
+        SafetyEnvelope.from_env(environ=bad)
+    import argparse
+
+    from flightrisk import edge_device
+
+    with pytest.raises(SystemExit):
+        edge_device._field_envelope(argparse.Namespace(), bad)

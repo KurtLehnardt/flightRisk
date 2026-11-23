@@ -33,6 +33,8 @@ MSG
 fi
 
 PYTHON="${PYTHON:-venv/bin/python}"
+# The edges of the demo enforce 450 cm (scripts/demo_edge.sh), so the ground plans re-tasks against the same.
+export FLIGHTRISK_GEOFENCE_CM="${FLIGHTRISK_GEOFENCE_CM:-450}"
 export FLIGHTRISK_APPEARANCE_ONLY=1
 export FLIGHTRISK_SAVE_CAPTURES=0
 
