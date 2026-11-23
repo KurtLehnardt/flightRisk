@@ -175,6 +175,42 @@ def yolox_postprocess(
 
 
 # ---------------------------------------------------------------------------
+# From a detection to the embedder's crop
+# ---------------------------------------------------------------------------
+
+#: How a detection becomes the embedder's crop, as written into mobile-models.json.
+CROP_RULE = (
+    "cut the full-resolution camera frame (not the 640x640 detector input) at the detection's box in frame "
+    "pixels (x1, y1, x2, y2 = (cx -/+ w/2, cy -/+ h/2) / ratio): clip x to [0, width] and y to [0, height], "
+    "truncate each corner to an integer toward zero, and take frame[y1:y2, x1:x2] with no margin; "
+    "as flightrisk/vision/detector.py does (its detector clips boxes to the frame, then .astype(int))"
+)
+
+
+def crop_pixels(box: Any, height: int, width: int) -> tuple[int, int, int, int]:
+    """The integer ``(x1, y1, x2, y2)`` a frame of ``height`` x ``width`` is sliced at for ``box`` (``CROP_RULE``)."""
+    x1, y1, x2, y2 = (float(v) for v in box)
+    return (
+        int(min(max(x1, 0.0), float(width))),
+        int(min(max(y1, 0.0), float(height))),
+        int(min(max(x2, 0.0), float(width))),
+        int(min(max(y2, 0.0), float(height))),
+    )
+
+
+def crop_box(frame: np.ndarray, box: Any) -> np.ndarray:
+    """``frame[y1:y2, x1:x2]`` for a detection box in frame pixels, as ``CROP_RULE`` says.
+
+    This is the ground's crop (``flightrisk/vision/detector.py``: the box is
+    clipped to the frame by the detector, then ``astype(int)`` truncates it,
+    then the frame is sliced). The crop is a view of ``frame``, in the frame's
+    own channel order; convert it to RGB for the embedder.
+    """
+    x1, y1, x2, y2 = crop_pixels(box, frame.shape[0], frame.shape[1])
+    return frame[y1:y2, x1:x2]
+
+
+# ---------------------------------------------------------------------------
 # Appearance embedder: open_clip ViT-B-16, laion2b_s34b_b88k (image tower)
 # ---------------------------------------------------------------------------
 
