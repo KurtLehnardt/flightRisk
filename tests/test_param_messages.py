@@ -5,9 +5,10 @@ from __future__ import annotations
 import pytest
 
 from flightrisk.params.messages import (
-    render_fallback_landing, render_refused_input, render_unavailable_capability,
+    FACT_IDS, render_fallback_landing, render_refused_input, render_unavailable_capability,
 )
 from flightrisk.params.spec import Edit
+from flightrisk.params.table import TABLE
 
 
 def test_refused_input_example():
@@ -32,6 +33,24 @@ def test_fallback_landing_example():
 def test_fact_rows_are_never_rendered_as_refused_inputs():
     with pytest.raises(ValueError):
         render_refused_input("sensing.min_safe_depth", 1, "cm", "FLIGHTRISK_X", "Tello", 2, 3, edit=Edit.FACT)
+
+
+def test_fact_ids_are_the_registry_fact_rows():
+    assert len(FACT_IDS) == 32
+    assert "tello.temp_warn_c" in FACT_IDS
+
+
+@pytest.mark.parametrize("param_id", sorted(FACT_IDS))
+@pytest.mark.parametrize("edit", list(Edit))
+def test_a_registry_fact_is_refused_whatever_the_caller_passes(param_id, edit):
+    with pytest.raises(ValueError):
+        render_refused_input(param_id, 130, "C", "FLIGHTRISK_X", "Tello", 40, 120, edit=edit)
+    with pytest.raises(ValueError):
+        render_refused_input(param_id, 130, "C", "FLIGHTRISK_X", "Tello", 40, 120)
+
+
+def test_a_non_fact_registry_row_still_renders():
+    assert not {row.id for row in TABLE if row.id == "envelope.ceiling_margin_cm"} & FACT_IDS
 
 
 @pytest.mark.parametrize("edit", [e for e in Edit if e is not Edit.FACT])
