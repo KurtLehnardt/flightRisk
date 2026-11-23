@@ -4,7 +4,7 @@ The Android app has three modes. It is a standalone detector, a console for a Fl
 
 ## The three modes
 
-1. **Standalone detector.** The camera finds people and compares them with a reference photo, on the device (ONNX Runtime and TensorFlow Lite models). The optional reasoning step uses the on-device Gemma 2 2B model (MediaPipe), nothing, or Cloud Claude after an explicit opt-in. The app also still contains the direct Tello (UDP over the drone's own Wi-Fi) flight stack in `drone/`; the iOS app no longer has one.
+1. **Standalone detector.** The camera finds people and compares them with a reference photo, on the device (ONNX Runtime and LiteRT, formerly TensorFlow Lite, models). The optional reasoning step uses the on-device Gemma 2 2B model (MediaPipe), nothing, or Cloud Claude after an explicit opt-in. The app also still contains the direct Tello (UDP over the drone's own Wi-Fi) flight stack in `drone/`; the iOS app no longer has one.
 2. **Ground console.** The Ground tab connects to a ground station (a computer the user runs) and shows the drones, the plan, the detection profiles, the ceiling settings and the ground's reasoning provider. It can send a small fixed set of commands.
 3. **Phone as an edge** (Settings, "Ground station link"). Off by default. The phone sends its detections to the ground station's edge port. See "Phone as an edge".
 
@@ -69,7 +69,7 @@ The code that sends appearance embeddings is in place, but the app ships no mode
 
 ## Build and test
 
-Prerequisites: Android Studio Narwhal 3 Feature Drop (2025.1.3) or later (the build uses Android Gradle Plugin 8.13.2), JDK 17, Android SDK 34, and the SDK location. Gradle finds the SDK from `ANDROID_HOME` or from `sdk.dir` in `mobile/local.properties` (which is not committed). If the Gradle caches are already populated, add `--offline`.
+Prerequisites: Android Studio Narwhal 3 Feature Drop (2025.1.3) or later (the build uses Android Gradle Plugin 8.13.2), JDK 17, Android SDK 36 (the app compiles against and targets API level 36, which Google Play requires), and the SDK location. Gradle finds the SDK from `ANDROID_HOME` or from `sdk.dir` in `mobile/local.properties` (which is not committed). If the Gradle caches are already populated, add `--offline`.
 
 ```bash
 cd mobile
@@ -77,7 +77,9 @@ export ANDROID_HOME=$HOME/Library/Android/sdk      # or write sdk.dir=... into l
 ./gradlew --offline :contract:test :app:testDebugUnitTest :app:assembleDebug
 ```
 
-The debug APK is written to `app/build/outputs/apk/debug/`. `./gradlew :contract:test` needs only a JDK. Two live tests in `:app` are skipped unless `FLIGHTRISK_LIVE_TEST_URL` names a throwaway dashboard on a loopback port; they refuse any non-loopback URL. Never point them at a real ground.
+The debug APK is written to `app/build/outputs/apk/debug/`.
+
+**Release build.** `./gradlew assembleRelease bundleRelease` runs R8 and writes `app/build/outputs/apk/release/` and `app/build/outputs/bundle/release/app-release.aab`. Without an upload key the output is unsigned and Gradle prints a warning; `docs/android-release-signing.md` explains the key, `mobile/keystore.properties` (gitignored) and Play App Signing. `scripts/check-16kb-alignment.sh` checks that every 64-bit native library in the release APK is aligned for 16 KB pages, which Google Play requires. Set the hosted privacy policy address with `-Pflightrisk.privacyPolicyUrl=https://...`. The launcher icon is generated from `branding/flightRiskIcon.png` by `branding/generate_android_icons.py`. `./gradlew :contract:test` needs only a JDK. Two live tests in `:app` are skipped unless `FLIGHTRISK_LIVE_TEST_URL` names a throwaway dashboard on a loopback port; they refuse any non-loopback URL. Never point them at a real ground.
 
 **The fixtures** are in `tests/fixtures/mobile_contract/`. `:contract` reads them through the `flightrisk.fixturesDir` system property set in `contract/build.gradle.kts`. Regenerate them from the repository root with `venv/bin/python scripts/export_mobile_contract_fixtures.py`; a Python test fails if they are out of date.
 
@@ -98,10 +100,11 @@ The debug APK is written to `app/build/outputs/apk/debug/`. `./gradlew :contract
 | Library | Version | Purpose |
 |---------|---------|---------|
 | Jetpack Compose (BOM) | 2024.08.00 | UI framework |
-| CameraX | 1.3.4 | Camera access and lifecycle |
-| ONNX Runtime | 1.18.0 | On-device ML inference |
-| TensorFlow Lite | 2.16.1 | OSNet ReID and InsightFace models |
-| MediaPipe tasks-genai | 0.10.22 | On-device Gemma |
+| CameraX | 1.4.2 | Camera access and lifecycle (16 KB aligned native libraries) |
+| ONNX Runtime | 1.23.2 | On-device ML inference (16 KB aligned) |
+| LiteRT (`com.google.ai.edge.litert:litert`) | 1.4.2 | OSNet ReID and InsightFace models; the successor of TensorFlow Lite, same `org.tensorflow.lite` API (16 KB aligned) |
+| MediaPipe tasks-genai | 0.10.22 | On-device Gemma (16 KB aligned) |
+| Fragment KTX | 1.8.9 | Required at run time by `registerForActivityResult` |
 | Navigation Compose | 2.7.7 | Screen navigation |
 | Play Services Location | 21.3.0 | GPS coordinates |
 | Room | 2.6.1 | Session storage |

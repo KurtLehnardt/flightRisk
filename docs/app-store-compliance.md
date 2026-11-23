@@ -104,7 +104,20 @@ Include the following in the "Notes" field during submission:
 
 ## Google Play Store
 
-The Android answers below describe what the code does. **The Data Safety answers are the owner's decision.** Every answer marked provisional depends on how Google's definitions are read, and nothing here has been reviewed by a lawyer.
+The Android answers below describe what the code does. **The Data Safety answers are the owner's decision.** Every answer marked provisional depends on how Google's definitions are read, and nothing here has been reviewed by a lawyer. Nothing in this section was checked on a device.
+
+### Build requirements
+
+| Requirement | State in the code |
+|---|---|
+| Target API level 36 (Android 16), required for new apps and updates from 2026-08-31 | `compileSdk = 36`, `targetSdk = 36` in `mobile/app/build.gradle.kts` |
+| 16 KB memory pages (64-bit native libraries) | Every `arm64-v8a` and `x86_64` library is 16 KB aligned and stored on 16 KB boundaries: CameraX 1.4.2, ONNX Runtime 1.23.2, LiteRT 1.4.2 (which replaced TensorFlow Lite 2.16.1) and MediaPipe tasks-genai 0.10.22. Check a build with `mobile/scripts/check-16kb-alignment.sh`. |
+| Android App Bundle, signed with the upload key, Play App Signing | `./gradlew bundleRelease`. Signing is read from `mobile/keystore.properties` or environment variables; without them the bundle is unsigned and Gradle warns. See `docs/android-release-signing.md`. |
+| Release build with R8 | `isMinifyEnabled = true`; keep rules for ONNX Runtime, LiteRT, MediaPipe and protobuf are in `mobile/app/proguard-rules.pro`. |
+| Launcher and store icon | Adaptive icon with a monochrome layer, legacy mipmaps, and `branding/play_store_icon_512.png`, all generated from `branding/flightRiskIcon.png` by `branding/generate_android_icons.py`. |
+| Edge-to-edge (enforced from target 35) | `MainActivity` calls `enableEdgeToEdge()`. The navigation shell pads for the system bars and display cutouts and consumes them; the privacy notice and onboarding, which are shown before it, pad themselves. |
+
+Other Android 15 and 16 behaviour changes were reviewed against the code. The app has no foreground service, no `PendingIntent`, no broadcast receiver, no `onBackPressed` override, no orientation or resizability lock and no explicit intent to another app. Predictive back works through the AndroidX back dispatcher; onboarding uses `BackHandler` only from its second step, so the back-to-home animation still plays on the first. The intents it sends (dial, map, camera capture, photo picker, privacy policy link) all carry an action, and each launch is guarded so that a device without a matching app does not crash. Android 16's local network protection is only an opt-in test for target 36; when a later target enforces it, the Tello and ground station links will need the new permission.
 
 ### Permission Rationale
 
@@ -112,25 +125,26 @@ Declared in `mobile/app/src/main/AndroidManifest.xml`.
 
 | Permission | Rationale |
 |-----------|-----------|
-| `android.permission.CAMERA` | Required for real-time person detection and face matching to locate a missing child. Detection runs on the device. |
+| `android.permission.CAMERA` | Real-time person detection and face matching to locate a missing child, and taking the reference photo. Detection runs on the device. Not requested on a device without a camera. |
 | `android.permission.ACCESS_FINE_LOCATION` and `ACCESS_COARSE_LOCATION` | Reads the location (through Google Play services, `FusedLocationProviderClient`) when a match is detected so the user can navigate back to that location. Kept in memory only; the database has no location fields. |
 | `android.permission.INTERNET` | Needed for the paths the user starts: the connection to the ground station address the user enters (dashboard link on port 5555 by default, and the optional phone-as-edge link on port 9000 by default), the optional cloud reasoning request to Anthropic after the opt-in, and the optional on-device model download. |
 | `android.permission.ACCESS_NETWORK_STATE` | Used to check that a network is available before a cloud reasoning request (`NET_CAPABILITY_VALIDATED`) and to check that the phone is on Wi-Fi when it looks for a Tello drone. |
-| `android.permission.ACCESS_WIFI_STATE` | Used to read the current Wi-Fi connection when checking whether the phone is joined to a Tello drone's own Wi-Fi network. |
-| `android.permission.CHANGE_WIFI_STATE` | Declared. **Unsure:** no code that changes Wi-Fi state was found. The owner should confirm whether it is still needed, and remove it if not. |
+| `android.permission.ACCESS_WIFI_STATE` | Used to read the current Wi-Fi connection when checking whether the phone is joined to a Tello drone's own Wi-Fi network. The app never changes Wi-Fi state (`CHANGE_WIFI_STATE` is not declared). |
 | `android.permission.VIBRATE` | Vibrates the phone on a match alert. |
 
-The manifest also declares that a camera and Wi-Fi hardware are required (`uses-feature`).
+No hardware feature is required (`uses-feature ... android:required="false"` for the camera, camera autofocus, Wi-Fi and location), so Google Play does not hide the app from devices without them. Without a camera, the Search screen says so and a Tello drone can be used instead, and the target photo is picked from the gallery. Without Wi-Fi, a Tello cannot be reached. Without location hardware, match alerts have no coordinates.
 
 ### Network destinations in the Android app
 
 Found by searching `mobile/app/src/main/java` for connection-opening code. A unit test (`CloudPathAuditTest`) fails if a new file opens a connection or names a cloud host.
 
-1. The ground station address typed in the Ground screen: a plain socket WebSocket (`RawWebSocket`) and a plain HTTP health check (`MiniHttp`). Commands, status requests and the dashboard key; no images. Not encrypted (see "Cleartext policy" below).
+1. The ground station address typed in the Ground screen: a plain socket WebSocket (`RawWebSocket`) and a plain HTTP health check (`MiniHttp`), or TLS for `https://` and `wss://` addresses. Commands, status requests and the dashboard key; no images. A plain link is not encrypted (see "Cleartext policy" below).
 2. The ground station's edge port, only when the user turns on "Send detections to the ground station" in Settings (phone-as-edge): box positions and scores, and a small picture of the whole camera view only when the ground asks for video. Not encrypted. See below.
-3. `https://api.anthropic.com/v1/messages` through OkHttp, only after the cloud opt-in.
+3. `https://api.anthropic.com/v1/messages` through OkHttp, only after the cloud opt-in. The model is `claude-sonnet-5-5` (`CloudClaudeLlmBackend.DEFAULT_MODEL`).
 4. `https://storage.googleapis.com/mediapipe-models/...` through `HttpURLConnection`, only when the user taps "Download Model" for the on-device Gemma model. It is a plain GET for a file; no photo, crop, description or location is sent. Google sees the phone's IP address and the requested file. Its handling is outside this project and was not reviewed. (The iOS app downloads from Hugging Face instead.)
 5. The Tello drone on its own Wi-Fi network (UDP), when the user flies a Tello from the Android app. This is a local link to the drone; video is received, not sent.
+
+The privacy policy link in the privacy notice is opened in the browser; the app itself opens no connection to it.
 
 ### Cleartext policy
 
@@ -138,21 +152,36 @@ The Android network security config (`res/xml/network_security_config.xml`) bloc
 
 ### Data Safety Section
 
-**Provisional.** Facts first:
+**Provisional.** Facts first, from the code (`docs/android-privacy-changes.md` has the details):
 
 - With the default settings, no photo, crop, face data or location leaves the phone. Camera frames are not uploaded.
 - With cloud reasoning on (opt-in, a saved Claude key and Cloud Claude selected), the cropped image of each detected person, the reference photo and the typed description are sent to Anthropic over TLS. The images can show a face.
-- With the ground station link on, commands and status requests go to the address the user entered. With the phone-as-edge link on, box positions and scores go to that address. The user's own ground station is not a third party the developer runs, but Google's rules on "shared" and "collected" data may still treat these as data transmitted off the device. The owner decides.
-- Every Android search is recorded as an MP4 video of the camera view with the detection boxes drawn on it (`SearchPipeline.kt`, `SessionRecorder`, in `filesDir/recordings`), with no setting to turn it off. Match images are saved as JPEG files in `filesDir/snapshots`. The Room database holds scores, timestamps, reasoning text, file paths and the typed description. A reference photo taken with the camera stays as a file in the cache. GPS coordinates are kept in memory only. All of this is in the app's private storage and is not sent anywhere by the app, but the backup rules exclude only preference files, so Android Auto Backup and device transfer can copy the video, images and database. The app has no delete control yet (planned); data is removed by clearing app storage or uninstalling. **Unsure:** how Google's form treats data that stays on the device but is backed up by the operating system.
-- Location comes through Google Play services (`FusedLocationProviderClient`), which is a Google component on the phone; the owner should consider whether to name it on the form.
+- With the ground station link on, commands and status requests go to the address the user entered. With the phone-as-edge link on, box positions and scores go to that address, and a small picture of the whole camera view when the ground asks for video. The user's own ground station is not a third party the developer runs, but Google's rules on "shared" and "collected" data may still treat these as data transmitted off the device. The owner decides.
+- **Search video is not recorded by default.** Settings has "Record search video" (off by default). Only while it is on, each search is saved as an MP4 of the camera view with the detection boxes (`files/recordings`), and match pictures are saved as JPEG files (`files/snapshots`).
+- Every search saves a row in the Room database: start and end time, frame, detection and match counts, the typed description, and for each match its scores, type, time and the reasoning text. There are no location fields. The reference photo is kept in memory only; a reference photo taken with the camera is deleted from the cache as soon as it is decoded.
+- Backup and device transfer exclude the database, `files/recordings`, `files/snapshots`, the secret store, the consents and the settings files (`backup_rules.xml`, `data_extraction_rules.xml`). Nothing the app saves about a search is copied off the phone by Android backup.
+- GPS coordinates are kept in memory only. Location comes through Google Play services (`FusedLocationProviderClient`), which is a Google component on the phone; the owner should consider whether to name it on the form.
+
+**Delete controls that exist** (all in the app, no account needed):
+
+| Control | Where | What it deletes |
+|---|---|---|
+| Delete saved sessions and recordings | Settings > Saved data, with a confirmation; disabled while a search runs | Every row of the sessions, matches and match feedback tables, and every file in `files/recordings` and `files/snapshots`. It reports how many records and files it deleted. |
+| Remove saved key | Settings > AI Reasoning | The Claude API key in the encrypted secret store. Turning cloud reasoning off, or removing the key, also cancels any request in flight. |
+| Remove saved token | Settings > Ground station link | The edge token. |
+| Remove saved key | Ground tab > connection card | The dashboard key. |
+| Delete Model | Settings > AI Reasoning (on-device model) | The downloaded Gemma model file. |
+| Clear storage or uninstall | Android system settings | Everything the app stored. |
+
+The reference photo has no delete control because it is never written to storage; it is gone when the app process ends.
 
 #### Data collected or shared (provisional draft)
 
 | Question | Draft answer |
 |----------|--------------|
-| Does your app collect or share any of the required user data types? | Provisional. The earlier answer "No" does not hold when cloud reasoning is on, because images are sent to Anthropic. Images also leave the phone through phone-as-edge (a picture of the whole camera view, sent to the user's own ground station when it asks for video). The owner decides how to answer, including whether the optional cloud feature and the user's own ground station count. |
-| Is all of the user data collected by your app encrypted in transit? | Provisional. Cloud reasoning: yes (TLS). The ground station and edge links: no, they are plain `http://` and `ws://` (only on a private network, by the app's own rule). |
-| Do you provide a way for users to request that their data is deleted? | Provisional. **No, not yet:** the app has no delete control. Android session data (video, images, database) is removed by clearing the app's storage in system Settings or uninstalling. A delete action is planned; do not answer "Yes" until it ships. |
+| Does your app collect or share any of the required user data types? | Provisional. The answer "No" does not hold when cloud reasoning is on, because images are sent to Anthropic. Images also leave the phone through phone-as-edge (a picture of the whole camera view, sent to the user's own ground station when it asks for video). The owner decides how to answer, including whether the optional cloud feature and the user's own ground station count. |
+| Is all of the user data collected by your app encrypted in transit? | Provisional. Cloud reasoning: yes (TLS). The ground station link: TLS for `https://` and `wss://` addresses, otherwise plain `http://` and `ws://` (only on a private network, by the app's own rule). The edge link: no, it is plain `ws://`. |
+| Do you provide a way for users to request that their data is deleted? | Provisional: yes, in the app. The developer holds no user data. On the phone, "Delete saved sessions and recordings" deletes the saved sessions, matches, feedback, videos and match pictures, and the remove-key controls delete the saved keys (table above). Data sent to Anthropic under cloud reasoning is handled under Anthropic's policy, not by the app. |
 
 #### Data types (provisional draft)
 
@@ -160,7 +189,7 @@ The Android network security config (`res/xml/network_security_config.xml`) bloc
 |-----------|-----------|--------|-----------|---------|
 | Location (approximate) | No (the coarse permission is requested together with the fine one) | No | -- | -- |
 | Location (precise) | Read on the device, kept in memory only | No | Yes (not stored) | App functionality |
-| Photos/Videos | Provisional: the app records every search as a video and saves match images in private storage (not sent by the app, but backed up by Android); with cloud reasoning on, the reference photo and crops go to Anthropic; with phone-as-edge on, a picture of the whole camera view goes to the user's ground station when it asks | Provisional | No (stored until removed) | App functionality |
+| Photos/Videos | Provisional: with "Record search video" on (off by default), search video and match pictures are saved in private storage, not sent by the app and not backed up; with cloud reasoning on, the reference photo and crops go to Anthropic; with phone-as-edge on, a picture of the whole camera view goes to the user's ground station when it asks | Provisional | Provisional: sent images are not kept by the app; saved recordings stay until deleted | App functionality |
 | Face / biometric data | Processed on-device. With cloud reasoning on, crops and the reference photo that can show a face go to Anthropic | Provisional | Yes (session-scoped) for templates and embeddings | App functionality |
 | Personal identifiers | No | No | -- | -- |
 | App activity | No | No | -- | -- |
@@ -175,7 +204,7 @@ The Android network security config (`res/xml/network_security_config.xml`) bloc
 ### Face Detection Feature Flag
 
 - **Declaration required:** Yes. Google Play requires disclosure when an app uses face detection.
-- **Declaration text (revised, provisional):** "This app uses on-device face detection and recognition to match detected persons against a reference photo provided by the user. Face embeddings are computed on the device, kept only in memory for the active session, and never transmitted. If the user turns on the optional cloud reasoning feature, images of detected persons and the reference photo, which can show a face, are sent to Anthropic for analysis. That feature is off by default. On Android, searches are recorded as video in the app's private storage." The earlier text said that no face data is transmitted; that is not true of images when cloud reasoning is on.
+- **Declaration text (revised, provisional):** "This app uses on-device face detection and recognition to match detected persons against a reference photo provided by the user. Face embeddings are computed on the device, kept only in memory for the active session, and never transmitted. If the user turns on the optional cloud reasoning feature, images of detected persons and the reference photo, which can show a face, are sent to Anthropic for analysis. That feature is off by default. On Android, search video is saved in the app's private storage only if the user turns on Record search video, which is off by default."
 
 ### Age Rating (IARC)
 
@@ -185,16 +214,33 @@ The Android network security config (`res/xml/network_security_config.xml`) bloc
 
 ### Privacy Policy URL
 
-- **Required:** Yes. Must be provided in Google Play Console under "Store listing > Privacy policy."
-- **URL:** To be set at deployment (host `docs/privacy-policy.md` as a web page). The Android onboarding notice does not link to the policy yet (the iOS notice does).
+- **Required:** Yes. Must be provided in Google Play Console under "App content > Privacy policy" and is linked from the privacy notice in the app.
+- **In the app:** the notice reads the address from one constant, `PrivacyNoticeText.POLICY_URL`, which is `BuildConfig.PRIVACY_POLICY_URL`. The build sets it from the Gradle property `flightrisk.privacyPolicyUrl`, for example `./gradlew bundleRelease -Pflightrisk.privacyPolicyUrl=https://example.org/flightrisk/privacy`. The address must start with `https://`.
+- **Before submission:** the default is the policy file on GitHub (`https://github.com/KurtLehnardt/flightRisk/blob/main/docs/privacy-policy.md`). Google expects a public, active web page that is not a PDF or a source file, so host `docs/privacy-policy.md` as a web page, then build the bundle with that address and enter the same address in Play Console.
 
 ### Store Listing Notes (Recommended)
 
 Include in the app description or "About this app" section, after the owner and a lawyer have reviewed it:
 
-> Person detection and matching run on your device, and face templates are never sent anywhere. Cloud reasoning is off by default; if you turn it on, the cropped images of detected people, your reference photo and your description are sent to Anthropic. Each search is recorded as a video in the app's private storage on your phone. The optional ground station link sends commands to a computer you run, on your own network, and the optional phone-as-edge mode can send detections and, when asked, a picture of your camera view to that computer. See our privacy policy for full details.
+> Person detection and matching run on your device, and face templates are never sent anywhere. Cloud reasoning is off by default; if you turn it on, the cropped images of detected people, your reference photo and your description are sent to Anthropic. Search video is not recorded unless you turn on Record search video, and you can delete saved sessions and recordings in Settings. The optional ground station link sends commands to a computer you run, on your own network, and the optional phone-as-edge mode can send detections and, when asked, a picture of your camera view to that computer. See our privacy policy for full details.
 
 The earlier recommended text ("No biometric data is collected, transmitted, or stored") is withdrawn because it conflicts with the cloud path.
+
+### Store checklist (Android): what still needs the owner
+
+The code changes for submission are done (see "Build requirements"). These steps cannot be done in code:
+
+- [ ] **Upload key.** Create it and keep it safe, then sign the bundle with it (`docs/android-release-signing.md`). Never commit the keystore or its password.
+- [ ] **Play Console app and Play App Signing.** Create the app, choose a Google-generated app signing key, and upload the first signed bundle to an internal testing track.
+- [ ] **Hosted privacy policy.** Host `docs/privacy-policy.md` as a public web page, build with `-Pflightrisk.privacyPolicyUrl=<that address>`, and enter the same address in Play Console.
+- [ ] **Data Safety form.** Decide the provisional answers above, ideally with a lawyer.
+- [ ] **Face detection declaration** and the **content rating** questionnaire (17+ or equivalent).
+- [ ] **Target audience and content**: adults only; not designed for children.
+- [ ] **Store listing**: title, short and full description (see "Store Listing Notes"), the 512 x 512 icon (`branding/play_store_icon_512.png`), a 1024 x 500 feature graphic, and at least two phone screenshots. None of the last two exist yet.
+- [ ] **Test on real devices.** No device or emulator has run the app. At least: the privacy notice and onboarding (including "Set up a search later"), the Search screen with and without a target photo, edge-to-edge layout on Android 15 and 16 (status bar, navigation bar, a display cutout in landscape), predictive back, the camera preview, a device or emulator without a camera, and a 16 KB page size emulator image.
+- [ ] **A real cloud reasoning call** with a Claude key, to confirm `claude-sonnet-5-5` answers in the MATCH / CONFIDENCE / REASONING format at low effort (only a stub server was used).
+- [ ] **Versioning.** Raise `versionCode` for every upload.
+- [ ] **Model download host.** Decide whether the on-device model download (Google storage) is named in the privacy policy and the Data Safety form.
 
 ---
 
@@ -236,7 +282,8 @@ Claude (Anthropic) is the only cloud provider on Android. Cloud reasoning is off
 - Consent dialog text (`ReasoningSettings.kt`, `MESSAGE`): the same words as on iOS.
 - The Claude API key and the ground station keys are stored in `EncryptedSharedPreferences` (backed by the Android Keystore), never in plain preferences, files or logs. The opt-in file and the secure file are excluded from Auto Backup and device transfer, so the opt-in is not restored to another device.
 - A "Cloud active: images are sent to Anthropic" indicator shows in Settings and on the Search screen while cloud is the active backend.
-- The first-launch notice (`OnboardingScreen.kt`, line 175) states that camera frames are not uploaded and that images leave the phone only with cloud reasoning on. That second sentence is not true when phone-as-edge is on and the ground asks for video.
+- The first-launch privacy notice (`PrivacyNoticeScreen`, text in `PrivacyNoticeText.kt`) is shown before any permission prompt. It describes the camera, on-device processing, the ground station, phone-as-edge, the Tello drone, cloud reasoning and location, says that video is not recorded unless the user turns it on, and links to the privacy policy.
+- The request names `claude-sonnet-5-5` (one constant, `CloudClaudeLlmBackend.DEFAULT_MODEL`), sets low effort in `output_config`, and sends no sampling parameters and no assistant prefill. A refusal (`stop_reason: "refusal"`) is reported as an error, not read as an answer. The key is sent only in the `x-api-key` header and is never logged.
 
 ### Phone as an Edge (Android)
 
@@ -256,7 +303,9 @@ Off by default, and not available on iOS. When the user turns on "Send detection
 - [ ] App Review notes for the local network permission and the ATS exception pasted into App Store Connect
 - [ ] Owner confirmation of the App Privacy questionnaire answers for the ground link and the cloud opt-in
 - [ ] Owner and lawyer confirmation of the Google Play Data Safety answers and the face detection declaration, which are provisional (see `docs/mobile-followups.md`)
-- [ ] Owner decision on `CHANGE_WIFI_STATE` (declared; no use found) and on the Android onboarding notice, which says nothing about the ground station link or phone-as-edge (each has its own consent step) and has no privacy policy link
+- [x] `CHANGE_WIFI_STATE` removed from the Android manifest; the Android privacy notice covers the ground station link and phone-as-edge and links to the privacy policy
+- [x] Android: target API 36, 16 KB aligned native libraries, release build with R8, release signing configuration, adaptive icon (see "Build requirements")
+- [ ] Android: the owner steps in "Store checklist (Android)"
 - [x] Desktop dashboard: cloud LLM (Claude) off by default and gated on `FLIGHTRISK_ALLOW_CLOUD_LLM=1`
-- [ ] User data deletion flow implemented and tested
+- [ ] User data deletion flow implemented and tested (Android: implemented, "Delete saved sessions and recordings"; not tested on a device)
 - [ ] No third-party analytics/tracking/advertising SDKs included
