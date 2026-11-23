@@ -59,7 +59,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * @param gate Decides whether cloud use is allowed and yields the key.
  * @param isOnline Whether the device has validated internet.
  * @param apiUrl The Messages API endpoint. Tests point it at a loopback server.
- * @param model Claude model identifier.
+ * @param model Claude model identifier; [DEFAULT_MODEL] unless a test sets it.
  * @param timeoutMs HTTP connect, read, write and call timeout.
  * @param encodeImage Turns a bitmap into base64 JPEG. Tests replace it.
  * @param log Receives log lines, which never contain the key or the payload.
@@ -186,16 +186,7 @@ class CloudClaudeLlmBackend(
 
     /** Sends one Messages API request and parses the structured answer. Blocking. */
     private fun callApi(contentBlocks: List<JsonObject>): ReasoningResult {
-        val body = buildJsonObject {
-            put("model", model)
-            put("max_tokens", MAX_TOKENS)
-            putJsonArray("messages") {
-                addJsonObject {
-                    put("role", "user")
-                    put("content", JsonArray(contentBlocks))
-                }
-            }
-        }.toString()
+        val body = requestBody(model, contentBlocks)
 
         // Read the generation first, so a cancellation from here on drops this request.
         val generationAtStart = synchronized(lock) { generation }
@@ -236,17 +227,7 @@ class CloudClaudeLlmBackend(
                     log("Claude API error ${response.code}")
                     return ReasoningResult(isMatch = false, confidence = "error", reasoning = "API error ${response.code}")
                 }
-                val text = response.body?.string().orEmpty()
-                val contentArray = Json.parseToJsonElement(text).jsonObject.getValue("content").jsonArray
-                val fullText = buildString {
-                    for (element in contentArray) {
-                        val block = element as? JsonObject ?: continue
-                        if ((block["type"] as? JsonPrimitive)?.content == "text") {
-                            append((block["text"] as? JsonPrimitive)?.content.orEmpty())
-                        }
-                    }
-                }
-                parseMatchResponse(fullText)
+                parseApiResponse(response.body?.string().orEmpty())
             }
         } catch (e: IOException) {
             if (call.isCanceled()) {
@@ -260,6 +241,37 @@ class CloudClaudeLlmBackend(
         } finally {
             synchronized(lock) { inFlight.remove(call) }
         }
+    }
+
+    /**
+     * Reads a Messages API response body. The stop reason is checked before the
+     * content: a refusal is an HTTP 200 whose content must not be read as an
+     * answer. The answer is the text of the `text` blocks only, in order; other
+     * blocks (`thinking`, which is empty by default) are skipped by type.
+     */
+    internal fun parseApiResponse(body: String): ReasoningResult {
+        val root = Json.parseToJsonElement(body).jsonObject
+        val stopReason = (root["stop_reason"] as? JsonPrimitive)?.content
+        if (stopReason == "refusal") {
+            // The category (for example "general_harms") says nothing about the request data.
+            val category = ((root["stop_details"] as? JsonObject)?.get("category") as? JsonPrimitive)?.content
+            log("Claude declined the request (refusal, category ${category ?: "none"})")
+            return ReasoningResult(isMatch = false, confidence = "error", reasoning = "Claude declined to compare these images")
+        }
+        val contentArray = root.getValue("content").jsonArray
+        val fullText = buildString {
+            for (element in contentArray) {
+                val block = element as? JsonObject ?: continue
+                if ((block["type"] as? JsonPrimitive)?.content == "text") {
+                    append((block["text"] as? JsonPrimitive)?.content.orEmpty())
+                }
+            }
+        }
+        if (stopReason == "max_tokens" && fullText.isBlank()) {
+            log("Claude response stopped at max_tokens before any answer")
+            return ReasoningResult(isMatch = false, confidence = "error", reasoning = "Claude did not finish its answer")
+        }
+        return parseMatchResponse(fullText)
     }
 
     /**
@@ -315,9 +327,26 @@ class CloudClaudeLlmBackend(
     companion object {
         const val NAME = "claude"
         const val API_URL = "https://api.anthropic.com/v1/messages"
-        const val DEFAULT_MODEL = "claude-sonnet-4-20250514"
+        /**
+         * The Claude model the app uses, the one place it is named. Claude Sonnet 5.5
+         * replaces claude-sonnet-4-20250514, which is deprecated.
+         */
+        const val DEFAULT_MODEL = "claude-sonnet-5-5"
         private const val API_VERSION = "2023-06-01"
-        private const val MAX_TOKENS = 256
+
+        /**
+         * The answer is three short lines. On Claude Sonnet 5.5 thinking is adaptive
+         * and counts toward max_tokens even when its text is not returned, so the
+         * limit leaves room for it as well as the answer.
+         */
+        internal const val MAX_TOKENS = 2048
+
+        /**
+         * Thinking effort. This is a short classification, for which low effort is
+         * the recommended start; at low effort the model skips thinking on most
+         * simple requests, which keeps the answer fast.
+         */
+        internal const val EFFORT = "low"
         private const val JPEG_QUALITY = 85
         private const val TAG = "CloudClaudeLlm"
         private val JSON = "application/json".toMediaType()
@@ -334,6 +363,27 @@ class CloudClaudeLlmBackend(
             val app = context.applicationContext
             return CloudClaudeLlmBackend(gate = gate, isOnline = { hasValidatedInternet(app) })
         }
+
+        /**
+         * The Messages API request body. It follows the rules for Claude Sonnet 5.5:
+         * one user turn and no assistant prefill, no `temperature`, `top_p` or
+         * `top_k` (a non-default value is rejected), no `thinking` field (thinking
+         * is adaptive by default; `disabled` is rejected), and the effort set in
+         * `output_config`.
+         */
+        internal fun requestBody(model: String, contentBlocks: List<JsonObject>): String = buildJsonObject {
+            put("model", model)
+            put("max_tokens", MAX_TOKENS)
+            putJsonObject("output_config") {
+                put("effort", EFFORT)
+            }
+            putJsonArray("messages") {
+                addJsonObject {
+                    put("role", "user")
+                    put("content", JsonArray(contentBlocks))
+                }
+            }
+        }.toString()
 
         internal fun analyzePrompt(description: String?): String = buildString {
             append("You are helping find a missing person. ")
