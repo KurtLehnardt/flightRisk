@@ -628,3 +628,10 @@ def test_start_battery_minimum_follows_the_takeoff_minimum_override(monkeypatch)
     # An explicit argument still wins over the environment.
     explicit = FleetCoordinator(edges, area_cm=(400, 400), strip_cm=50, clock=clock, min_battery=35)
     assert explicit._min_battery == 35
+
+
+def test_min_start_battery_alias_is_the_default_minimum():
+    from flightrisk.drone.coordinator import MIN_START_BATTERY
+    from flightrisk.drone.safety import DEFAULT_MIN_TAKEOFF_BATTERY
+
+    assert MIN_START_BATTERY == DEFAULT_MIN_TAKEOFF_BATTERY == 30

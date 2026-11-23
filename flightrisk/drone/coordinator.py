@@ -101,7 +101,7 @@ from flightrisk.drone.obstacle_sensor import (
     TELEMETRY_STATE,
 )
 from flightrisk.drone.plan_paths import closest_approach
-from flightrisk.drone.safety import min_takeoff_battery_from_env
+from flightrisk.drone.safety import DEFAULT_MIN_TAKEOFF_BATTERY, min_takeoff_battery_from_env
 from flightrisk.drone.search import split_parallel_track_zones
 
 logger = logging.getLogger(__name__)
@@ -119,6 +119,12 @@ Both are at or below the default ceiling limit of 140 cm (200 cm ceiling
 minus 60 cm margin, ``flightrisk.drone.safety``). The second slot was 160 cm
 until a Tello at that slot hit a ceiling (docs/ceiling-and-altitude.md).
 """
+
+# Deprecated alias, kept so an importer that still uses the old name (the single-drone start in
+# flightrisk/dashboard/single_search.py from PR #200) keeps working. It is only the default of the
+# minimum; the value that applies, with the FLIGHTRISK_MIN_TAKEOFF_BATTERY override, comes from
+# ``flightrisk.drone.safety.min_takeoff_battery_from_env``.
+MIN_START_BATTERY = DEFAULT_MIN_TAKEOFF_BATTERY
 
 TELEMETRY_FRESH_S = 2.0
 # Edge refusals of an assign_lanes that are only true for now: the chunk waits
