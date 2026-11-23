@@ -54,6 +54,16 @@ The onboarding notice links to the address in the `FLIGHTRISK_PRIVACY_POLICY_URL
 
 `CFBundleVersion` is `$(CURRENT_PROJECT_VERSION)`, set in `project.yml` (currently 1). App Store Connect rejects an upload whose build number is not higher than the previous one for the same version, so raise it for each upload: change `CURRENT_PROJECT_VERSION` in `project.yml` and run `xcodegen`. That is the only supported method. Do not use `agvtool new-version -all`: it overwrites `$(CURRENT_PROJECT_VERSION)` in `Info.plist` with a literal number, and the build number then no longer follows `project.yml`. The marketing version (`CFBundleShortVersionString`) is separate.
 
+### Models and the licence guard (release builds)
+
+Before each archive for App Store Connect, on the release build machine:
+
+1. Clear old models. A developer checkout may still hold the old compiled models (`YOLOPersonDetector.mlmodelc`, `SCRFDFaceDetector.mlmodelc`, `ArcFaceMobile.mlmodelc`, `CLIPVisual.mlmodelc`) in `ios/FlightRisk/Models`. They are gitignored and must never ship. Archive from a fresh clone, or list them with `git clean -ndX ios/FlightRisk/Models` and remove them with `git clean -fdX ios/FlightRisk/Models`.
+2. Build and install the models: `scripts/mobile_models/make_models.py all --targets ios`, in its own virtual environment installed with `pip install --require-hashes -r scripts/mobile_models/requirements.lock` (`docs/mobile-models.md`). It installs `YOLOXs.mlpackage`, `CLIPViTB16LAION.mlpackage`, `mobile-models.json` and `model-notices.md` into `ios/FlightRisk/Models`.
+3. Archive. The FlightRisk target's last build phase, "Licence guard (Release)", runs `scripts/mobile_models/licence_guard.py` (with `/usr/bin/env python3`, 3.9 or newer) on the built `.app` in every Release build, archives included, and fails the build if the app carries any Core ML model whose metadata does not name the pinned weights, or any other model, by name, SHA-256 or bytes. Debug builds skip it. To check an archive by hand: `python3 scripts/mobile_models/licence_guard.py path/to/FlightRisk.xcarchive`.
+
+`project.yml` still excludes `Models/**` from the target, so today nothing from that folder reaches the app. The app integration PR must add the installed `.mlpackage` files to the target as optional sources (so a checkout without them still builds), load them with the preprocessing in `docs/mobile-models.md`, and remove the code that loads the old models.
+
 ### App icon
 
 `FlightRisk/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png` is a full-bleed 1024 x 1024 crop of `branding/flightRiskIcon.png`, with no alpha channel. Make it again after changing the artwork:

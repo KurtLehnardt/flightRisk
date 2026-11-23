@@ -21,18 +21,86 @@ closed on any mismatch.
 | Appearance embedder | **open_clip ViT-B-16, pretrained `laion2b_s34b_b88k`**, image tower only, 512 values, L2-normalised | MIT weights. It is the ground's own model (`open_clip:ViT-B-16:laion2b_s34b_b88k`, `flightrisk/vision/reid_spec.py` and `ReidEmbedding.MODEL_ID` in `mobile/contract`), so a phone's embeddings can be compared with the ground's target embedding with no contract change. |
 | Face recogniser | **None.** | No face recognition or face detection model ships in a store build. |
 
-These must never be in a store build, and `scripts/mobile_models/licence_guard.py`
-fails the build if they are (by file or folder name, and by the author recorded
-in a model's metadata):
+## The licence guard
 
-- every YOLO or Ultralytics model (`yolo*` other than `yolox*`, `ultralytics*`): AGPL-3.0 or the Ultralytics commercial licence;
-- every InsightFace model (`scrfd*`, `arcface*`, `insightface*`, `*buffalo*`, and the files inside the packs such as `det_500m`, `w600k_mbf`): non-commercial research weights;
-- MobileCLIP (`mobileclip*`): research-only weights;
-- OSNet (`osnet*`): weights trained on research-only re-identification datasets;
-- every output of `scripts/download_matching_models.sh`, and the model names the apps loaded before this pipeline (`yolo11n.onnx`, `YOLOPersonDetector`, `scrfd_500m.onnx`, `SCRFDFaceDetector`, `arcface_mobilefacenet.onnx`, `ArcFaceMobile`, `clip_visual.onnx`, `CLIPVisual`).
+`scripts/mobile_models/licence_guard.py` decides what may be in a store build.
+It needs only the Python standard library (3.9 or newer, so the
+`/usr/bin/python3` of Xcode's build phases works), and it runs:
 
-The app integration PRs remove the code that loads those models; this pipeline
-only provides the replacements and the guard.
+- in every Android release build: `bundleRelease` and `assembleRelease` are
+  followed by `licenceGuardReleaseBundle` and `licenceGuardReleaseApk`
+  (`mobile/app/build.gradle.kts`), which check the built bundle or APK and fail
+  the build on any finding, when the guard cannot run, or when there is no file
+  to check (set the Python with `-Pflightrisk.python=...`; default `python3`);
+- in every iOS Release build, archives included: the FlightRisk target's last
+  build phase, "Licence guard (Release)" (`ios/project.yml`), checks
+  `$TARGET_BUILD_DIR/$WRAPPER_NAME`, the built `.app`; Debug builds skip it;
+- at the end of `make_models.py install`, over both app folders;
+- by hand, on any folder, `.app`, `.xcarchive`, APK, AAB, APKS or IPA:
+
+```bash
+python3 scripts/mobile_models/licence_guard.py mobile/app/build/outputs/bundle/release/app-release.aab
+python3 scripts/mobile_models/licence_guard.py path/to/FlightRisk.xcarchive
+```
+
+It exits 0 when clean, 1 when it finds something (each finding is listed) and
+2 when a path cannot be checked. Its rules:
+
+1. **Allowlist.** Only the models `make_models.py install` put there may ship.
+   Every model-like file must be listed, with the same SHA-256, in the
+   `mobile-models.json` that `install` writes next to it. A file is model-like
+   when its extension is a model or archive format's (`.onnx`, `.tflite`,
+   `.pt`, `.safetensors`, `.zip`, `.gz` and others), or when its first bytes
+   are those of a model or an archive, whatever it is called: an ONNX or Core
+   ML protobuf, TFLite (`TFL3`), ONNX Runtime (`ORTM`), safetensors, GGUF, HDF5,
+   NumPy, a Python pickle, ncnn, zip (`PK`), gzip, xz, zstd, 7z or bzip2. So a
+   renamed model (`config.dat`, `textures.bin`) is caught by its bytes. Zip
+   archives are opened whatever their name and their entries checked the same
+   way. A Core ML package or compiled model (`.mlpackage`, `.mlmodelc`) must
+   carry the SHA-256 of one of the pinned upstream weights as its
+   `flightrisk.weights_sha256` metadata (and must have the listed digest where a
+   manifest lists it); Xcode compiles the installed packages into `.mlmodelc`
+   folders that keep that metadata.
+
+   Archives are model-like in the app asset folders (an APK's `assets/`, an
+   AAB's `<module>/assets/`, the whole `.app`, and any folder given to the
+   guard), so a gzip or a zip there fails the build. Elsewhere in an APK or AAB
+   (the Java resources: OkHttp ships its public suffix list gzipped) a gzip,
+   bzip2 or xz file is opened and refused only if it holds a model or an
+   archive, a zip is opened and its entries checked, and zstd and 7z files,
+   which the guard cannot open, are refused. A model format outside an asset
+   folder (`res/raw/detector.tflite`) is refused like any unlisted model.
+2. **Denylist.** No file may have the SHA-256 of a known forbidden model file,
+   whatever its name or place: every file of InsightFace's buffalo_l, buffalo_m,
+   buffalo_s, buffalo_sc and antelopev2 packs (release v0.7) and the pack
+   archives themselves, and the models the apps loaded before this pipeline
+   (`yolo11n.onnx`, `scrfd_500m.onnx`, `arcface_mobilefacenet.onnx`,
+   `clip_visual.onnx` and the weights of the old `.mlmodelc` folders). The
+   digests were computed from the packs and from a developer checkout's app
+   folders; only files of 64 KiB or more are listed.
+3. **Names.** No path component may name a forbidden family or a known file of
+   one: every YOLO or Ultralytics model (`yolo*` other than `yolox*`,
+   `ultralytics*`: AGPL-3.0 or the Ultralytics commercial licence); every
+   InsightFace model (`scrfd*`, `arcface*`, `insightface*`, `*buffalo*`,
+   `*antelope*`, and the files inside the packs such as `det_500m`,
+   `w600k_mbf`: non-commercial research weights); MobileCLIP (`mobileclip*`:
+   research-only weights); OSNet (`osnet*`: weights trained on research-only
+   re-identification datasets); every output of
+   `scripts/download_matching_models.sh`; and the model names the apps loaded
+   before this pipeline (`yolo11n.onnx`, `YOLOPersonDetector`,
+   `scrfd_500m.onnx`, `SCRFDFaceDetector`, `arcface_mobilefacenet.onnx`,
+   `ArcFaceMobile`, `clip_visual.onnx`, `CLIPVisual`).
+4. **Content.** No model file may name Ultralytics, InsightFace or MobileCLIP
+   in its bytes (an Ultralytics export records its author in its metadata).
+5. **Symbolic links** are refused, in folders and in archives: a link could
+   point at a model outside what is checked.
+
+The guard does not know MiDaS: `midas_small.onnx`, which the Android
+`ObstacleGuard` loads, is not made by this pipeline, so a release build that
+carries it fails until MiDaS is added to `make_models.py` (follow-up below).
+
+The app integration PRs remove the code that loads the forbidden models; this
+pipeline provides the replacements and the guard.
 
 ## Licence table
 
@@ -44,7 +112,8 @@ only provides the replacements and the guard.
 | open_clip model code | `open_clip_torch` 3.3.0 (the ground's version) | MIT | Its graph is part of the converted model |
 | OpenAI CLIP (where open_clip's model code comes from) | github.com/openai/CLIP | MIT | Its graph is part of the converted model |
 | YOLOX demo picture `assets/dog.jpg` | YOLOX commit `6ddff48`, SHA-256 `5a9522051c3cec2bbd2f6323fccba32e8fbf3ddcc2b3e2fd46b04c720bc6f866` | Apache-2.0 | No; a parity input for `verify` only (a dog, a bicycle and a truck, no person) |
-| Conversion tools: PyTorch, torchvision, coremltools, ONNX, ONNX Runtime | `scripts/mobile_models/requirements.txt` | BSD-3-Clause, BSD-3-Clause, BSD-3-Clause, Apache-2.0, MIT | No; build machine only |
+| "Group Hiking on Munch's Coulee National Hiking Trail" | U.S. Fish and Wildlife Service, Mountain-Prairie Region, via Wikimedia Commons: `https://upload.wikimedia.org/wikipedia/commons/4/4d/Group_Hiking_on_Munch%27s_Coulee_National_Hiking_Trail_%285220995838%29.jpg`, SHA-256 `0b7230075f66aeda713b53924e6b78ccb768e7f0875e83cca7bfbfe1939be581`, 1,567,122 bytes, 2816 x 1584 | Public domain (a work of the U.S. federal government) | No; a parity input for `verify` only, kept in the gitignored downloads folder, never committed or installed |
+| Conversion tools: PyTorch, torchvision, coremltools, ONNX, ONNX Runtime | `scripts/mobile_models/requirements.lock` | BSD-3-Clause, BSD-3-Clause, BSD-3-Clause, Apache-2.0, MIT | No; build machine only |
 
 `scripts/mobile_models/NOTICES.md` holds the full Apache-2.0 text, the MIT
 texts with every copyright line, and the list of changes made. `install`
@@ -54,51 +123,71 @@ screens; show it in full.
 ## Building the models before a release build
 
 Run this on the release build machine, online, before every release build.
-The conversion tools go in their own virtual environment; never install them
-into FlightRisk's `venv`, whose test suites depend on the versions there.
+The conversion tools go in their own virtual environment, installed from the
+hash-locked `requirements.lock` (every package and dependency at one version,
+with its SHA-256 hashes, for every platform); never install them into
+FlightRisk's `venv`, whose test suites depend on the versions there.
 
 ```bash
 python3.13 -m venv .venv-mobile-models
-.venv-mobile-models/bin/pip install -r scripts/mobile_models/requirements.txt
+.venv-mobile-models/bin/pip install --require-hashes -r scripts/mobile_models/requirements.lock
 .venv-mobile-models/bin/python scripts/mobile_models/make_models.py all
 ```
 
+`requirements.txt` holds the top-level pins; after changing one, regenerate
+the lock with the command in `requirements.txt` and commit both.
+
+First clear the app folders of models from older builds. A developer checkout
+may still hold `yolo11n.onnx`, `scrfd_500m.onnx`, `arcface_mobilefacenet.onnx`
+and `clip_visual.onnx` in `mobile/app/src/main/assets`, and
+`YOLOPersonDetector.mlmodelc` and friends in `ios/FlightRisk/Models`. They are
+gitignored, so `git status` never shows them, and they must never ship. Build
+from a fresh clone, or list them with
+`git clean -ndX mobile/app/src/main/assets ios/FlightRisk/Models` and remove
+them with `git clean -fdX` on the same folders. `install` replaces only the
+files it installs (the installed names do not depend on the variant, so a
+reinstall replaces the previous one) and does not delete anything else; it
+fails while anything else model-like is in the folders, and so does the
+release build's guard.
+
 `all` runs four steps and stops at the first failure:
 
-1. `fetch` downloads the three pinned files (about 670 MB) into
-   `build/mobile_models/downloads`. A file whose size or SHA-256 differs from
-   its pin is deleted and the step fails; a matching file already there is kept.
-2. `convert` re-checks every download against its pin (the bytes that are
-   checked are the bytes that are loaded; checkpoints are read with
-   `weights_only=True`), refuses tool versions other than the pinned ones
-   (override with `--allow-unpinned-tools`, which is recorded), and writes
-   `build/mobile_models/out` and `build.json`. About 3 minutes on an M1 Max.
+1. `fetch` downloads the four pinned files (about 672 MB) into
+   `build/mobile_models/downloads`, over https only: a redirect to another
+   scheme is refused. A file whose size or SHA-256 differs from its pin is
+   deleted and the step fails; a matching file already there is kept.
+2. `convert` refuses to run unless the installed packages are exactly the
+   locked set (every locked package at its locked version, nothing else but
+   pip), re-checks every download against its pin (the bytes that are checked
+   are the bytes that are loaded; checkpoints are read with
+   `weights_only=True`, and every weight or config download is refused while
+   the embedder is built), and writes `build/mobile_models/out` and
+   `build.json`. About 3 minutes on an M1 Max.
 3. `verify` runs every output and PyTorch on the same inputs, checks the
    tolerances below and the model interfaces, runs the licence guard over the
-   outputs, and writes `build/mobile_models/verify.json`. About 2 minutes.
+   outputs (without the allowlist: they are not installed yet), writes the
+   golden fixtures and `build/mobile_models/verify.json`. About 5 minutes.
 4. `install` copies one detector and one embedder per platform into
    `mobile/app/src/main/assets` and `ios/FlightRisk/Models` (change them with
    `--android` and `--ios`), together with `mobile-models.json` (the installed
-   files, their digests, their parity and the preprocessing contract) and
-   `model-notices.md`. It refuses any file whose digest is not the one
-   `verify` passed, then runs the licence guard over both folders.
+   files, their digests, their parity, whether the tools were pinned, and the
+   preprocessing contract) and `model-notices.md`. It refuses any file whose
+   digest is not the one `verify` passed. Each file is staged under a hidden
+   name next to its destination, checked, and moved into place with
+   `os.replace`; the old manifest is deleted first and the new one written
+   last, so an interrupted install leaves a folder that lists nothing, which
+   the guard refuses. Then it runs the licence guard over both folders.
+
+`--allow-unpinned-tools` lets `convert` and `verify` run with other tool
+versions; the build is then recorded as unpinned (`tools_pinned: false` in
+`build.json`, `verify.json` and `mobile-models.json`), and `install` refuses it
+unless `--allow-unpinned-build` is given too.
 
 Core ML predictions need macOS, so on Linux use `--targets android`. Variants
 are chosen with `--android-detector fp32|fp16`,
-`--android-embedder int8-weights|int8-dynamic|fp32` and
-`--ios-embedder fp16|palettized8`. The installed file names do not depend on
-the variant, so the app code does not either.
-
-After building the app, run the guard on the built artifact too:
-
-```bash
-python3 scripts/mobile_models/licence_guard.py mobile/app/build/outputs/bundle/release/app-release.aab
-python3 scripts/mobile_models/licence_guard.py path/to/FlightRisk.xcarchive
-```
-
-It needs only the Python standard library, so it can run in a Gradle task or
-an Xcode build phase. It exits 0 when clean, 1 when it finds a forbidden model
-(each is listed) and 2 when a path cannot be checked.
+`--android-embedder int8-weights|int8-dynamic|fp32`,
+`--ios-detector fp32|fp16` and `--ios-embedder palettized8|fp16`. The installed
+file names do not depend on the variant, so the app code does not either.
 
 ## Outputs
 
@@ -109,17 +198,51 @@ Sizes are from the run recorded in the PR. Defaults are what `install` copies.
 | `yolox_s.onnx` | Android | fp32 | 36.0 MB | `yolox_s.onnx` | yes |
 | `yolox_s_fp16.onnx` | Android | fp16 weights and arithmetic, fp32 input and output | 18.1 MB | `yolox_s.onnx` | no |
 | `clip_vit_b16_laion2b.onnx` | Android | fp32 | 345.0 MB | `clip_vit_b16_laion2b.onnx` | no |
-| `clip_vit_b16_laion2b_w8.onnx` | Android | int8 weights (per channel, `DequantizeLinear`), fp32 arithmetic | 89.4 MB | `clip_vit_b16_laion2b.onnx` | yes |
+| `clip_vit_b16_laion2b_w8.onnx` | Android | int8 weights (per output channel), `DequantizeLinear` back to fp32 on every inference, fp32 arithmetic | 89.4 MB | `clip_vit_b16_laion2b.onnx` | yes |
 | `clip_vit_b16_laion2b_int8.onnx` | Android | dynamic int8 (ONNX Runtime `quantize_dynamic`) | 96.6 MB | `clip_vit_b16_laion2b.onnx` | no |
-| `YOLOXs.mlpackage` | iOS | ML program, fp16, iOS 17 | 18.1 MB | `YOLOXs.mlpackage` | yes |
-| `CLIPViTB16LAION.mlpackage` | iOS | ML program, fp16, iOS 17 | 172.6 MB | `CLIPViTB16LAION.mlpackage` | yes |
-| `CLIPViTB16LAION8bit.mlpackage` | iOS | ML program, fp16 with 8-bit k-means palettised weights, iOS 17 | 86.5 MB | `CLIPViTB16LAION.mlpackage` | no |
+| `YOLOXs.mlpackage` | iOS | ML program, fp32, iOS 17, any compute units | 36.1 MB | `YOLOXs.mlpackage` | yes |
+| `YOLOXsFP16.mlpackage` | iOS | ML program, fp16, iOS 17, **`computeUnits = .cpuAndGPU` only** | 18.1 MB | `YOLOXs.mlpackage` | no |
+| `CLIPViTB16LAION.mlpackage` | iOS | ML program, fp16, iOS 17 | 172.6 MB | `CLIPViTB16LAION.mlpackage` | no |
+| `CLIPViTB16LAION8bit.mlpackage` | iOS | ML program, fp16 with 8-bit k-means palettised weights, iOS 17 | 86.5 MB | `CLIPViTB16LAION.mlpackage` | yes |
+
+Installed by default: Android 36.0 + 89.4 = 125.4 MB, iOS 36.1 + 86.5 = 122.6 MB.
 
 All ONNX files use opset 17 and IR version 8, which the apps' ONNX Runtime
-(`onnxruntime-android` 1.18.0) reads. The dynamic int8 copy was asked for and
-is kept, but its embeddings move too far for matching (see Parity), so the
-Android default is the weight-only int8 copy: about the same size, with fp32
-arithmetic.
+(`onnxruntime-android` 1.23.2) reads. The weight-only int8 embedder keeps its
+`DequantizeLinear` nodes: ONNX Runtime does not fold them into constants (its
+optimised graph still has all 49), so the int8 weights are turned back into
+fp32 on every inference and the arithmetic is fp32. The dynamic int8 copy was
+asked for and is kept, but its embeddings move too far for matching (see
+Parity), so the Android default is the weight-only copy: about the same size,
+with fp32 arithmetic.
+
+Why these iOS defaults: the fp32 detector matches PyTorch on every Core ML
+compute unit (the fp16 one does not on the Neural Engine or the CPU alone), so
+the app needs no compute-unit setting, for 18 MB more. The palettised embedder
+is half the size of the fp16 one and stays within 0.998 cosine of PyTorch. An
+iPhone only compares embeddings it made itself (the target's and the
+detections'), so a small shared offset against PyTorch does not matter there;
+phone-as-edge, which sends embeddings to the ground to compare with PyTorch's,
+is Android only, and Android uses the closer weight-only int8 copy.
+
+Each iOS package records how it must be loaded as its
+`flightrisk.coreml_compute_units` metadata (`all` or `cpuAndGPU`), and
+`mobile-models.json` repeats it per model and in the contract
+(`contract.detector.coreml_compute_units`). An app that installs
+`--ios-detector fp16` must read it and load the detector with
+`MLModelConfiguration.computeUnits = .cpuAndGPU`.
+
+### For the app integration PRs
+
+- iOS: `ios/project.yml` excludes `Models/**` from the FlightRisk target, so
+  nothing from `ios/FlightRisk/Models` reaches the app today. The iOS
+  integration PR must add the installed `YOLOXs.mlpackage` and
+  `CLIPViTB16LAION.mlpackage` to the target as optional sources (so a checkout
+  without them still builds, and Xcode compiles them to `.mlmodelc`), and
+  copy `mobile-models.json` and `model-notices.md` as resources.
+- Both: load the files with the contracts below, show `model-notices.md` in
+  full on the licences screen, remove the YOLO, InsightFace, MobileCLIP and
+  OSNet code paths, and test each stage against the golden fixtures.
 
 ## Preprocessing contracts
 
@@ -147,7 +270,8 @@ Input name `images`, shape `[1, 3, 640, 640]`, float32, NCHW.
 5. On iOS the Core ML input `images` is a 640 x 640 image whose colour layout
    is BGR; pass the letterboxed canvas as a pixel buffer with
    `imageCropAndScaleOption = .scaleFill` (a no-op at 640 x 640) or directly as
-   an `MLFeatureValue(pixelBuffer:)`. Load the model with
+   an `MLFeatureValue(pixelBuffer:)`. The default fp32 package runs on any
+   compute units; the fp16 package must be loaded with
    `MLModelConfiguration.computeUnits = .cpuAndGPU` (see Parity).
 
 Output name `detections`, shape **`[1, 8400, 85]`**, float32. Each row is
@@ -165,6 +289,22 @@ Output name `detections`, shape **`[1, 8400, 85]`**, float32. Each row is
 - Then drop rows under the score threshold and run non-maximum suppression per
   class at IoU 0.45, as upstream's `yolox.utils.postprocess` does. The apps
   choose their own score threshold; `verify` compares detections at 0.25.
+
+### From a detection to the embedder's crop
+
+Cut the crop from the **full-resolution camera frame**, not from the 640 x 640
+detector input, exactly as the ground does (`flightrisk/vision/detector.py`,
+`crop = frame[y1:y2, x1:x2]` after its detector clips the box to the frame and
+`astype(int)` truncates it):
+
+1. Take the box corners in frame pixels: `x1, y1, x2, y2 = (cx - w/2, cy - h/2,
+   cx + w/2, cy + h/2) / r`.
+2. Clip `x1` and `x2` to `[0, width]` and `y1` and `y2` to `[0, height]`.
+3. Truncate each corner to an integer toward zero.
+4. Take `frame[y1:y2, x1:x2]`: **no margin**, no padding, no squaring.
+
+`mobile_preprocess.crop_box` is this rule; `mobile-models.json` carries it as
+`contract.embedder.crop_from_detection`.
 
 ### Appearance embedder: open_clip ViT-B-16 `laion2b_s34b_b88k`
 
@@ -191,23 +331,62 @@ Resampling differs slightly between Pillow, Android and Core Graphics. The
 parity figures below use Pillow, as the ground does; an app's own resize adds
 a small, separate difference that the app PRs should measure on a device.
 
+### Golden fixtures for the apps' unit tests
+
+`verify` writes `build/mobile_models/golden/` (gitignored), made from a drawn
+frame, not a photograph (`make_models.silhouette_scene`: person-like figures
+16 to 160 px tall on a grass-like texture, 800 x 480):
+
+| File | What |
+|---|---|
+| `frame.png` | the frame, lossless |
+| `detector_input.f32` | the letterboxed `[1, 3, 640, 640]` BGR tensor (float32, little-endian) |
+| `detector_output.f32` | PyTorch's `[1, 8400, 85]` output for it |
+| `crop.png` | the crop of the best person detection, cut by the rule above |
+| `embedder_input.f32` | the crop's `[1, 3, 224, 224]` RGB tensor |
+| `embedding.f32` | PyTorch's `[1, 512]` embedding |
+| `golden.json` | SHA-256 and shape of each file, the detections, the letterbox ratio, the crop box (float and integer), the contract and the tolerances |
+
+An app test decodes `frame.png` the way the app decodes a camera frame, runs
+its own preprocessing, model and crop code, and compares each stage. The
+frame's colours are lopsided on purpose: feeding it as RGB instead of BGR
+moves the detector's scores by 0.42, and feeding the crop as BGR instead of
+RGB drops the embedding's cosine to 0.957 (`golden.json`,
+`channel_order_check`; `verify` fails if either stops being clear). That is
+the check of the channel order; the YOLOX demo picture's sanity check below
+does not check the channel order (its objects are found either way).
+
 ## Parity
 
 `verify` compares every output with PyTorch fp32 (upstream's own code and
-decoding) on the same inputs:
+decoding, and open_clip's own transform) on the same inputs:
 
-- Detector: the three synthetic aerial fixtures in `tests/fixtures/aerial_tiny`,
-  YOLOX's demo picture at full size and scaled to 0.5, 0.25 and 0.12 (so its
-  objects are as small as a person seen from altitude), and three seeded
-  synthetic pictures (noise, coloured blocks, a gradient). No photograph of a
-  person is used.
-- Embedder: the three fixtures, the demo picture, its dog and bicycle as
-  detection-shaped crops, and the three synthetic pictures. `verify` also
-  checks that the documented preprocessing gives exactly open_clip's tensors
-  (largest difference measured: 0).
+- **General**, which gates every output. Detector: the three synthetic aerial
+  fixtures in `tests/fixtures/aerial_tiny`, YOLOX's demo picture at full size
+  and scaled to 0.5, 0.25 and 0.12, and three seeded synthetic pictures (noise,
+  coloured blocks, a gradient). Embedder: the three fixtures, the demo picture,
+  its dog and bicycle as detection-shaped crops, and the three synthetic
+  pictures.
+- **Person**, which also gates the Android defaults (`yolox_s.onnx` and
+  `clip_vit_b16_laion2b_w8.onnx`, whose embeddings the ground compares with
+  its own) and is recorded for every other output. The pinned public-domain
+  photograph of a group of people walking through grassland, seen from
+  behind. Detector: the whole photo, a 640 x 640 window of it at native
+  resolution (people about 75 to 260 px tall), and the photo scaled so its
+  people's median height is 48 px, 32 px, 24 px and 16 px, each as a
+  640 x 640 frame. Embedder: the seven person detections PyTorch makes in the
+  native window (score 0.5 or more), cut by the crop rule, each at native size
+  and scaled down to 48 px, 32 px, 24 px and 16 px tall (35 crops; the
+  embedder's resize then scales them up to 224).
+- **Silhouette**, recorded only, needs no download: the drawn frame of the
+  golden fixtures and its seven figures (16 to 160 px tall) as crops.
 - PyTorch YOLOX-S must find the demo picture's dog and bicycle with a score of
-  at least 0.8 (measured 0.913 and 0.954); this checks the weights and the
-  BGR, 0..255 contract.
+  at least 0.8 (measured 0.913 and 0.954), and at least three people in the
+  whole photo and four at native size (measured four and seven). This checks
+  the weights and the 0..255, unnormalised input; it does not check the
+  channel order, which the golden fixtures do.
+- Any output with a value that is not finite (NaN or infinite) fails, whatever
+  the tolerance.
 
 Metrics: for the detector, the largest difference of any score (objectness
 times class) over all 8400 rows and 80 classes, the largest box difference in
@@ -215,35 +394,57 @@ input pixels over rows PyTorch scores at least 0.05, and the smallest IoU of
 matched detections after NMS (no detection may appear or disappear unless it is
 within the score tolerance of the threshold). For the embedder, the smallest
 cosine similarity with PyTorch, and the largest change in the similarity the
-ground would compute between a PyTorch target and the model's embedding of any
-of the inputs (the ground matches at 0.55 by default).
+ground would compute between a PyTorch embedding and the model's embedding of
+any pair of inputs (the ground matches at 0.55 by default). The similarity
+change is a maximum over every pair, so it grows with the number of inputs:
+over the 35 person crops the weight-only int8 embedder moves a similarity by up
+to 0.013 (as the Core ML fp16 embedder does), against 0.005 over the 9 general
+inputs, while its smallest cosine stays at 0.9987. Its person tolerance is
+therefore 0.995 cosine and 0.02 similarity (`PERSON_TOLERANCES`).
 
-Measured on macOS 27, Apple M1 Max, with the pinned tools:
+Measured on macOS 27, Apple M1 Max, with the locked tools. Detector (score
+diff, box diff, smallest matched IoU; 21 general and 29 person detections
+matched, none missing or extra on gated runs):
 
-| Output | Run on | Score diff | Box diff | Min matched IoU | Tolerance |
+| Output | Run on | General | Person | Tolerance |
+|---|---|---|---|---|
+| `yolox_s.onnx` | ONNX Runtime CPU (gate, person gate) | 1.4e-5, 0.001 px, 1.0000 | 3.8e-6, 0.001 px, 1.0000 | 1e-3, 0.05 px, 0.999 |
+| `yolox_s_fp16.onnx` | ONNX Runtime CPU (gate) | 0.0056, 0.66 px, 0.9891 | 0.0026, 0.36 px, 0.9855 | 0.02, 2 px, 0.95 |
+| `YOLOXs.mlpackage` (fp32) | Core ML, all four compute units (gate on each) | 1.5e-5, 0.001 px, 1.0000 | 5.1e-6, 0.001 px, 1.0000 | 1e-3, 0.05 px, 0.999 |
+| `YOLOXsFP16.mlpackage` | Core ML CPU and GPU (gate) | 0.0057, 0.69 px, 0.9891 | 0.0033, 0.36 px, 0.9855 | 0.02, 2 px, 0.95 |
+| `YOLOXsFP16.mlpackage` | Core ML all units / Neural Engine | 0.132, 8.0 px, 0.9399 | 0.075, 4.2 px, 0.9327 | recorded only |
+| `YOLOXsFP16.mlpackage` | Core ML CPU only | 0.073, 8.1 px, 0.9504 | 0.032, 6.5 px, 0.7665 | recorded only |
+
+Embedder (smallest cosine, largest similarity change; person: smallest cosine
+at native size / 48 / 32 / 24 / 16 px tall):
+
+| Output | Run on | General | Person | Person by size | Tolerance |
 |---|---|---|---|---|---|
-| `yolox_s.onnx` | ONNX Runtime CPU | 1.4e-5 | 0.001 px | 1.0000 (21 matched) | 1e-3, 0.05 px, 0.999 |
-| `yolox_s_fp16.onnx` | ONNX Runtime CPU | 0.0056 | 0.66 px | 0.9891 | 0.02, 2 px, 0.95 |
-| `YOLOXs.mlpackage` | Core ML CPU and GPU (gate) | 0.0057 | 0.69 px | 0.9891 | 0.02, 2 px, 0.95 |
-| `YOLOXs.mlpackage` | Core ML all units (Neural Engine) | 0.132 | 8.0 px | 0.9399 | recorded only |
-| `YOLOXs.mlpackage` | Core ML CPU only | 0.073 | 8.1 px | 0.9504 | recorded only |
+| `clip_vit_b16_laion2b.onnx` | ONNX Runtime CPU | 1.000000, 2.3e-6 | 1.000000, 1.2e-6 | 1.0000 at every size | 0.9999, 0.001 |
+| `clip_vit_b16_laion2b_w8.onnx` | ONNX Runtime CPU (gate, person gate) | 0.999379, 0.0051 | 0.998734, 0.0134 | 0.99921 / 0.99926 / 0.99938 / 0.99946 / 0.99873 | 0.995, 0.01; person 0.995, 0.02 |
+| `clip_vit_b16_laion2b_int8.onnx` | ONNX Runtime CPU | 0.979960, 0.0469 | 0.973428, 0.0416 | 0.99057 / 0.98851 / 0.98860 / 0.98219 / 0.97343 | 0.97, 0.06 |
+| `CLIPViTB16LAION.mlpackage` | Core ML all units (gate) | 0.999661, 0.0047 | 0.998214, 0.0130 | 0.99821 / 0.99956 / 0.99935 / 0.99950 / 0.99942 | 0.99, 0.02 |
+| `CLIPViTB16LAION8bit.mlpackage` | Core ML all units (gate) | 0.997993, 0.0150 | 0.998389, 0.0115 | 0.99839 / 0.99844 / 0.99910 / 0.99913 / 0.99885 | 0.99, 0.03 |
 
-| Output | Run on | Min cosine | Mean cosine | Max similarity change | Tolerance |
-|---|---|---|---|---|---|
-| `clip_vit_b16_laion2b.onnx` | ONNX Runtime CPU | 1.000000 | 1.000000 | 2.3e-6 | 0.9999, 0.001 |
-| `clip_vit_b16_laion2b_w8.onnx` | ONNX Runtime CPU | 0.999379 | 0.999716 | 0.0051 | 0.995, 0.01 |
-| `clip_vit_b16_laion2b_int8.onnx` | ONNX Runtime CPU | 0.979960 | 0.991060 | 0.0469 | 0.97, 0.06 |
-| `CLIPViTB16LAION.mlpackage` | Core ML all units (gate) | 0.999661 | 0.999825 | 0.0047 | 0.99, 0.02 |
-| `CLIPViTB16LAION.mlpackage` | Core ML CPU and GPU | 0.999983 | | 0.0005 | recorded only |
-| `CLIPViTB16LAION8bit.mlpackage` | Core ML all units (gate) | 0.997993 | 0.999210 | 0.0150 | 0.99, 0.03 |
+Silhouettes (recorded only): every detector, on every compute unit, matches
+all seven PyTorch detections in the drawn frame (four of them people); the
+embedders' smallest cosines are 1.000000
+(fp32), 0.999327 (weight-only int8), 0.987648 (dynamic int8), 0.999095 (Core ML
+fp16) and 0.999260 (palettised). `verify.json` has every run, every compute
+unit and every input.
 
 Findings:
 
-- **Run the iOS detector on the CPU and GPU, not the Neural Engine.** On the
-  Neural Engine (and on the CPU alone) the fp16 detector's scores move by up
-  to 0.13 and its boxes by up to 8 px, worst on the smallest objects. On the
-  CPU and GPU it matches as closely as the ONNX fp16 copy. The embedder is
-  fine on every unit.
+- **The iOS detector default is fp32.** On the Neural Engine (and on the CPU
+  alone) the fp16 detector's scores move by up to 0.13 and its boxes by up to
+  8 px, worst on the smallest objects; on the photo's people its smallest
+  matched IoU on the CPU alone is 0.77. The fp32 package matches PyTorch as
+  closely as the ONNX fp32 copy on every compute unit, so it is gated on all
+  four and the app may use any. The fp16 package is kept as an option gated
+  on the CPU and GPU only.
+- **Small people.** No converted output loses or gains a person detection on
+  the photo scaled down to 16 px people, and the embedders hold their cosine
+  on 16 px crops (the dynamic int8 copy is the worst at 0.973).
 - **Dynamic int8 is not good enough for matching.** Quantised as ONNX Runtime
   does by default, the embedder's cosine with PyTorch drops to about 0.86: the
   input of block 6's MLP output projection carries the outlier activations
@@ -251,10 +452,29 @@ Findings:
   the embedding. With that one layer kept in fp32 (and the attention's
   activation-by-activation products never quantised) the copy reaches 0.980,
   but a similarity can still move by 0.047. The weight-only int8 copy keeps
-  fp32 arithmetic, is a little smaller, and moves similarities by at most 0.005.
+  fp32 arithmetic, is a little smaller, and moves similarities by at most 0.005
+  on the general inputs.
 - The ONNX outputs were byte-identical across repeated conversions; the Core
   ML packages were not (their manifests carry fresh identifiers), which is why
   `install` checks digests against `verify.json` rather than fixed values.
+
+## Tests
+
+`tests/test_mobile_models.py` needs no download and no real weights. In
+FlightRisk's venv the conversion round trips are skipped:
+
+```bash
+venv/bin/python -m pytest tests/test_mobile_models.py
+```
+
+In the conversion venv (pytest is in the lock) everything runs, including the
+round trips that convert small or randomly initialised models to ONNX and Core
+ML; `--noconftest` skips the repository's `conftest.py`, which needs the
+ground's dependencies:
+
+```bash
+.venv-mobile-models/bin/python -m pytest --noconftest tests/test_mobile_models.py
+```
 
 ## Follow-ups
 
@@ -274,13 +494,25 @@ Findings:
   `MIN_BBOX_AREA_RATIO = 0.008f` in Kotlin, `minBboxHeightRatio` and
   `minBboxAreaRatio` in Swift). They drop people who are small in the frame,
   which is the normal case from altitude.
+- **Pin the ground's embedder download.** `flightrisk/vision/reid.py` calls
+  `open_clip.create_model_and_transforms(..., pretrained="laion2b_s34b_b88k")`,
+  which downloads from Hugging Face without a pinned revision or a digest
+  check. Its cache happens to hold the file this pipeline pins (same SHA-256),
+  but a fresh ground could get another revision. Pin the revision and check the
+  digest there as this pipeline does.
+- **MiDaS in the pipeline.** Android's `ObstacleGuard` loads
+  `midas_small.onnx`, which this pipeline does not make or list, so the release
+  guard refuses a build that carries it. Add it to `make_models.py` (pinned and
+  checked as in `flightrisk/drone/midas_model.py`) before shipping obstacle
+  avoidance.
 - **Neural Engine accuracy for the detector** (mixed precision or
-  quantisation-aware conversion), so the iOS detector can use the Neural Engine.
+  quantisation-aware conversion), so the smaller fp16 package can use the
+  Neural Engine.
 - **On-device checks.** The Android fp16 detector and every model's speed and
   memory on real phones are unmeasured.
-- **App PRs.** Load these files with these contracts, remove the YOLO,
-  InsightFace, MobileCLIP and OSNet code paths, run the licence guard in the
-  Gradle and Xcode release builds, show `model-notices.md` on the licences
+- **App PRs.** Load these files with these contracts (test against the golden
+  fixtures), add the iOS packages to the target, remove the YOLO, InsightFace,
+  MobileCLIP and OSNet code paths, show `model-notices.md` on the licences
   screens, and update the privacy disclosures for sending embeddings
   (`docs/mobile-followups.md`, "Embeddings for phone-as-edge").
 
@@ -307,12 +539,14 @@ Other questions:
 2. Do converted model files count as part of the GPL "Corresponding Source"
    question for the apps, and is pointing to the pinned upstream weights and
    this pipeline sufficient?
-3. The LAION model card says that "any deployed use case of the model, whether
-   commercial or not, is currently out of scope" and that surveillance and
-   facial recognition uses are "always out-of-scope". These are statements of
-   intended use, not terms of the MIT licence. Does person re-identification
-   for search and rescue fall within what the card warns against, and does the
-   owner accept that position?
+3. The LAION model card (at the pinned revision, section "Out-of-Scope Use")
+   says: "**Any** deployed use case of the model - whether commercial or not -
+   is currently out of scope." and "Certain use cases which would fall under
+   the domain of surveillance and facial recognition are always out-of-scope
+   regardless of performance of the model." These are statements of intended
+   use, not terms of the MIT licence. Does person re-identification for search
+   and rescue fall within what the card warns against, and does the owner
+   accept that position?
 4. Training data: the embedder was trained on LAION-2B-en (web-crawled images;
    LAION-5B, its parent, was withdrawn in December 2023 after a report of
    abusive content links and re-released as Re-LAION-5B). The detector was

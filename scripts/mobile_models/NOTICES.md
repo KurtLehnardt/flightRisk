@@ -25,10 +25,12 @@ No face recognition model is included.
 - Licence: Apache License, Version 2.0 (full text below).
 
 Changes made by the FlightRisk authors: the model code was reduced to
-inference only (see `scripts/mobile_models/yolox_vendor/NOTICE`), and the
-weights were converted unchanged in meaning to the ONNX format (32-bit and
-16-bit floating point) and to the Core ML format (16-bit floating point).
-YOLOX ships no NOTICE file of its own.
+inference only (see `scripts/mobile_models/yolox_vendor/NOTICE`); for export,
+the box decoding that YOLOX builds at run time from the feature map sizes is
+done with constant grids and strides precomputed for the fixed 640 x 640
+input (same results); and the weights were converted unchanged in meaning to
+the ONNX format (32-bit and 16-bit floating point) and to the Core ML format
+(32-bit and 16-bit floating point). YOLOX ships no NOTICE file of its own.
 
 ## 2. open_clip ViT-B-16, laion2b_s34b_b88k (appearance embedder, image part only)
 
@@ -45,8 +47,11 @@ YOLOX ships no NOTICE file of its own.
 
 Changes made by the FlightRisk authors: only the image encoder is used; an L2
 normalisation of its output was added; it was converted to ONNX (32-bit
-floating point and dynamically quantised 8-bit integer weights) and to Core ML
-(16-bit floating point, and 8-bit palettised weights).
+floating point; 8-bit integer weights quantised per output channel, with
+`DequantizeLinear` nodes that turn them back into 32-bit floating point on
+every inference, which is the Android default; and dynamically quantised 8-bit
+integer weights and activations) and to Core ML (16-bit floating point, and
+8-bit palettised weights, which is the iOS default).
 
 ### open_clip
 

@@ -32,8 +32,10 @@ YOLOX model code used for the conversion are vendored in
 `scripts/mobile_models/yolox_vendor/` with their `LICENSE` and a `NOTICE` that
 lists the changes. The licence texts the apps must show are in
 `scripts/mobile_models/NOTICES.md`. The Ultralytics, InsightFace and MobileCLIP
-models described above must never be in a store build;
-`scripts/mobile_models/licence_guard.py` fails a build that contains them. See
+models described above must never be in a store build:
+`scripts/mobile_models/licence_guard.py` runs in the Android and iOS release
+builds and fails any build that carries a model `make_models.py` did not
+install, under any name. See
 [`docs/mobile-models.md`](mobile-models.md), which also lists the open legal
 questions, including the GPL and App Store question.
 

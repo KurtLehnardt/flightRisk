@@ -20,6 +20,13 @@ Files and changes:
                      in 2026: training branch and visualize() removed.
   __init__.py        new; builds YOLOX-S as exps/default/yolox_s.py does.
 
+For conversion, scripts/mobile_models/make_models.py (yolox_export_module)
+runs this network with decode_in_inference switched off and applies the same
+box decoding with constant grids and strides precomputed for the fixed
+640 x 640 input, because the grids upstream builds at run time from the
+feature map shapes do not convert to Core ML. The converted models carry that
+decoding; verify checks it against upstream's own.
+
 The weights these files load (yolox_s.pth, release 0.1.1rc0) are not in this
 repository. scripts/mobile_models/make_models.py downloads them from the
 official release and checks their SHA-256.
