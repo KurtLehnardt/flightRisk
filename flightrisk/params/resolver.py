@@ -846,7 +846,7 @@ def check_resolved(
                 raise _unconfirmed(spec, model, effective, effective.base_default, launcher_present)
         elif effective.source in _NAME_LAYERS:
             log.warning("less-safe %s=%r from %s on %s", param_id, effective.value, effective.source_detail, unit_id)
-    violation = check_constraints(result, model.name)
+    violation = check_constraints(result, model.name, profile=model.profile)
     if violation is not None:
         raise ParamRefused(violation.message)
 

@@ -12,10 +12,11 @@ owns it, so none is skipped silently (PAR-6, plan risk R10).
 Decisions:
 
 1. K-3 (``battery.min_takeoff_pct`` above ``battery.return_floor_pct``) is
-   tagged "from C6" in ``parameters.md``. It is defined here as ``K_3`` so C6
-   only has to add it to ``A1_CONSTRAINTS``, but A1 does not enforce it for
-   any profile: today's ``FLIGHTRISK_MIN_TAKEOFF_BATTERY`` accepts values
-   down to 15 %, below the Tello's 25 % floor, and A1 changes no behaviour.
+   enforced for the Tello profile only in A1, as ``parameters.md`` says;
+   the generic multirotor waits for C6 (``DEFERRED``). Today's
+   ``FLIGHTRISK_MIN_TAKEOFF_BATTERY`` accepts 15 to 25 % on a Tello, under
+   its 25 % floor; those inputs are pinned as refused by ``resolve_unit``,
+   as K-6 and K-8 are.
 2. A constraint over test-adapter facts (K-9, K-10) never names a fact or its
    environment variable in its operator text (design 7.5). Its refusal is
    ``FACT_CONFLICT_REFUSED``, and the values go to the log for developers.
@@ -80,6 +81,8 @@ class ConstraintCheck:
     message: Optional[Callable[[Mapping[str, EffectiveValue], str], str]]
     #: Rows read when they apply to the model and skipped otherwise.
     optional: tuple[str, ...] = ()
+    #: Profiles the check applies to; ``None`` applies it to every profile.
+    profiles: Optional[frozenset[str]] = None
 
     @property
     def id(self) -> str:
@@ -181,6 +184,7 @@ K_3 = ConstraintCheck(
         f"{_term(ev['battery.min_takeoff_pct'])} must be above {_term(ev['battery.return_floor_pct'])} "
         f"on the {model}. Refusing to start."
     ),
+    profiles=frozenset({"tello"}),
 )
 K_6 = ConstraintCheck(
     Constraint("K-6", "link.loss_detect_s >= 1.5 * HEARTBEAT_INTERVAL_S", "K-6"),
@@ -239,11 +243,12 @@ K_16 = ConstraintCheck(
 )
 
 #: The constraints the resolver enforces in A1 (RES-5).
-A1_CONSTRAINTS: tuple[ConstraintCheck, ...] = (K_1, K_2, K_6, K_8, K_9, K_10, K_11, K_12)
+A1_CONSTRAINTS: tuple[ConstraintCheck, ...] = (K_1, K_2, K_3, K_6, K_8, K_9, K_10, K_11, K_12)
 
 #: Every constraint A1 does not enforce, with where it is checked and the PR that brings the check.
 DEFERRED: Mapping[str, tuple[str, str]] = {
-    "K-3": ("resolver", "C6"),
+    # K-3 is enforced for the Tello in A1; only the generic multirotor waits for C6.
+    "K-3": ("resolver, generic_multirotor profile", "C6"),
     "K-4": ("preflight", "B4"),
     "K-5": ("edge energy model", "C1"),
     "K-7": ("ground", "D2"),
@@ -257,9 +262,15 @@ DEFERRED: Mapping[str, tuple[str, str]] = {
 
 
 def check_constraints(values: Mapping[str, EffectiveValue], model_name: str,
-                      checks: tuple[ConstraintCheck, ...] = A1_CONSTRAINTS) -> Optional[Violation]:
-    """Return the first constraint the resolved ``values`` break, or None when all hold."""
+                      checks: tuple[ConstraintCheck, ...] = A1_CONSTRAINTS,
+                      profile: Optional[str] = None) -> Optional[Violation]:
+    """Return the first constraint the resolved ``values`` break, or None when all hold.
+
+    With ``profile``, a check limited to other profiles is skipped.
+    """
     for check in checks:
+        if profile is not None and check.profiles is not None and profile not in check.profiles:
+            continue
         if not all(i in values and _usable(values[i].value) for i in check.ids):
             continue
         plain = {i: values[i].value for i in check.ids}

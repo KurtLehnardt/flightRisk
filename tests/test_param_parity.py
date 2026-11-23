@@ -382,6 +382,10 @@ ACCEPTED_TODAY_REFUSED_BY_RESOLVE_UNIT = frozenset({
     # K-6: a link-loss detect time under 1.5 heartbeat intervals, which today accepts.
     (T, G + "LINK_LOSS_LAND_S", "1.4"),
     (F, G + "LINK_LOSS_LAND_S", "1.4"),
+    # K-3 on the Tello: a minimum takeoff battery at or under the 25 % return floor, which today accepts.
+    (T, G + "MIN_TAKEOFF_BATTERY", "15"),
+    (T, G + "MIN_TAKEOFF_BATTERY", "19"),
+    (T, G + "MIN_TAKEOFF_BATTERY", "20"),
 })
 
 
