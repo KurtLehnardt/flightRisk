@@ -333,11 +333,10 @@ def test_startup_with_missing_weights_falls_back_and_warns():
     switcher, _runner, _, log = make_switcher(exists=no_heridal, start="top_down")
     assert switcher.active == "level" and switcher.fallback_reason == "weights_missing"
     assert log.events("profile_fallback")[0]["requested"] == "top_down"
-    assert switcher.status_fields() == {
-        "detection_profile": "level", "detection_profile_fallback": True,
-        "detection_profile_fallback_reason": "weights_missing", "detection_profile_requested": "top_down",
-        "detection_profile_switchable": True,
-    }
+    assert switcher.status_fields() == {"detection_profile": {
+        "name": "level", "fallback": True, "fallback_reason": "weights_missing", "requested": "top_down",
+        "switchable": True,
+    }}
 
 
 def test_startup_with_a_bad_or_unloadable_profile_runs_the_default():
@@ -577,8 +576,11 @@ def test_telemetry_reports_the_active_profile_and_stays_valid():
                  "drone_id": "drone-1", "battery": 80, "is_flying": False}
     send(telemetry)
     send({"type": "ack", "for": "takeoff", "drone_id": "drone-1"})
-    assert out[0]["detection_profile"] == "level" and out[0]["detection_profile_fallback"] is True
-    assert out[0]["detection_profile_requested"] == "top_down"
+    assert out[0]["detection_profile"] == {
+        "name": "level", "fallback": True, "fallback_reason": "weights_missing", "requested": "top_down",
+        "switchable": True,
+    }
+    assert not [key for key in out[0] if key.startswith("detection_profile_")]
     assert "detection_profile" not in out[1]
     assert "detection_profile" not in telemetry  # the executor's own message is not changed
     fp.validate_message(out[0], proto=1)
@@ -953,11 +955,11 @@ def test_detector_health_is_reported_in_telemetry():
 def test_status_reports_whether_a_switch_is_allowed_now():
     flying = {"now": False}
     switcher, _, _, _ = make_switcher(is_active=lambda: flying["now"])
-    assert switcher.status_fields()["detection_profile_switchable"] is True
+    assert switcher.status_fields()["detection_profile"]["switchable"] is True
     flying["now"] = True
-    assert switcher.status_fields()["detection_profile_switchable"] is False
+    assert switcher.status_fields()["detection_profile"]["switchable"] is False
     unbound, _, _, _ = make_switcher(flies=True)
-    assert unbound.status_fields()["detection_profile_switchable"] is False
+    assert unbound.status_fields()["detection_profile"]["switchable"] is False
 
 
 def test_a_startup_profile_that_fails_reports_what_was_asked_for():
@@ -968,20 +970,20 @@ def test_a_startup_profile_that_fails_reports_what_was_asked_for():
 
     switcher, runner, _, log = make_switcher(start="top_down", loader=fail_top_down)
     assert runner.detection_profile == "default"
-    fields = switcher.status_fields()
-    assert fields["detection_profile_requested"] == "top_down"
-    assert fields["detection_profile_fallback"] is True
-    assert fields["detection_profile_fallback_reason"] == "load_failed"
+    fields = switcher.status_fields()["detection_profile"]
+    assert fields["requested"] == "top_down"
+    assert fields["fallback"] is True
+    assert fields["fallback_reason"] == "load_failed"
     assert log.events("profile_fallback")[0]["requested"] == "top_down"
 
     switcher, _, _, _ = make_switcher(start="nadir")
-    fields = switcher.status_fields()
-    assert fields["detection_profile_requested"] == "nadir"
-    assert fields["detection_profile_fallback_reason"] == "unknown_profile"
+    fields = switcher.status_fields()["detection_profile"]
+    assert fields["requested"] == "nadir"
+    assert fields["fallback_reason"] == "unknown_profile"
 
     switcher, _, _, _ = make_switcher(start="Not A Name!")  # never echoed into telemetry
-    fields = switcher.status_fields()
-    assert "detection_profile_requested" not in fields and fields["detection_profile_fallback"] is False
+    fields = switcher.status_fields()["detection_profile"]
+    assert "requested" not in fields and fields["fallback"] is False
 
 
 def test_a_choice_refused_in_flight_is_applied_once_the_lane_run_has_really_ended():

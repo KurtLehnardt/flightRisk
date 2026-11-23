@@ -153,6 +153,16 @@ from flightrisk.drone.obstacle_sensor import (
     ObstacleSensor,
 )
 from flightrisk.drone.safety import ROOM_LIMITS, SafetyEnvelope, is_finite_number
+from flightrisk.drone.temp_preflight import (
+    EVENT_TEMP_PREFLIGHT,
+    LEVEL_OK,
+    TELEMETRY_TEMP,
+    TempCheck,
+    TempLimits,
+    TempSample,
+    judge_reading,
+    temp_telemetry,
+)
 from flightrisk.fleet_protocol import (
     MANUAL_DEADMAN_S,
     MAX_TEXT_LEN,
@@ -276,6 +286,7 @@ class LaneExecutor(
         obstacle_sidesteps: int = 0,
         obstacle_avoid_budget_s: float = OBSTACLE_AVOID_BUDGET_S,
         obstacle_settle_s: float = OBSTACLE_SETTLE_S,
+        temp_limits: TempLimits | None = None,
     ):
         """Bind the executor to *drone* inside *envelope*.
 
@@ -321,6 +332,11 @@ class LaneExecutor(
           before a frame counts (``FLIGHTRISK_OBSTACLE_SETTLE_S``, which the
           edge passes). A gate's ``after`` is the gate's start less this, so
           the sensor never judges a frame older than the gate.
+
+        *temp_limits* are the warn and refusal levels of the temperature
+        check before every takeoff (``temp_preflight``; the defaults when
+        None). Only a drone with ``state_temperature()`` (the Tello) is
+        checked: see ``_takeoff_temp_refusal``.
         """
         self.drone = drone
         self.envelope = envelope
@@ -448,6 +464,11 @@ class LaneExecutor(
         # Operator text of the last takeoff refused because the drone was
         # unreachable; written and read on the flight sequence thread.
         self._unreachable_detail: str | None = None
+        # The temperature check before a takeoff (``_takeoff_temp_refusal``):
+        # its levels, and the outcome of the last check (None before the
+        # first), which telemetry reports until the next one.
+        self._temp_limits = temp_limits if temp_limits is not None else TempLimits()
+        self._temp_check: TempCheck | None = None
 
         # Obstacle sensing (``lane_flight``, ``lane_steps``). The sensor and
         # its settings are fixed for the executor's life.
@@ -811,6 +832,82 @@ class LaneExecutor(
         if callable(reader):
             return reader()
         return getattr(self.drone.state, "height", None)
+
+    # ------------------------------------------------------------------
+    # Temperature check before a takeoff (``temp_preflight``)
+    # ------------------------------------------------------------------
+
+    def temp_status(self) -> dict[str, Any]:
+        """The ``temp_preflight`` telemetry field, or nothing for a drone that is never checked.
+
+        ``lane_monitor.telemetry()`` merges it into every telemetry message.
+        It carries the check before the last takeoff (``level`` None before
+        the first) and the live reading of the newest fresh state packet
+        (``temp_preflight.temp_telemetry``), so the drone card shows both and
+        the ground can refuse a start for a drone that is too hot now. A
+        drone with ``state_temperature()`` (the Tello) always reports it; any
+        other drone only once a check was recorded. Reads the state packet
+        only; never sends anything to the drone.
+        """
+        with self._lock:
+            check = self._temp_check
+        reader = getattr(self.drone, "state_temperature", None)
+        if check is None and not callable(reader):
+            return {}
+        live = self._state_temperature(reader).reading if callable(reader) else None
+        return {TELEMETRY_TEMP: temp_telemetry(check, self._temp_limits, live)}
+
+    @staticmethod
+    def _state_temperature(reader: Any) -> TempSample:
+        """``reader()`` (``TelloController.state_temperature``), or no reading when it fails. Never raises."""
+        try:
+            sample = reader()
+        except Exception as exc:  # noqa: BLE001 - an unreadable temperature warns, never refuses
+            return TempSample(None, f"state_temperature failed: {type(exc).__name__}: {exc}")
+        if not isinstance(sample, TempSample):
+            return TempSample(None, f"state_temperature returned {type(sample).__name__}")
+        return sample
+
+    def _takeoff_temp_refusal(self) -> str | None:
+        """Check the drone's temperature before a takeoff: the refusal's operator text, or None to go on.
+
+        Only a drone with ``state_temperature()`` (``TelloController``) is
+        checked; for any other drone this returns None, checks nothing and
+        reports nothing. The reading is the ``templ``/``temph`` of the
+        newest state packet, and only a fresh one: nothing is sent on the
+        command channel, so no reply can be taken for the takeoff's (Tello
+        replies carry no command id). It is judged against the levels
+        (``temp_preflight.judge_reading``): at or above the refusal level
+        the takeoff is refused with nothing sent; at or above the warn
+        level, and when there is no fresh reading, the check is logged as a
+        warning and the takeoff goes on. A reading that could not be taken
+        never refuses. Every check is logged as ``edge_temp_preflight`` and
+        kept for telemetry (``temp_status``). Runs first in every takeoff
+        (``_do_takeoff``), the operator's ``manual_takeoff`` included, so
+        the drone link, sensor and battery checks stay last. Never raises.
+        """
+        reader = getattr(self.drone, "state_temperature", None)
+        if not callable(reader):
+            return None
+        sample = self._state_temperature(reader)
+        check = judge_reading(sample.reading, self._temp_limits, detail=sample.detail)
+        with self._lock:
+            self._temp_check = check
+            kind = self._active_kind
+        text = check.operator_text()
+        fields = {"drone_id": self.drone_id, "kind": kind, **check.log_fields()}
+        if check.level == LEVEL_OK:
+            self._log.info(EVENT_TEMP_PREFLIGHT, **fields)
+            return None
+        self._log.warning(EVENT_TEMP_PREFLIGHT, operator_text=text, **fields)
+        if not check.refused:
+            return None
+        self._log.warning(
+            "edge_takeoff_refused", drone_id=self.drone_id, reason="temperature", kind=kind,
+            high_c=check.reading.high_c if check.reading else None, refuse_c=self._temp_limits.refuse_c,
+            detail=text,
+        )
+        return text[:MAX_TEXT_LEN]
 
     # ------------------------------------------------------------------
     # Lifecycle

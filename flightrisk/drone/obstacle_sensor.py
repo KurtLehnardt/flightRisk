@@ -113,10 +113,11 @@ OBSTACLE_RELOOK = 2
 #: Allowed ``FLIGHTRISK_OBSTACLE_RELOOK``.
 OBSTACLE_RELOOK_RANGE = (0, 5)
 #: Sideways distance in centimetres of a sidestep around an obstacle on the
-#: lane. The edge's default; ``FLIGHTRISK_OBSTACLE_SIDESTEP_CM`` changes it,
-#: and 0 switches the sidestep off. Any other value must be a move the drone
-#: can fly (at least ``OBSTACLE_STEP_MIN_CM``).
-OBSTACLE_SIDESTEP_CM = 50
+#: lane. 0, the edge's default, means the sidestep is off (Tello obstacle
+#: tuning is tabled, and with an uncalibrated depth threshold every gate reads
+#: blocked). ``FLIGHTRISK_OBSTACLE_SIDESTEP_CM`` switches it on: any other
+#: value must be a move the drone can fly (at least ``OBSTACLE_STEP_MIN_CM``).
+OBSTACLE_SIDESTEP_CM = 0
 #: Allowed ``FLIGHTRISK_OBSTACLE_SIDESTEP_CM`` besides 0.
 OBSTACLE_SIDESTEP_RANGE_CM = (OBSTACLE_STEP_MIN_CM, OBSTACLE_STEP_MAX_CM)
 #: Sidestep attempts allowed on one lane. The edge's default;
