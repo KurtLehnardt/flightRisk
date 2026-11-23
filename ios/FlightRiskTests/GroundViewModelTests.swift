@@ -503,6 +503,25 @@ final class GroundViewModelTests: XCTestCase {
         XCTAssertTrue(vm.linkStatus.isConnected)
     }
 
+    func testSceneBecomingActiveDoesNotRetryAKeyTheGroundRefused() async {
+        harness.configure()
+        vm.setEnabled(true)
+        await harness.waitUntil("a transport") { self.harness.recorder.transports.count == 1 }
+        let t = harness.recorder.transports[0]
+        t.push(GroundTestFrames.open)
+        await harness.waitUntil("the namespace connect") { t.sent.contains { $0.hasPrefix("40") } }
+        t.push(GroundTestFrames.connectError)
+        await harness.waitUntil("wrong key") { self.vm.linkStatus == .wrongKey }
+        let before = harness.recorder.transports.count
+        vm.sceneDidBecomeActive()
+        await harness.settle()
+        XCTAssertEqual(harness.recorder.transports.count, before, "the same refused key is not sent again")
+        XCTAssertEqual(vm.linkStatus, .wrongKey)
+        // The banner's Retry still works.
+        vm.retryConnection()
+        await harness.waitUntil("retry") { self.harness.recorder.transports.count == before + 1 }
+    }
+
     func testSceneBecomingActiveNeverConnectsALinkThatIsOffOrInTheBackground() async {
         harness.configure()
         vm.sceneDidBecomeActive()

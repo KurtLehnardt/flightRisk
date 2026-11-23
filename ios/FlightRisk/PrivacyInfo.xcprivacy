@@ -19,6 +19,9 @@
 	  model and refuses the download, with a message, when there is not enough.
 	- File timestamp (C617.1): swift-transformers (Hub/Downloader.swift) reads the attributes of a
 	  partly downloaded model file inside the app container to resume the download.
+	- System boot time (35F9.1): precautionary. Nothing in the app or its packages calls a boot time
+	  API, but mlx-swift's bundled metal-cpp contains a "systemUptime" selector string that Apple's
+	  scanner may flag (ITMS-91053). Remove this entry only if a later build no longer contains it.
 -->
 <plist version="1.0">
 <dict>
@@ -77,6 +80,14 @@
 			<key>NSPrivacyAccessedAPITypeReasons</key>
 			<array>
 				<string>C617.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>35F9.1</string>
 			</array>
 		</dict>
 	</array>

@@ -68,25 +68,25 @@ final class PersonDetector {
             } catch {
                 logger.warning("Failed to load CoreML model '\(modelName)': \(error.localizedDescription)")
                 self.vnModel = nil
-                self.unavailableReason = Self.loadFailedReason(modelName: modelName)
+                self.unavailableReason = Self.loadFailedReason()
             }
         } else {
             logger.warning("CoreML model '\(modelName).mlmodelc' not found in bundle — detector disabled")
             self.vnModel = nil
-            self.unavailableReason = Self.missingModelReason(modelName: modelName)
+            self.unavailableReason = Self.missingModelReason()
         }
     }
 
     /// The banner text when the model is not in the app bundle.
-    static func missingModelReason(modelName: String) -> String {
-        "This build of FlightRisk does not include the person detection model "
-            + "(\(modelName)). The camera can run, but no one will be found or matched. "
+    static func missingModelReason() -> String {
+        "Person detection model not installed. This build of FlightRisk does not include the person detection model. "
+            + "The camera can run, but no one will be found or matched. "
             + "Install a build that includes the model."
     }
 
     /// The banner text when the model is in the bundle but could not be loaded.
-    static func loadFailedReason(modelName: String) -> String {
-        "The person detection model (\(modelName)) could not be loaded on this device. "
+    static func loadFailedReason() -> String {
+        "Person detection model not loaded. The person detection model could not be loaded on this device. "
             + "The camera can run, but no one will be found or matched. "
             + "Restart the app; if this stays, reinstall it."
     }

@@ -68,22 +68,20 @@ struct SearchView: View {
             // ----- Layer 11: Person detection unavailable -----
             // Shown whether or not a search is running, so the missing model is
             // never silent.
-            if let reason = viewModel.detectionUnavailableReason {
-                VStack {
+            // ----- Reasoning status: "Cloud active" indicator and fallback notice -----
+            // Both banners share one stack, so they never overlap, however large the
+            // Dynamic Type size is.
+            VStack(spacing: 8) {
+                if let reason = viewModel.detectionUnavailableReason {
                     DetectionUnavailableBanner(reason: reason)
                         .padding(.horizontal, 16)
-                        .padding(.top, 100)
-                    Spacer()
+                        .allowsHitTesting(false)
                 }
-            }
-
-            // ----- Reasoning status: "Cloud active" indicator and fallback notice -----
-            VStack {
-                Spacer().frame(height: 60)
                 ReasoningStatusBanner()
+                    .allowsHitTesting(false)
                 Spacer()
             }
-            .allowsHitTesting(false)
+            .padding(.top, 60)
 
             // ----- Layers 8-9: Bottom section -----
             VStack {

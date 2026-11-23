@@ -13,6 +13,11 @@ struct ContentView: View {
     let pipeline: SearchPipeline?
     let llmSelector: LlmSelector?
 
+    /// The one ground view model of this screen. The Ground tab and the scene hook both use it,
+    /// so replacing it (a demo mode, a test) is a change in one place.
+    private let groundViewModel: GroundViewModel = .live
+
+
     var body: some View {
         if onboardingComplete {
             TabView(selection: $selectedTab) {
@@ -56,7 +61,7 @@ struct ContentView: View {
                         Label("Settings", systemImage: "gearshape")
                     }
                     .tag(2)
-                GroundView(viewModel: .live)
+                GroundView(viewModel: groundViewModel)
                     .tabItem {
                         Label("Ground", systemImage: "antenna.radiowaves.left.and.right")
                     }
@@ -67,7 +72,7 @@ struct ContentView: View {
                 // backoff wait. Only here, where the Ground tab exists, so the
                 // onboarding screens never create the ground view model.
                 if phase == .active {
-                    GroundViewModel.live.sceneDidBecomeActive()
+                    groundViewModel.sceneDidBecomeActive()
                 }
             }
         } else {

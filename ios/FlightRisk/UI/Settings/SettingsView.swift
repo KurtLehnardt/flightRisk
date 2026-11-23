@@ -551,6 +551,8 @@ struct SettingsView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
+            // The only link to the policy once onboarding is over.
+            Link("Privacy Policy", destination: PrivacyNotice.policyURL)
         } header: {
             Text("About")
         }

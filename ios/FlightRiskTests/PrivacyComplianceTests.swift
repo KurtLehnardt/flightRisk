@@ -172,6 +172,16 @@ final class PrivacyComplianceTests: XCTestCase {
         try XCTSkipIf(value == nil, "tests are not running inside the app bundle")
         XCTAssertFalse(value!.contains("$("), "the build setting was expanded")
         XCTAssertEqual(PrivacyNotice.policyURL.scheme, "https")
+        // A value the policy parser rejects would silently become the default, so the expanded
+        // value must be exactly what the policy address resolves to.
+        XCTAssertEqual(PrivacyNotice.policyURL.absoluteString, value!.trimmingCharacters(in: .whitespacesAndNewlines),
+                       "the configured policy address was rejected and replaced by the default")
+    }
+
+    func testSettingsLinksToThePrivacyPolicy() throws {
+        let source = try String(contentsOf: iosDirectory.appendingPathComponent("FlightRisk/UI/Settings/SettingsView.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("Link(\"Privacy Policy\", destination: PrivacyNotice.policyURL)"),
+                      "the policy must stay reachable from Settings after onboarding")
     }
 
     // MARK: - Store readiness
@@ -199,12 +209,14 @@ final class PrivacyComplianceTests: XCTestCase {
             "NSPrivacyAccessedAPICategoryUserDefaults": ["CA92.1"],
             "NSPrivacyAccessedAPICategoryDiskSpace": ["E174.1"],
             "NSPrivacyAccessedAPICategoryFileTimestamp": ["C617.1"],
+            "NSPrivacyAccessedAPICategorySystemBootTime": ["35F9.1"],
         ])
 
         let collected = try XCTUnwrap(manifest["NSPrivacyCollectedDataTypes"] as? [[String: Any]])
         let types = Set(collected.compactMap { $0["NSPrivacyCollectedDataType"] as? String })
         XCTAssertEqual(types, ["NSPrivacyCollectedDataTypePhotosorVideos", "NSPrivacyCollectedDataTypeOtherUserContent"])
         for entry in collected {
+            XCTAssertEqual(entry["NSPrivacyCollectedDataTypeLinked"] as? Bool, true)
             XCTAssertEqual(entry["NSPrivacyCollectedDataTypeTracking"] as? Bool, false)
             XCTAssertEqual(entry["NSPrivacyCollectedDataTypePurposes"] as? [String], ["NSPrivacyCollectedDataTypePurposeAppFunctionality"])
         }
@@ -226,13 +238,14 @@ final class PrivacyComplianceTests: XCTestCase {
 
     // MARK: - Missing detection model
 
-    func testAMissingDetectionModelIsReportedNotSilent() {
+    func testAMissingDetectionModelIsReportedNotSilent() throws {
         let detector = PersonDetector(modelName: "NoSuchDetectionModel")
         XCTAssertFalse(detector.isAvailable)
-        let reason = try? XCTUnwrap(detector.unavailableReason)
-        XCTAssertEqual(reason, PersonDetector.missingModelReason(modelName: "NoSuchDetectionModel"))
-        XCTAssertTrue(reason?.contains("does not include the person detection model") == true)
-        XCTAssertTrue(reason?.contains("NoSuchDetectionModel") == true)
-        XCTAssertTrue(reason?.contains("no one will be found") == true)
+        let reason = try XCTUnwrap(detector.unavailableReason)
+        XCTAssertEqual(reason, PersonDetector.missingModelReason())
+        XCTAssertTrue(reason.contains("Person detection model not installed"))
+        XCTAssertTrue(reason.contains("does not include the person detection model"))
+        XCTAssertFalse(reason.contains("YOLO"), "no internal model name in text shown to the user")
+        XCTAssertTrue(reason.contains("no one will be found"))
     }
 }

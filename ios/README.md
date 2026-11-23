@@ -49,6 +49,12 @@ Do not pick the team in Xcode's Signing & Capabilities pane: Xcode would write i
 
 The onboarding notice links to the address in the `FLIGHTRISK_PRIVACY_POLICY_URL` build setting (default: the policy on GitHub). It reaches the app through the `FlightRiskPrivacyPolicyURL` key in `Info.plist`; an address that is not `https://` falls back to the default. Change it in `project.yml`, or override it in `Signing.local.xcconfig` (write `https:/$()/...`, because `//` starts a comment in an xcconfig file).
 
+A `//` in an xcconfig value starts a comment, so `FLIGHTRISK_PRIVACY_POLICY_URL = https://example.com/privacy` is cut off at `https:` and the app falls back to the default address without any error. Write it as `https:/$()/example.com/privacy`: the empty `$()` stops the two slashes from being read as a comment. `PrivacyComplianceTests` compares the address in the built app with the build setting, and a debug build stops with an assertion if the address was rejected.
+
+### Build number
+
+`CFBundleVersion` is `$(CURRENT_PROJECT_VERSION)`, set in `project.yml` (currently 1). App Store Connect rejects an upload whose build number is not higher than the previous one for the same version, so raise it for each upload: change `CURRENT_PROJECT_VERSION` in `project.yml` and run `xcodegen`, or, from `ios/`, run `xcrun agvtool new-version -all <n>` (which writes the number into the project file; keep `project.yml` in step so a later `xcodegen` does not undo it). The marketing version (`CFBundleShortVersionString`) is separate.
+
 ### App icon
 
 `FlightRisk/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png` is a full-bleed 1024 x 1024 crop of `branding/flightRiskIcon.png`, with no alpha channel. Make it again after changing the artwork:

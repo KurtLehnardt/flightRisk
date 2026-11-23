@@ -8,8 +8,8 @@ artwork, moves in far enough that no light corner or shadow is left, and returns
 crop that fits. The drone, its propellers, the beam and the pin stay whole; the script checks that
 before it writes anything.
 
-The crop is the same for every platform, so the Android launcher icon can be made from the same
-function (``--size`` and ``--out``), or by importing ``full_bleed_square`` from this file.
+This script makes the iOS App Store icon. ``--size`` and ``--out`` write other sizes. The Android
+launcher icon has its own generator; merging the two generators is a follow-up once both are on main.
 
 Pillow is needed. The repository's development virtual environment has it:
 

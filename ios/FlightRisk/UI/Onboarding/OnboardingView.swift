@@ -378,7 +378,19 @@ enum PrivacyNotice {
     static let defaultPolicyURL = URL(string: "https://github.com/KurtLehnardt/flightRisk/blob/main/docs/privacy-policy.md")!
 
     /// The privacy policy the notice links to. Every in-app link to the policy uses this.
-    static let policyURL: URL = policyURL(fromInfoValue: Bundle.main.object(forInfoDictionaryKey: policyURLInfoKey))
+    static let policyURL: URL = {
+        let value = Bundle.main.object(forInfoDictionaryKey: policyURLInfoKey)
+        let url = policyURL(fromInfoValue: value)
+        #if DEBUG
+        // A value the build setting could not supply (an unexpanded setting, a value cut off by
+        // a `//` comment in an xcconfig file, a non-https address) silently falls back to the
+        // default. Say so while developing.
+        if url == defaultPolicyURL, let text = value as? String, text != defaultPolicyURL.absoluteString {
+            assertionFailure("FlightRiskPrivacyPolicyURL is \"\(text)\" and was rejected; using the default policy address.")
+        }
+        #endif
+        return url
+    }()
 
     /// The policy address from an Info.plist value: an https URL with a host, or the default.
     static func policyURL(fromInfoValue value: Any?) -> URL {
@@ -386,7 +398,7 @@ enum PrivacyNotice {
               !text.isEmpty,
               let url = URL(string: text),
               url.scheme?.lowercased() == "https",
-              let host = url.host, !host.isEmpty
+              let host = url.host(percentEncoded: false), !host.isEmpty
         else { return defaultPolicyURL }
         return url
     }

@@ -23,6 +23,9 @@ settings:
     # FlightRiskPrivacyPolicyURL. Set it here, or in Config/Signing.local.xcconfig, once the
     # policy is hosted. DEVELOPMENT_TEAM is not set here: it comes from Config/Signing.xcconfig.
     FLIGHTRISK_PRIVACY_POLICY_URL: https://github.com/KurtLehnardt/flightRisk/blob/main/docs/privacy-policy.md
+    # The build number (CFBundleVersion). Raise it for every App Store Connect upload; see
+    # ios/README.md, "Build number".
+    CURRENT_PROJECT_VERSION: "1"
 targets:
   FlightRisk:
     type: application
@@ -58,7 +61,7 @@ targets:
       properties:
         CFBundleDisplayName: FlightRisk
         CFBundleShortVersionString: "1.0.0"
-        CFBundleVersion: "1"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         ITSAppUsesNonExemptEncryption: false
         FlightRiskPrivacyPolicyURL: "$(FLIGHTRISK_PRIVACY_POLICY_URL)"
         UILaunchScreen: {}
