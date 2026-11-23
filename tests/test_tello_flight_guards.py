@@ -745,6 +745,50 @@ def test_an_unknown_command_reply_naming_a_command_is_stray():
     assert not tello_module._stray_reply("error Motor stop")
 
 
+@pytest.mark.parametrize(
+    "reply",
+    ["85~88C", "50~53c", " -2 ~ 3 C ", "78", "100.0", "10dm", "100mm", "12s", "220.123456",
+     "pitch:0;roll:0;yaw:-2;", "agx:-3.00;agy:1.00;agz:-1000.00;"],
+)
+def test_query_shaped_replies_are_recognised(reply):
+    assert tello_module._query_reply(reply)
+    assert tello_module._stray_reply(reply)
+
+
+@pytest.mark.parametrize(
+    "reply", ["ok", "OK", "error", "error No valid imu", "error Not joystick", "error Motor stop",
+              "unknown command: stop", "0TQDG12345", "85~88C ok", "~C", ""],
+)
+def test_flight_answers_are_not_query_shaped(reply):
+    assert not tello_module._query_reply(reply)
+
+
+def test_a_late_temperature_reply_is_not_the_takeoffs_answer(tello_on_wire, caplog):
+    """A ``temp?`` answered after its own wait ended ("85~88C") is skipped; the takeoff's own 'ok' decides."""
+    ctrl, wire = tello_on_wire()
+    wire.script = lambda command: [("85~88C", 0.02), ("ok", 0.3)] if command == "takeoff" else None
+    with caplog.at_level(logging.INFO, logger="flightrisk.drone.tello"):
+        assert ctrl.takeoff() is True
+    assert [(r["reply"], r["verdict"]) for r in _takeoff_replies(caplog)] == [
+        ("85~88C", "skipped_stray"), ("ok", "accepted"),
+    ]
+
+
+def test_a_late_query_reply_is_not_a_moves_answer(tello_on_wire, caplog):
+    ctrl, wire = tello_on_wire()
+    assert ctrl.takeoff() is True
+    wire.script = lambda command: [("85~88C", 0.02), ("ok", 0.2)] if command == "forward 50" else None
+    with caplog.at_level(logging.INFO, logger="flightrisk.drone.tello"):
+        assert ctrl.move("forward", 50) is True
+    skipped = [dict(r.fr_fields) for r in caplog.records if getattr(r, "fr_event", None) == "tello_reply_skipped"]
+    assert [(s["command"], s["reply"]) for s in skipped] == [("forward 50", "85~88C")]
+    # The move's own refusal still raises, after a skipped battery answer.
+    wire.script = lambda command: [("78", 0.02), ("error No valid imu", 0.1)] if command == "down 60" else None
+    with pytest.raises(CommandRefusedError) as raised:
+        ctrl.move("down", 60)
+    assert raised.value.reply == "error No valid imu"
+
+
 def test_a_refused_move_raises_command_refused_error_with_the_reply(tello_on_wire):
     ctrl, wire = tello_on_wire()
     assert ctrl.takeoff() is True

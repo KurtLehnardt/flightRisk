@@ -12,6 +12,7 @@ flight logic without hardware.
 import contextlib
 import logging
 import math
+import re
 import threading
 import time
 import weakref
@@ -406,14 +407,37 @@ def _lifted(reading: _StateReading) -> bool:
     return not (_tof_valid(reading.tof) and reading.tof <= _GROUND_TOF_CM)
 
 
-def _stray_reply(reply: str) -> bool:
-    """Whether a reply can never be the answer to a takeoff: "unknown command", empty, or not printable text.
+# The answers of the Tello SDK's read commands. A flight command is only ever
+# answered "ok" or "error ...", so a reply of one of these shapes is the late
+# answer to a query (``temp?``, ``battery?``, ``height?``, ...) sent before it:
+# * ``temp?``: a range in degrees Celsius, such as "85~88C";
+# * ``battery?``, ``speed?``, ``wifi?``, ``sdk?``, ``baro?``, ``height?``,
+#   ``tof?``, ``time?``: a number with an optional unit, such as "78",
+#   "100.0", "10dm", "100mm" or "12s";
+# * ``attitude?`` and ``acceleration?``: ``key:value;`` pairs, such as
+#   "pitch:0;roll:0;yaw:-2;".
+_QUERY_REPLY_RES = (
+    re.compile(r"^\s*-?\d+\s*~\s*-?\d+\s*C?\s*$", re.IGNORECASE),
+    re.compile(r"^\s*-?\d+(?:\.\d+)?\s*(?:dm|cm|mm|m|s|%|c)?\s*$", re.IGNORECASE),
+    re.compile(r"^\s*(?:[a-z]+\s*:\s*-?\d+(?:\.\d+)?\s*;\s*)+$", re.IGNORECASE),
+)
 
-    "unknown command" counts with or without the command it names after it
-    (a standard Tello answers "unknown command: stop"): a takeoff is a
-    command every Tello knows.
+
+def _query_reply(reply: str) -> bool:
+    """Whether *reply* has the shape of the answer to a read command (``_QUERY_REPLY_RES``), never a flight command's."""
+    return any(pattern.match(reply) for pattern in _QUERY_REPLY_RES)
+
+
+def _stray_reply(reply: str) -> bool:
+    """Whether a reply can never be the answer to a takeoff.
+
+    That is "unknown command", the late answer to a query (``_query_reply``,
+    such as "85~88C" from a ``temp?`` that timed out), an empty reply, or
+    one that is not printable text. "unknown command" counts with or
+    without the command it names after it (a standard Tello answers
+    "unknown command: stop"): a takeoff is a command every Tello knows.
     """
-    if not reply or reply.lower().startswith("unknown command"):
+    if not reply or reply.lower().startswith("unknown command") or _query_reply(reply):
         return True
     return "�" in reply or not reply.isprintable()
 
@@ -1830,9 +1854,10 @@ class TelloController:
         stray replies and checks a bare ``error`` against the state stream.
         A takeoff that reads a reply queued after a land sent its
         interrupting ``stop`` returns False: that reply may answer the stop.
-        A reply other than ``ok`` raises ``CommandRefusedError`` (a
-        ``RuntimeError`` carrying the command and the reply). Nothing is
-        retried.
+        A move or rotate skips a reply shaped like the late answer to a
+        query (``_await_flight_reply``). A reply other than ``ok`` raises
+        ``CommandRefusedError`` (a ``RuntimeError`` carrying the command and
+        the reply). Nothing is retried.
         """
         tello = self.tello
         self._pace_commands()
@@ -1879,7 +1904,7 @@ class TelloController:
                     # not decided by it (see _TAKEOFF_CONFIRM_S).
                     return False
             else:
-                reply = self._await_reply(responses, timeout_s)
+                reply = self._await_flight_reply(responses, timeout_s, command)
                 accepted = reply is not None and reply.lower() == "ok"
         finally:
             if is_takeoff:
@@ -1970,6 +1995,26 @@ class TelloController:
                 continue
             self._log_takeoff_reply(reply, age_ms, "refused")
             return _TakeoffAnswer(reply, False)
+
+    def _await_flight_reply(self, responses: list, timeout_s: float, command: str) -> str | None:
+        """The reply to a move or rotate: the first one read that is not the late answer to a query.
+
+        Caller holds ``_cmd_lock``. A reply shaped like the answer to a read
+        command (``_query_reply``, such as "85~88C" from a ``temp?`` whose
+        own wait ended) is logged as ``tello_reply_skipped`` and the wait goes
+        on, within ``timeout_s`` of the call. None when no other reply came.
+        """
+        deadline = time.monotonic() + timeout_s
+        while True:
+            reply = self._await_reply(responses, max(0.0, deadline - time.monotonic()))
+            if reply is None or not _query_reply(reply):
+                return reply
+            log_event(
+                _log, logging.INFO, "tello_reply_skipped",
+                f"[{self.name}] reply {_log_text(reply)!r} to '{command}' skipped: the late answer to a query",
+                category="drone_comm", component="tello", drone_id=self.name, command=command,
+                reply=_log_text(reply),
+            )
 
     def _read_after_land_command(self) -> bool:
         """Count one reply read by a takeoff; True if it was queued after a land's interrupting command."""
