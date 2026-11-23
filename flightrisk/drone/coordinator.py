@@ -119,6 +119,11 @@ from flightrisk.drone.obstacle_sensor import (
     TELEMETRY_STATE,
 )
 from flightrisk.drone.plan_paths import closest_approach
+from flightrisk.drone.safety import (
+    DEFAULT_ALT_SLOTS_CM,
+    DEFAULT_MIN_TAKEOFF_BATTERY,
+    min_takeoff_battery_from_env,
+)
 from flightrisk.drone.temp_preflight import TELEMETRY_TEMP, live_refusal, temp_status
 from flightrisk.drone.search import split_parallel_track_zones
 from flightrisk.fleet_protocol import MAX_TEXT_LEN
@@ -131,16 +136,15 @@ SYNC_ROUNDS = 8
 DEFAULT_ZONE_GAP_CM = 100
 """Empty corridor between neighbouring zones."""
 
-DEFAULT_ALT_SLOTS_CM = (100, 130)
-"""Altitude slots given to zones in turn when no per-drone slot is set.
+# DEFAULT_ALT_SLOTS_CM (100 and 130 cm, in ``flightrisk.drone.safety``) are the altitude slots given to
+# zones in turn when no per-drone slot is set. The second slot was 160 cm until a Tello at that slot hit
+# a ceiling (docs/ceiling-and-altitude.md).
 
-Both are at or below the default ceiling limit of 140 cm (200 cm ceiling
-minus 60 cm margin, ``flightrisk.drone.safety``). The second slot was 160 cm
-until a Tello at that slot hit a ceiling (docs/ceiling-and-altitude.md).
-"""
-
-MIN_START_BATTERY = 30
-"""Lowest battery percentage that lets a drone take part in ``start()``."""
+# Deprecated alias, kept so an importer that still uses the old name (the single-drone start in
+# flightrisk/dashboard/single_search.py from PR #200) keeps working. It is only the default of the
+# minimum; the value that applies, with the FLIGHTRISK_MIN_TAKEOFF_BATTERY override, comes from
+# ``flightrisk.drone.safety.min_takeoff_battery_from_env``.
+MIN_START_BATTERY = DEFAULT_MIN_TAKEOFF_BATTERY
 
 TELEMETRY_FRESH_S = 2.0
 # Edge refusals of an assign_lanes that are only true for now: the chunk waits
@@ -582,6 +586,9 @@ class _DroneState:
     lost_at: float | None = None
     offer: _Offer | None = None
     nack_reason: str | None = None
+    # The smallest fence half-width this edge reported in a geofence nack; later re-tasks are planned
+    # against the smaller of it and the coordinator's own fence.
+    reported_fence_cm: float | None = None
     ping_t1: float | None = None
     ping_event: threading.Event | None = None
     pong: tuple[float, float, float] | None = None
@@ -794,7 +801,12 @@ class FleetCoordinator:
         dedup_radius_cm: Detections closer than this on the shared grid are
             merged, whichever drones reported them.
         zone_gap_cm: Empty corridor between neighbouring zones.
-        min_battery: Lowest battery percentage allowed at ``start()``.
+        min_battery: Lowest battery percentage allowed at ``start()`` and for
+            a re-flight receiver. ``None`` (the default) reads
+            ``FLIGHTRISK_MIN_TAKEOFF_BATTERY`` through
+            ``min_takeoff_battery_from_env``, like the edges; a malformed
+            value raises ``ValueError``, so a ground that cannot tell the
+            edges' minimum does not start.
         clock: Monotonic ground clock in seconds.
         on_event: Optional callback ``(event_name, payload)`` for the
             dashboard. It receives ``fleet_detection`` for each new merged
@@ -840,7 +852,7 @@ class FleetCoordinator:
         dedup_radius_cm: float = 80,
         *,
         zone_gap_cm: int = DEFAULT_ZONE_GAP_CM,
-        min_battery: float = MIN_START_BATTERY,
+        min_battery: float | None = None,
         clock: Callable[[], float] = time.monotonic,
         on_event: Callable[[str, dict], None] | None = None,
         geofence_cm: float | None = None,
@@ -882,7 +894,7 @@ class FleetCoordinator:
         self._alt_slot_of = alt_slot_of
         self._dedup_radius_cm = float(dedup_radius_cm)
         self._zone_gap_cm = int(zone_gap_cm)
-        self._min_battery = float(min_battery)
+        self._min_battery = float(min_takeoff_battery_from_env() if min_battery is None else min_battery)
         self._clock = clock
         self._on_event = on_event
         self._geofence_cm = float(geofence_cm) if geofence_cm is not None else None
@@ -1712,6 +1724,11 @@ class FleetCoordinator:
                 )
                 return
             logger.warning("%s refused its assign_lanes (%s)", drone_id, described)
+            reported = _number(msg.get("geofence_cm")) if reason == "geofence" else None
+            if reported is not None and reported > 0:
+                state.reported_fence_cm = (
+                    reported if state.reported_fence_cm is None else min(state.reported_fence_cm, reported)
+                )
             if state.offer is not None:
                 # Whether the refusal is transient depends on the bare reason;
                 # what is recorded and shown is the described one.
@@ -2895,11 +2912,17 @@ class FleetCoordinator:
             return f"waiting for {rid}, which is not flying"
         return f"waiting for {rid} to finish its own lanes"
 
+    def _fence_cm(self, drone_id: str) -> float | None:
+        """The fence half-width to plan against: the smaller of the configured one and the edge's reported one."""
+        known = [f for f in (self._geofence_cm, self._drones[drone_id].reported_fence_cm) if f is not None]
+        return min(known) if known else None
+
     def _inside_fence(self, drone_id: str, point: tuple[float, float]) -> bool:
-        if self._geofence_cm is None:
+        fence = self._fence_cm(drone_id)
+        if fence is None:
             return True
         origin = self._origin(self._drones[drone_id])
-        limit = self._geofence_cm + _FENCE_TOLERANCE_CM
+        limit = fence + _FENCE_TOLERANCE_CM
         return abs(point[0] - origin[0]) <= limit and abs(point[1] - origin[1]) <= limit
 
     def _path_inside_fence(self, drone_id: str, lanes: list[dict]) -> bool:
@@ -2909,7 +2932,7 @@ class FleetCoordinator:
         with its cuts). Lanes are straight moves and the geofence is a
         square, so checking the end of every move covers the whole path.
         """
-        if self._geofence_cm is None:
+        if self._fence_cm(drone_id) is None:
             return True
         return all(self._inside_fence(drone_id, point) for point in self._actual_path_locked(drone_id, lanes)[1:])
 
@@ -3468,8 +3491,8 @@ class FleetCoordinator:
                 why[rid] = "is not flying"
             elif battery is None:
                 why[rid] = "reports no battery"
-            elif battery < MIN_START_BATTERY:
-                why[rid] = f"has battery {battery:g}%, below {MIN_START_BATTERY}%"
+            elif battery < self._min_battery:
+                why[rid] = f"has battery {battery:g}%, below {self._min_battery:g}%"
             elif sensing != SENSING_STEPPED:
                 why[rid] = (f"senses obstacles {sensing:.40}" if isinstance(sensing, str)
                             else "reports no obstacle sensing")
@@ -3489,7 +3512,7 @@ class FleetCoordinator:
         ``_receivers()`` (not lost, part of the plan, not held for manual
         control) without the cutting drone, keeping only drones whose
         telemetry from the last ``TELEMETRY_FRESH_S`` seconds shows
-        ``is_flying: true``, a battery of at least ``MIN_START_BATTERY``
+        ``is_flying: true``, a battery of at least the start minimum (``min_battery``)
         percent, ``obstacle_sensing`` ``stepped``, ``obstacle_sensor_ok:
         true`` and not ``drone_link_ok: false``, and whose lanes no
         ``sensor_down`` cut has ended. A drone that flies unsensed (``off``

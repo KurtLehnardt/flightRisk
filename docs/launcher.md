@@ -150,7 +150,7 @@ ceiling, the margin and each drone's altitude slot from the window, then starts 
 | Drone id, source, altitude slot | the edge's `--drone-id`, `--source tello` or `fake`, `--alt-slot` |
 | Tello host, local IP, interface index | `--tello-host`, `--tello-local-ip`, `--tello-ifindex` (real drones only; the index is Windows only). The local IP field is a dropdown of this computer's adapters in the Tello host's network, with their IPv4 addresses and indexes (see "Adapters"). |
 | Ceiling and margin | the edges' `FLIGHTRISK_CEILING_CM` and `FLIGHTRISK_CEILING_MARGIN_CM`, and the dashboard's ceiling file (see "The ceiling file"); every slot must be at most ceiling minus margin |
-| Geofence | the edges' `FLIGHTRISK_GEOFENCE_CM` (450 cm by default, as in the demo scripts) |
+| Geofence | the edges' `FLIGHTRISK_GEOFENCE_CM` (450 cm by default, as in the demo scripts), and the same value for the ground, which plans re-tasks against it |
 | Detector profile | the edges' `--detection-profile`: `default` (yolo11n on the whole frame), `level`, or `top_down` (offered only when `models/heridal_yolo11s.pt` exists) |
 | Video on at start | `--stream-video` on the ground and the edges |
 | Language model | off adds `--no-llm` to the ground (the default) |
@@ -192,7 +192,8 @@ The edges' takeoff temperature levels are checked too: an inherited `FLIGHTRISK_
 `FLIGHTRISK_TELLO_TEMP_REFUSE_C` the edges would refuse (see `docs/fleet-setup.md`, "Takeoff temperature check") is an
 error that blocks Start, when an edge starts here.
 
-The ground also gets `--appearance-only`, `FLIGHTRISK_APPEARANCE_ONLY=1`, `FLIGHTRISK_SAVE_CAPTURES=0`
+The ground also gets `--appearance-only`, `FLIGHTRISK_APPEARANCE_ONLY=1`, `FLIGHTRISK_SAVE_CAPTURES=0`,
+`FLIGHTRISK_GEOFENCE_CM` (the edges' value, so a re-task is never planned beyond the fence an edge enforces)
 and `FLIGHTRISK_FLEET_NET` (`ap` in layout A, so it refuses any bind address that is not a literal;
 `station` otherwise), as `scripts/demo_ground.sh` does. Variables that would silently override a
 choice made in the window, such as an inherited `FLIGHTRISK_GROUND_URLS` or `FLIGHTRISK_TELLO_LOCAL_IP`,
@@ -214,7 +215,8 @@ All checks are read-only; any FAIL blocks Start.
 | Network adapters | lists the adapters with their IPv4 addresses and indexes |
 | Adapter for each drone | its local IP is on exactly one adapter, with the interface index given. A real drone with no local IP fails ("choose the adapter") when more than one adapter has an address in its Tello host's network, because a packet sent from all addresses could reach another drone; that drone is then not probed. Any other real drone with no local IP, a single Tello included, fails while obstacle sensing is required (`FLIGHTRISK_OBSTACLE_SENSING` unset or `required`), because its edge would refuse to start: without a local IP its video frames carry no capture stamps. The row names an adapter only when exactly one real Tello runs on this computer, exactly one adapter has an address in that Tello's network, that address is not another drone's configured local IP, and the adapter is not the default (internet) route; when the default route cannot be read, no adapter is named. With two or more real Tellos here the row names none and says each Tello needs its own Wi-Fi adapter's local IP (`docs/two-tellos-one-pc.md`). With sensing `off` the same drone is only a warning |
 | Ceiling | the dashboard's saved ceiling and margin match the launcher's (otherwise a warning that Start will write the launcher's values) |
-| Drone (each real Tello here) | it answers `command`, `battery?` and `temp?`; its battery and temperature are shown. Below 30 % battery is a warning, and so is a temperature at or above the edges' warn level (`FLIGHTRISK_TELLO_TEMP_WARN_C`, default 92 C): power that drone on last or set it on a fan |
+| Takeoff battery minimum | `FLIGHTRISK_MIN_TAKEOFF_BATTERY` (30 % by default) is a number from 15 to 100, which is what the edges and the ground accept; otherwise a FAIL, because they refuse to start with it. Shown once for the whole start |
+| Drone (each real Tello here) | it answers `command`, `battery?` and `temp?`; its battery and temperature are shown. A battery below the takeoff minimum (30 % unless `FLIGHTRISK_MIN_TAKEOFF_BATTERY` is set) is a warning, and so is a temperature at or above the edges' warn level (`FLIGHTRISK_TELLO_TEMP_WARN_C`, default 92 C): power that drone on last or set it on a fan |
 
 The drone check sends only `command` (the SDK handshake), `battery?` and `temp?`, from one UDP socket
 bound to the drone's local IP (and pinned to its interface index on Windows), and closes the socket

@@ -4,7 +4,7 @@ The fleet start gate (``FleetCoordinator._start_refusals``) refuses a drone
 when its telemetry from the last ``TELEMETRY_FRESH_S`` says the edge cannot
 reach its drone (``drone_link_ok: false``) or cannot sense obstacles
 (``obstacle_sensor_ok: false``), and when its battery is unknown or below
-``MIN_START_BATTERY``. The edge builds those fields from its drone
+the configured takeoff battery minimum. The edge builds those fields from its drone
 controller: ``link_status()``, its obstacle sensor and ``read_battery()``
 (or ``state.battery``).
 
@@ -28,7 +28,7 @@ rules:
   stopped leaves an old value behind). No reading, or one that is not a
   finite number of at least 0, is refused as no battery report; the legacy
   state cache's 0 for "unknown" never becomes a snapshot reading, so a 0
-  that is read is a real 0 %. A reading below ``MIN_START_BATTERY`` is
+  that is read is a real 0 %. A reading below the configured takeoff battery minimum is
   refused as too low, and so is one at or below the battery monitor's
   critical level (``battery_critical_threshold``), which lands a flying
   drone at once, should that level ever be set above the start minimum.
@@ -58,14 +58,10 @@ from typing import Any
 
 from flightrisk.config import DroneConfig, get_config
 from flightrisk.drone.controller import DroneLinkStatus, FrameFreshness
-from flightrisk.drone.coordinator import MIN_START_BATTERY
+from flightrisk.drone.safety import min_takeoff_battery_from_env
 from flightrisk.drone.snapshot import read_telemetry
 
 __all__ = ["MAX_BATTERY_AGE_S", "MAX_FRAME_AGE_S", "single_search_refusal"]
-
-# TODO(fix/geofence-slot-battery-consistency): that parallel PR unifies the 30 %
-# start minimum (MIN_START_BATTERY) and its environment override; read the
-# minimum through its helper here once it has merged.
 
 # Operator texts are cut to this many characters, like the edge's link detail.
 _MAX_DETAIL_LEN = 200
@@ -180,12 +176,14 @@ def _video_problem(drone: Any) -> str | None:
     return None
 
 
-def single_search_refusal(drone: Any, *, min_battery: float = MIN_START_BATTERY) -> str | None:
+def single_search_refusal(drone: Any, *, min_battery: float | None = None) -> str | None:
     """Why a single-drone search must not start on *drone* now, or None when it may.
 
     Reads the controller's connection, drone link, battery and video at the
     moment of the call (see the module docstring for the rules). Never
-    raises and sends no flight command.
+    raises and sends no flight command. ``min_battery=None`` reads the
+    minimum through ``min_takeoff_battery_from_env``, like the fleet start;
+    a malformed ``FLIGHTRISK_MIN_TAKEOFF_BATTERY`` refuses the start.
     """
     state = getattr(drone, "state", None)
     if state is not None and getattr(state, "is_connected", True) is False:
@@ -193,6 +191,11 @@ def single_search_refusal(drone: Any, *, min_battery: float = MIN_START_BATTERY)
     link = _link_problem(drone)
     if link is not None:
         return link
+    if min_battery is None:
+        try:
+            min_battery = min_takeoff_battery_from_env()
+        except ValueError:
+            return "The takeoff battery minimum setting is not valid, so takeoff is refused."
     battery, unknown = _battery(drone)
     if battery is None:
         return unknown

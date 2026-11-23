@@ -173,25 +173,25 @@ def test_uncapped_camera_standoff_does_not_grow_with_the_area():
 
 
 def test_four_metre_demo_needs_more_floor_than_four_metres():
-    # Honest numbers for the 4 m demo (default slots 100/160 cm, 450 cm
+    # Honest numbers for the 4 m demo (default slots 100/130 cm, 450 cm
     # fence, 10 cm placement and 30 cm altitude margins). With the default
-    # diagonal FOV the ring window is too short, so it flies the parallel
-    # split from 371 cm behind the near edge: 7.71 m of floor. Read as a
-    # horizontal FOV, 2.99 m behind it: 6.99 m.
-    for model, standoff in ((ROOM, 371), (ROOM_HORIZONTAL, 299)):
+    # diagonal FOV it plans from 314 cm behind the near edge: 7.14 m of
+    # floor. Read as a horizontal FOV, 2.53 m behind it: 6.53 m.
+    for model, standoff in ((ROOM, 314), (ROOM_HORIZONTAL, 253)):
         for lkp in (None, (200, 200)):
             plan = fp.plan_search(["d1", "d2"], 400, None, lkp, footprint=model, geofence_cm=450)
             assert plan.feasible, plan.problems
             assert plan.standoff_cm == standoff
             assert plan.flight_area.zone_dict()["h_cm"] == 400 + standoff
+    # At the 130 cm slot the ring window fits, so a last-known point now gives the split expanding square.
     assert fp.plan_search(["d1", "d2"], 400, None, (200, 200), footprint=ROOM, geofence_cm=450).pattern is (
-        fp.PatternKind.PARALLEL_SPLIT
+        fp.PatternKind.SPLIT_EXPANDING_SQUARE
     )
 
 
 def test_standoff_beyond_max_standoff_is_refused():
     plan = fp.plan_search(["d1", "d2"], 400, None, footprint=ROOM, geofence_cm=450, max_standoff_cm=300)
-    assert plan.problems == ("the plan flies 371 cm behind the near edge of the area, beyond the 300 cm max_standoff_cm",)
+    assert plan.problems == ("the plan flies 314 cm behind the near edge of the area, beyond the 300 cm max_standoff_cm",)
     with pytest.raises(ValueError, match="max_standoff_cm"):
         plan.assign_lanes_message("d1")
 
@@ -201,9 +201,9 @@ def test_max_standoff_defaults_to_the_geofence():
     assert fp.plan_search(["a"], 400, None, footprint=ROOM, geofence_cm=None).max_standoff_cm == (
         fp.DEFAULT_PLAN_GEOFENCE_CM
     )
-    # With the default cap, a 360 cm fence refuses the 371 cm standoff of the two-drone demo.
-    plan = fp.plan_search(["a", "b"], 400, None, footprint=ROOM, geofence_cm=360)
-    assert any("beyond the 360 cm max_standoff_cm" in p for p in plan.problems), plan.problems
+    # With the default cap, a 300 cm fence refuses the 314 cm standoff of the two-drone demo.
+    plan = fp.plan_search(["a", "b"], 400, None, footprint=ROOM, geofence_cm=300)
+    assert any("beyond the 300 cm max_standoff_cm" in p for p in plan.problems), plan.problems
     for bad in (math.nan, -1, 0, "fence"):
         with pytest.raises(ValueError):
             fp.plan_search(["a"], 400, None, footprint=ROOM, max_standoff_cm=bad)
@@ -431,7 +431,8 @@ def test_estimate_of_a_200_m_plan_finishes_in_seconds():
     start = time.perf_counter()
     assert cs.estimate_plan(plan).coverage == 1.0
     assert time.perf_counter() - start < 10.0
-    uncapped = fp.plan_search(["a", "b"], 20_000, None, footprint=tello_sweep_model(), geofence_cm=None)
+    uncapped = fp.plan_search(["a", "b"], 20_000, None, footprint=tello_sweep_model(), geofence_cm=None,
+                          alt_slots_cm=(100, 160))  # the work size this test bounds
     start = time.perf_counter()
     assert cs.estimate_plan(uncapped).coverage == 1.0
     assert time.perf_counter() - start < 20.0
