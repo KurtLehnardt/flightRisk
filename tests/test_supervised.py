@@ -147,6 +147,30 @@ def test_connect_refuses_real_mavsdk_4(monkeypatch):
         link_mod.MavsdkAutopilotLink("tcpout://127.0.0.1:1").connect()
 
 
+def test_connect_names_the_installed_version_when_the_import_failed(monkeypatch):
+    monkeypatch.setattr(link_mod, "System", None)
+    monkeypatch.setattr(link_mod, "_installed_mavsdk_version", lambda: "3.17.2")
+    with pytest.raises(RuntimeError, match="mavsdk 3.17.2 is installed but could not be imported"):
+        link_mod.MavsdkAutopilotLink("tcpout://127.0.0.1:1").connect()
+
+
+def test_connect_says_not_installed_when_there_is_no_distribution(monkeypatch):
+    monkeypatch.setattr(link_mod, "System", None)
+    monkeypatch.setattr(link_mod, "_installed_mavsdk_version", lambda: None)
+    with pytest.raises(RuntimeError, match="mavsdk is not installed"):
+        link_mod.MavsdkAutopilotLink("tcpout://127.0.0.1:1").connect()
+
+
+def test_mavlink_controller_refuses_mavsdk_4(monkeypatch):
+    pytest.importorskip("numpy")
+    import flightrisk.drone.mavlink as mavlink_mod
+
+    monkeypatch.setattr(link_mod, "_installed_mavsdk_version", lambda: "4.2.1")
+    controller = mavlink_mod.MavlinkController.__new__(mavlink_mod.MavlinkController)
+    with pytest.raises(RuntimeError, match="mavsdk 4.2.1 is installed"):
+        controller.connect()
+
+
 @pytest.mark.parametrize("windows, expected", [(False, "mavsdk_server"), (True, "mavsdk_server.exe")])
 def test_server_binary_lookup_per_platform(monkeypatch, tmp_path, windows, expected):
     monkeypatch.setattr(link_mod, "_is_windows", lambda: windows)
@@ -169,6 +193,7 @@ class _FakeKernel32:
         self.calls = []
         self.assign_ok = assign_ok
         self.flags = None
+        self.size = None
 
         def create(attrs, name):
             self.calls.append("create")
@@ -179,11 +204,12 @@ class _FakeKernel32:
 
     def SetInformationJobObject(self, job, info_class, info_ref, size):
         self.calls.append(("set", info_class))
+        self.size = size
         self.flags = info_ref._obj.BasicLimitInformation.LimitFlags
         return 1
 
     def AssignProcessToJobObject(self, job, process):
-        self.calls.append(("assign", job.value, process.value))
+        self.calls.append(("assign", job, process))
         return 1 if self.assign_ok else 0
 
     def CloseHandle(self, handle):
@@ -225,6 +251,44 @@ def test_windows_child_goes_into_a_kill_on_close_job(monkeypatch):
     assert not proc.terminated
 
 
+def test_job_structure_layout_matches_winnt_h():
+    import ctypes
+
+    from flightrisk.drone import supervised
+
+    info_type = supervised._limit_info_type()
+    wide = ctypes.sizeof(ctypes.c_void_p) == 8
+    assert ctypes.sizeof(info_type) == (144 if wide else 112)
+    basic = info_type.BasicLimitInformation
+    assert basic.offset == 0
+    assert info_type.IoInfo.offset == (64 if wide else 48)
+    assert info_type.ProcessMemoryLimit.offset == (112 if wide else 96)
+    basic_type = dict(info_type._fields_)["BasicLimitInformation"]
+    assert basic_type.LimitFlags.offset == 16
+    assert basic_type.Affinity.offset == (48 if wide else 32)
+
+
+def test_windows_job_gets_the_right_size_and_is_never_closed(monkeypatch):
+    import ctypes
+
+    from flightrisk.drone import supervised
+
+    kernel32 = _FakeKernel32()
+    sup = _windows_env(monkeypatch, kernel32)
+    sup.spawn_tied_to_parent(["mavsdk_server.exe"])
+    assert kernel32.size == ctypes.sizeof(supervised._limit_info_type())
+    assert "close" not in kernel32.calls  # closing the job handle would kill the child at once
+
+
+def test_windows_job_is_created_before_the_child_starts(monkeypatch):
+    kernel32 = _FakeKernel32()
+    supervised = _windows_env(monkeypatch, kernel32)
+    order = []
+    monkeypatch.setattr(supervised.subprocess, "Popen", lambda cmd, **kw: order.append(("popen", list(kernel32.calls))) or _FakePopen(cmd, **kw))
+    supervised.spawn_tied_to_parent(["a.exe"])
+    assert order == [("popen", ["create", ("set", 9)])]
+
+
 def test_windows_job_is_created_once_for_several_children(monkeypatch):
     kernel32 = _FakeKernel32()
     supervised = _windows_env(monkeypatch, kernel32)
@@ -239,12 +303,38 @@ def test_windows_falls_back_to_atexit_cleanup_when_the_job_is_refused(monkeypatc
     supervised = _windows_env(monkeypatch, kernel32)
     registered = []
     monkeypatch.setattr(supervised.atexit, "register", lambda fn: registered.append(fn))
+    monkeypatch.setattr(supervised, "_fallback_registered", False)
+    monkeypatch.setattr(supervised, "_fallback_procs", supervised.weakref.WeakSet())
+    import ctypes
+
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 5, raising=False)
+    monkeypatch.setattr(ctypes, "WinError", lambda code: OSError(0, f"Win32 error {code}"), raising=False)
     with caplog.at_level("WARNING"):
         proc = supervised.spawn_tied_to_parent(["mavsdk_server.exe"])
+        other = supervised.spawn_tied_to_parent(["mavsdk_server.exe"])
     assert "clean exit only" in caplog.text
-    assert len(registered) == 1
+    assert "Win32 error 5" in caplog.text
+    assert len(registered) == 1  # one hook for every spawn
     registered[0]()
-    assert proc.terminated
+    assert proc.terminated and other.terminated
+
+
+def test_windows_fallback_does_not_keep_finished_children_alive(monkeypatch):
+    import gc
+
+    kernel32 = _FakeKernel32(assign_ok=False)
+    supervised = _windows_env(monkeypatch, kernel32)
+    monkeypatch.setattr(supervised.atexit, "register", lambda fn: None)
+    monkeypatch.setattr(supervised, "_fallback_registered", False)
+    monkeypatch.setattr(supervised, "_fallback_procs", supervised.weakref.WeakSet())
+    import ctypes
+
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 5, raising=False)
+    monkeypatch.setattr(ctypes, "WinError", lambda code: OSError(0, "x"), raising=False)
+    monkeypatch.setattr(supervised.threading, "Thread", lambda *a, **k: type("T", (), {"start": lambda self: None})())
+    supervised.spawn_tied_to_parent(["a.exe"])
+    gc.collect()
+    assert len(supervised._fallback_procs) == 0
 
 
 windows_only = pytest.mark.skipif(not sys.platform.startswith("win"), reason="needs the real Windows kernel32")

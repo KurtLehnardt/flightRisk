@@ -1,14 +1,14 @@
 """Integration tests for MavlinkController against ArduPilot SITL.
 
-These tests require a running SITL instance on udpin://0.0.0.0:14540.
+These tests skip unless FLIGHTRISK_SITL_ADDRESS names a running SITL, for example
+FLIGHTRISK_SITL_ADDRESS=tcpout://127.0.0.1:5760. Once it is set, a failed connect fails the test.
 Run with: pytest tests/integration/test_sitl.py -m sitl
 Skip with: pytest -m "not sitl and not slow" (default in pytest.ini)
 
 Start SITL: ./scripts/start_sitl.sh
 """
-import socket
+import os
 import sys
-import threading
 import time
 
 import pytest
@@ -22,9 +22,17 @@ pytestmark = [
 SITL_ADDRESS = "udpin://0.0.0.0:14540"
 
 
-#: How long the fixture waits for a first heartbeat before it skips. MavlinkController.connect()
-#: waits for a healthy vehicle with no timeout of its own, which hangs when no SITL is running.
-SITL_CONNECT_TIMEOUT_S = 20.0
+#: Set this to a running SITL to opt in, for example tcpout://127.0.0.1:5760. It is the same
+#: variable tests/integration/test_sitl_fleet.py uses.
+SITL_ADDRESS_ENV = "FLIGHTRISK_SITL_ADDRESS"
+
+
+def _sitl_address() -> str:
+    """Return the opted-in SITL address, or skip the calling test when it is unset."""
+    address = os.environ.get(SITL_ADDRESS_ENV, "").strip()
+    if not address:
+        pytest.skip(f"set {SITL_ADDRESS_ENV} to a running SITL, e.g. tcpout://127.0.0.1:5760 (docs/sitl-demo.md)")
+    return address
 
 
 def _wait_for(condition, timeout=10, interval=0.5):
@@ -109,27 +117,19 @@ def _import_real_mavlink_controller():
 
 @pytest.fixture
 def sitl_available():
-    """Connect to a live SITL instance, or skip if unavailable."""
+    """Connect to the SITL named by FLIGHTRISK_SITL_ADDRESS, or skip when it is unset."""
     MavlinkController = _import_real_mavlink_controller()
 
-    ctrl = MavlinkController("sitl-test", host=SITL_ADDRESS)
-    outcome: dict = {}
-
-    def _connect() -> None:
-        try:
-            outcome["connected"] = ctrl.connect()
-        except (ConnectionError, OSError, TimeoutError, RuntimeError) as e:
-            outcome["error"] = e
-
-    worker = threading.Thread(target=_connect, daemon=True, name="sitl-connect")
-    worker.start()
-    worker.join(SITL_CONNECT_TIMEOUT_S)
-    if worker.is_alive():
-        pytest.skip(f"SITL not available: no healthy vehicle on {SITL_ADDRESS} within {SITL_CONNECT_TIMEOUT_S:.0f} s")
-    if "error" in outcome:
-        pytest.skip(f"SITL not available: {outcome['error']}")
-    if not outcome.get("connected"):
-        pytest.skip("SITL not available")
+    address = _sitl_address()
+    ctrl = MavlinkController("sitl-test", host=address)
+    # connect() is already bounded by mavlink_cmd_timeout, so no extra guard is needed here.
+    # The variable is set, so a failed connect is a real failure and must not skip.
+    try:
+        connected = ctrl.connect()
+    except (ConnectionError, OSError, TimeoutError, RuntimeError) as e:
+        pytest.fail(f"could not connect to SITL at {address}: {e}")
+    if not connected:
+        pytest.fail(f"could not connect to SITL at {address}")
 
     yield ctrl
 
@@ -257,10 +257,7 @@ class TestSITLCoverageFlight:
         from pathlib import Path
 
         _import_real_mavlink_controller()  # Skips when the real mavsdk is missing.
-        try:  # SITL instance 0 listens on TCP 5760; MAVSDK would retry a closed port for ever.
-            socket.create_connection(("127.0.0.1", 5760), timeout=2.0).close()
-        except OSError:
-            pytest.skip("no SITL on tcp 127.0.0.1:5760 (run scripts/start_sitl.sh)")
+        _sitl_address()  # Skips when FLIGHTRISK_SITL_ADDRESS is unset.
         root = Path(__file__).resolve().parents[2]
         spec = importlib.util.spec_from_file_location("sitl_fly_coverage_it", root / "scripts" / "sitl_fly_coverage.py")
         script = importlib.util.module_from_spec(spec)
@@ -284,7 +281,7 @@ class TestSITLCoverageFlight:
             plan = script.build_plan(args)
             assert len(plan.waypoints) == 4
             controller = script._make_sitl_controller_class()("sitl-coverage-it", host=script.sitl_address(0))
-            assert controller.connect(), "SITL not reachable on tcpout://127.0.0.1:5760 (run scripts/start_sitl.sh)"
+            assert controller.connect(), "SITL not reachable (run scripts/start_sitl.sh)"
             try:
                 lines: list[str] = []
                 script.fly(controller, plan, out=lines.append, climb_timeout=300.0, leg_timeout=300.0)

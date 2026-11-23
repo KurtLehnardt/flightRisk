@@ -196,6 +196,10 @@ class MavsdkAutopilotLink:
     def connect(self) -> None:
         """Connect, subscribe to telemetry and detect the autopilot. Raises on failure."""
         if System is None:
+            installed = _installed_mavsdk_version()
+            if installed:
+                raise RuntimeError(f"mavsdk {installed} is installed but could not be imported; "
+                                   "check that its dependencies are installed (pip check)")
             raise RuntimeError("mavsdk is not installed; install it with: pip install 'mavsdk>=3.17,<4'")
         if System is _REAL_SYSTEM:
             check_mavsdk_version()
