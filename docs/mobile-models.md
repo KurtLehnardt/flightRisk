@@ -387,9 +387,10 @@ decoding, and open_clip's own transform) on the same inputs:
   coloured blocks, a gradient). Embedder: the three fixtures, the demo picture,
   its dog and bicycle as detection-shaped crops, and the three synthetic
   pictures.
-- **Person**, which also gates the Android defaults (`yolox_s.onnx` and
-  `clip_vit_b16_laion2b_w8.onnx`, whose embeddings the ground compares with
-  its own) and is recorded for every other output. The pinned public-domain
+- **Person**, which also gates the Android default detector (`yolox_s.onnx`)
+  and the Android embedders whose embeddings the ground may compare with its
+  own (`clip_vit_b16_laion2b_w8.onnx`, the default, and
+  `clip_vit_b16_laion2b.onnx`), and is recorded for every other output. The pinned public-domain
   photograph of a group of people walking through grassland, seen from
   behind. Detector: the whole photo, a 640 x 640 window of it at native
   resolution (people about 75 to 260 px tall), and the photo scaled so its
@@ -422,8 +423,8 @@ to 0.013 (as the Core ML fp16 embedder does), against 0.005 over the 9 general
 inputs, while its smallest cosine stays at 0.9987. Its person tolerance is
 therefore 0.995 cosine and 0.02 similarity over all pairs, and 0.01 over the
 pairs whose PyTorch similarity is within 0.05 of 0.55, where a change can flip
-a match decision (`similarity_near_threshold_max_abs`, measured @@NEAR@@ over
-@@PAIRS@@ such pairs; `PERSON_TOLERANCES`).
+a match decision (`similarity_near_threshold_max_abs`, measured 0.0059 over
+134 such pairs; `PERSON_TOLERANCES`).
 
 Measured on macOS 27, Apple M1 Max, with the locked tools. Detector (score
 diff, box diff, smallest matched IoU; 21 general and 29 person detections
@@ -443,8 +444,8 @@ at native size / 48 / 32 / 24 / 16 px tall):
 
 | Output | Run on | General | Person | Person by size | Tolerance |
 |---|---|---|---|---|---|
-| `clip_vit_b16_laion2b.onnx` | ONNX Runtime CPU | 1.000000, 2.3e-6 | 1.000000, 1.2e-6 | 1.0000 at every size | 0.9999, 0.001 |
-| `clip_vit_b16_laion2b_w8.onnx` | ONNX Runtime CPU (gate, person gate) | 0.999379, 0.0051 | 0.998734, 0.0134 | 0.99921 / 0.99926 / 0.99938 / 0.99946 / 0.99873 | 0.995, 0.01; person 0.995, 0.02 |
+| `clip_vit_b16_laion2b.onnx` | ONNX Runtime CPU (gate, person gate) | 1.000000, 2.3e-6 | 1.000000, 1.2e-6 | 1.0000 at every size | 0.9999, 0.001 |
+| `clip_vit_b16_laion2b_w8.onnx` | ONNX Runtime CPU (gate, person gate) | 0.999379, 0.0051 | 0.998734, 0.0134 (0.0059 near 0.55) | 0.99921 / 0.99926 / 0.99938 / 0.99946 / 0.99873 | 0.995, 0.01; person 0.995, 0.02, 0.01 near 0.55 |
 | `clip_vit_b16_laion2b_int8.onnx` | ONNX Runtime CPU | 0.979960, 0.0469 | 0.973428, 0.0416 | 0.99057 / 0.98851 / 0.98860 / 0.98219 / 0.97343 | 0.97, 0.06 |
 | `CLIPViTB16LAION.mlpackage` | Core ML all units (gate) | 0.999661, 0.0047 | 0.998214, 0.0130 | 0.99821 / 0.99956 / 0.99935 / 0.99950 / 0.99942 | 0.99, 0.02 |
 | `CLIPViTB16LAION8bit.mlpackage` | Core ML all units (gate) | 0.997993, 0.0150 | 0.998389, 0.0115 | 0.99839 / 0.99844 / 0.99910 / 0.99913 / 0.99885 | 0.99, 0.03 |
