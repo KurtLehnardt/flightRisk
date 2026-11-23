@@ -1,7 +1,9 @@
-# Third-party notices for the FlightRisk on-device models
+# Third-party notices for the FlightRisk apps
 
-The FlightRisk Android and iOS apps include the machine-learning models listed
-below. They are built from the upstream weights by
+This file lists the third-party components the FlightRisk Android and iOS apps
+ship. Sections 1 and 2 are the machine-learning models; sections 3 to 6 are
+the code ported into the apps, the libraries of the iOS app, the libraries of
+the Android app, and FlightRisk's own licence. The models listed below They are built from the upstream weights by
 `scripts/mobile_models/make_models.py`, which copies this file next to the
 installed models as `model-notices.md` so that each app can show it on its
 licences screen. Show every section in full: the Apache License 2.0 and the
@@ -128,6 +130,230 @@ NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
 LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## 3. Code ported into both apps
+
+FlightRisk's own Kotlin (Android) and Swift (iOS) code reproduces the
+following upstream behaviour so that the apps match the models' reference
+pipelines. The apps do not contain the upstream libraries themselves.
+
+- Pillow (Python Imaging Library): `Image.resize(..., BICUBIC)` is ported to
+  `ImageResize.bicubicPillow` (Android, `vision/ImageResize.kt`) and to the
+  CLIP preprocessing of the iOS app (`Vision/PersonReID.swift`). Pillow is
+  licensed under the MIT-CMU licence (also called HPND), whose text follows.
+- OpenCV (https://opencv.org, Apache License 2.0, copyright OpenCV
+  contributors): `cv2.resize(..., INTER_LINEAR)` is matched by
+  `ImageResize.bilinearCv` so that the YOLOX input equals upstream's. The
+  Apache License 2.0 text is under the heading "Apache License 2.0 (YOLOX)"
+  at the end of this file.
+- open_clip and YOLOX: see sections 1 and 2.
+
+### Pillow (MIT-CMU)
+
+```
+The Python Imaging Library (PIL) is
+
+    Copyright © 1997-2011 by Secret Labs AB
+    Copyright © 1995-2011 by Fredrik Lundh and contributors
+
+Pillow is the friendly PIL fork. It is
+
+    Copyright © 2010 by Jeffrey 'Alex' Clark and contributors
+
+Like PIL, Pillow is licensed under the open source MIT-CMU License:
+
+By obtaining, using, and/or copying this software and/or its associated
+documentation, you agree that you have read, understood, and will comply
+with the following terms and conditions:
+
+Permission to use, copy, modify and distribute this software and its
+documentation for any purpose and without fee is hereby granted,
+provided that the above copyright notice appears in all copies, and that
+both that copyright notice and this permission notice appear in supporting
+documentation, and that the name of Secret Labs AB or the author not be
+used in advertising or publicity pertaining to distribution of the software
+without specific, written prior permission.
+
+SECRET LABS AB AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS
+SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS.
+IN NO EVENT SHALL SECRET LABS AB OR THE AUTHOR BE LIABLE FOR ANY SPECIAL,
+INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE
+OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+```
+
+## 4. iOS app: Swift packages
+
+Each package is licensed as stated; the Apache License 2.0 packages are under
+the full text at the end of this file ("Apache License 2.0 (YOLOX)"), which is
+the same text as in each package's LICENSE file. None of these packages has a
+NOTICE file.
+
+| Package | Licence | Source |
+|---|---|---|
+| mlx-swift | MIT | https://github.com/ml-explore/mlx-swift |
+| mlx-swift-examples | MIT | https://github.com/ml-explore/mlx-swift-examples |
+| swift-transformers | Apache-2.0 | https://github.com/huggingface/swift-transformers |
+| swift-jinja | Apache-2.0 | https://github.com/huggingface/swift-jinja |
+| swift-collections | Apache-2.0 with Runtime Library Exception | https://github.com/apple/swift-collections |
+| swift-numerics | Apache-2.0 with Runtime Library Exception | https://github.com/apple/swift-numerics |
+| GzipSwift | MIT | https://github.com/1024jp/GzipSwift |
+
+### mlx-swift (MIT)
+
+```
+MIT License
+
+Copyright (c) 2023 ml-explore
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+### mlx-swift-examples (MIT)
+
+```
+MIT License
+
+Copyright (c) 2024 ml-explore
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+### GzipSwift (MIT)
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2014-2023 1024jp
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+### swift-transformers (Apache-2.0)
+
+Copyright 2022 Hugging Face SAS. Licence text: Apache License 2.0, below.
+
+### swift-jinja (Apache-2.0)
+
+Copyright 2022 Hugging Face SAS. Licence text: Apache License 2.0, below.
+
+### swift-collections and swift-numerics (Apache-2.0 with Runtime Library Exception)
+
+The LICENSE file of each names no copyright owner (it keeps the template line
+"Copyright [yyyy] [name of copyright owner]"); the packages are published by
+the Swift open-source project of Apple Inc. Licence text: Apache License 2.0,
+below, with this exception from the LICENSE file:
+
+```
+## Runtime Library Exception to the Apache 2.0 License: ##
+
+
+    As an exception, if you use this Software to compile your source code and
+    portions of this Software are embedded into the binary product as a result,
+    you may redistribute such product without providing attribution as would
+    otherwise be required by Sections 4(a), 4(b) and 4(d) of the License.
+```
+
+## 5. Android app: libraries
+
+The libraries below are compiled into the Android app (see
+`mobile/app/build.gradle.kts`; versions are those pinned there). The app does
+not use a licence-listing plugin, so the libraries are listed here by family.
+Licence text for Apache-2.0 libraries: Apache License 2.0, below.
+
+| Library | Licence | Source |
+|---|---|---|
+| AndroidX (core-ktx, exifinterface, lifecycle, activity-compose, fragment-ktx, navigation-compose, room, security-crypto, camera-core, camera-camera2, camera-lifecycle, camera-view) and their transitive AndroidX libraries | Apache-2.0, copyright The Android Open Source Project | https://developer.android.com/jetpack/androidx |
+| Jetpack Compose (ui, ui-graphics, ui-tooling-preview, material3, compose-bom) | Apache-2.0, copyright The Android Open Source Project | https://developer.android.com/jetpack/compose |
+| Kotlin standard library, kotlinx-coroutines-android, kotlinx-serialization-json | Apache-2.0, copyright JetBrains s.r.o. and Kotlin contributors | https://github.com/Kotlin |
+| OkHttp 4.12.0 (with Okio) | Apache-2.0, copyright Square, Inc. | https://github.com/square/okhttp |
+| MediaPipe tasks-genai 0.10.22 | Apache-2.0, copyright The MediaPipe Authors (Google LLC) | https://github.com/google-ai-edge/mediapipe |
+| ONNX Runtime for Android 1.32.0 | MIT, copyright Microsoft Corporation | https://github.com/microsoft/onnxruntime |
+| Google Play services Location 21.3.0 | Android Software Development Kit License and the Google Play services terms (not open source) | https://developers.google.com/android/guides/setup |
+
+### ONNX Runtime (MIT)
+
+```
+MIT License
+
+Copyright (c) Microsoft Corporation
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## 6. FlightRisk
+
+FlightRisk itself is free software under the GNU General Public License,
+version 3. Its complete source code is at
+https://github.com/KurtLehnardt/flightRisk and its licence text is the file
+LICENSE there. The file LICENSE-APP-STORE-EXCEPTION.md in the same repository
+holds a draft additional permission for distributing the apps through app
+stores. That draft is pending the owner's decision and has not been granted.
 
 ## Apache License 2.0 (YOLOX)
 

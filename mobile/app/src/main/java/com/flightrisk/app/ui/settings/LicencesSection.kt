@@ -43,8 +43,8 @@ import java.io.IOException
 object LicencesText {
     const val TITLE = "Licences"
     const val SUMMARY =
-        "The person detector (YOLOX-S, Apache-2.0) and the appearance embedder (open_clip ViT-B-16, MIT) " +
-            "that run on this phone, with their licence notices in full."
+        "The person detector (YOLOX-S, Apache-2.0), the appearance embedder (open_clip ViT-B-16, MIT) " +
+            "and the libraries in this app, with their licence notices in full."
     const val OPEN = "Model licences and notices"
     const val CLOSE = "Close"
     const val NOT_INSTALLED =
