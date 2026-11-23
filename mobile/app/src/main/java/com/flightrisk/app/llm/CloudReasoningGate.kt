@@ -19,7 +19,12 @@ sealed interface ClaudeKeyLookup {
 }
 
 /** What the app last learned about the saved key. Holds no key material. */
-enum class ClaudeKeyState { UNKNOWN, FOUND, MISSING, UNAVAILABLE }
+enum class ClaudeKeyState {
+    UNKNOWN, FOUND, MISSING, UNAVAILABLE,
+
+    /** A key is saved but Anthropic rejected it (HTTP 401 or 403). Cleared when a key is saved or removed. */
+    INVALID,
+}
 
 /**
  * Where the Claude key lives. Every method may block on the Keystore and
@@ -71,6 +76,19 @@ class CloudReasoningGate(
     var keyState: ClaudeKeyState = ClaudeKeyState.UNKNOWN
         private set
 
+    /** Set when Anthropic rejected the saved key; no request is sent with it until a new key is saved. */
+    @Volatile
+    private var keyRejected = false
+
+    /**
+     * Records that Anthropic rejected the saved key (401 or 403). The gate then yields no key,
+     * so nothing more is uploaded, until [saveKey] or [removeKey] runs. Main-safe.
+     */
+    fun markKeyInvalid() {
+        keyRejected = true
+        keyState = ClaudeKeyState.INVALID
+    }
+
     /** Main-safe: true while the opt-in is on, Cloud Claude is selected and no key removal is running. */
     fun isAllowedBySettings(): Boolean = removalsInProgress.get() == 0 && settings.cloudAllowedBySettings
 
@@ -87,6 +105,10 @@ class CloudReasoningGate(
      */
     fun keyIfOpen(): String? {
         if (!isAllowedBySettings()) return null
+        if (keyRejected) {
+            keyState = ClaudeKeyState.INVALID
+            return null
+        }
         val lookup = keys.lookup()
         keyState = lookup.toState()
         val key = (lookup as? ClaudeKeyLookup.Found)?.key?.takeIf { it.isNotBlank() } ?: return null
@@ -96,7 +118,7 @@ class CloudReasoningGate(
 
     /** Re-reads whether a key is saved (not whether cloud is allowed). Blocking. */
     fun refreshKeyState(): ClaudeKeyState {
-        val state = keys.lookup().toState()
+        val state = keys.lookup().toState().let { if (keyRejected && it == ClaudeKeyState.FOUND) ClaudeKeyState.INVALID else it }
         keyState = state
         return state
     }
@@ -109,6 +131,8 @@ class CloudReasoningGate(
         if (!settings.cloudOptIn) return false
         val key = ReasoningSettings.normalizedKey(input) ?: return false
         val saved = keys.save(key)
+        // A new key gets a fresh try.
+        if (saved) keyRejected = false
         refreshKeyState()
         return saved
     }
@@ -120,6 +144,7 @@ class CloudReasoningGate(
      */
     fun removeKey(): Boolean {
         removalsInProgress.incrementAndGet()
+        keyRejected = false
         try {
             settings.notifyGateMayHaveClosed(keyRemoved = true)
             return keys.remove()

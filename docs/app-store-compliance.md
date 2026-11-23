@@ -117,7 +117,7 @@ The Android answers below describe what the code does. **The Data Safety answers
 | Launcher and store icon | Adaptive icon with a monochrome layer, legacy mipmaps, and `branding/play_store_icon_512.png`, all generated from `branding/flightRiskIcon.png` by `branding/generate_android_icons.py`. |
 | Edge-to-edge (enforced from target 35) | `MainActivity` calls `enableEdgeToEdge()`. The navigation shell pads for the system bars and display cutouts and consumes them; the privacy notice and onboarding, which are shown before it, pad themselves. |
 
-Other Android 15 and 16 behaviour changes were reviewed against the code. The app has no foreground service, no `PendingIntent`, no broadcast receiver, no `onBackPressed` override, no orientation or resizability lock and no explicit intent to another app. Predictive back works through the AndroidX back dispatcher; onboarding uses `BackHandler` only from its second step, so the back-to-home animation still plays on the first. The intents it sends (dial, map, camera capture, photo picker, privacy policy link) all carry an action, and each launch is guarded so that a device without a matching app does not crash. Android 16's local network protection is only an opt-in test for target 36; when a later target enforces it, the Tello and ground station links will need the new permission.
+Other Android 15 and 16 behaviour changes were reviewed against the code. The app has no foreground service, no `PendingIntent`, no broadcast receiver, no `onBackPressed` override, no orientation or resizability lock and no explicit intent to another app. Predictive back works through the AndroidX back dispatcher; onboarding uses `BackHandler` only from its second step, so the back-to-home animation still plays on the first. The intents it sends (dial, map, camera capture, photo picker, privacy policy link) all carry an action, and each launch is guarded so that a device without a matching app does not crash, and the camera, photo picker and privacy policy link tell the person (a short message) when nothing can handle them. Onboarding's "Call 911" button shows "This device can't place calls. Call 911 from a phone now." when the device has no telephony or no dialer. Android 16's local network protection is only an opt-in test for target 36; when a later target enforces it, the Tello and ground station links will need the new permission.
 
 ### Permission Rationale
 
@@ -173,7 +173,7 @@ The Android network security config (`res/xml/network_security_config.xml`) bloc
 | Delete Model | Settings > AI Reasoning (on-device model) | The downloaded Gemma model file. |
 | Clear storage or uninstall | Android system settings | Everything the app stored. |
 
-The reference photo has no delete control because it is never written to storage; it is gone when the app process ends.
+The reference photo has no delete control: a photo taken with the camera is written to a temporary cache file that is deleted as soon as it has been decoded (`TargetPickerScreen`), a photo from the picker is never copied, and the decoded bitmap is held in memory only, so it is gone when the app process ends.
 
 #### Data collected or shared (provisional draft)
 
@@ -188,10 +188,11 @@ The reference photo has no delete control because it is never written to storage
 | Data Type | Collected | Shared | Ephemeral | Purpose |
 |-----------|-----------|--------|-----------|---------|
 | Location (approximate) | No (the coarse permission is requested together with the fine one) | No | -- | -- |
-| Location (precise) | Read on the device, kept in memory only | No | Yes (not stored) | App functionality |
+| Location (precise) | No. It is read only on the device and kept in memory; Google's definition of "collected" is data transmitted off the device, so this is "not collected" | No | -- | -- |
 | Photos/Videos | Provisional: with "Record search video" on (off by default), search video and match pictures are saved in private storage, not sent by the app and not backed up; with cloud reasoning on, the reference photo and crops go to Anthropic; with phone-as-edge on, a picture of the whole camera view goes to the user's ground station when it asks | Provisional | Provisional: sent images are not kept by the app; saved recordings stay until deleted | App functionality |
-| Face / biometric data | Processed on-device. With cloud reasoning on, crops and the reference photo that can show a face go to Anthropic | Provisional | Yes (session-scoped) for templates and embeddings | App functionality |
-| Personal identifiers | No | No | -- | -- |
+| Personal info (all types, including name, email and user IDs) | No. Google Play has no "face" or "biometric" data type. Face embeddings and templates stay on the device in memory, so they are not collected; face images that go to Anthropic are declared under Photos/Videos above | No | -- | -- |
+| Device or other IDs | No | No | -- | -- |
+| App activity > Other user-generated content | Provisional: with cloud reasoning on, the typed description is sent to Anthropic (the same data the iOS privacy manifest declares as Other User Content) | Provisional | Provisional: not kept by the app | App functionality |
 | App activity | No | No | -- | -- |
 | App diagnostics | No | No | -- | -- |
 
@@ -201,10 +202,10 @@ The reference photo has no delete control because it is never written to storage
 - No analytics, advertising or tracking SDKs are included.
 - Camera and location are used for core functionality only.
 
-### Face Detection Feature Flag
+### Face matching description
 
-- **Declaration required:** Yes. Google Play requires disclosure when an app uses face detection.
-- **Declaration text (revised, provisional):** "This app uses on-device face detection and recognition to match detected persons against a reference photo provided by the user. Face embeddings are computed on the device, kept only in memory for the active session, and never transmitted. If the user turns on the optional cloud reasoning feature, images of detected persons and the reference photo, which can show a face, are sent to Anthropic for analysis. That feature is off by default. On Android, search video is saved in the app's private storage only if the user turns on Record search video, which is off by default."
+- **No separate Play declaration.** The Play Console has no "face detection declaration" form, so none is claimed here. The Data Safety data types also have no face or biometric type. The wording below is for the Data Safety form, the store listing and the review notes, and the owner should confirm it against the current Play policy text.
+- **Suggested text (provisional):** "This app uses on-device face detection and recognition to match detected persons against a reference photo provided by the user. Face embeddings are computed on the device, kept only in memory for the active session, and never transmitted. If the user turns on the optional cloud reasoning feature, images of detected persons and the reference photo, which can show a face, are sent to Anthropic for analysis. That feature is off by default. On Android, search video is saved in the app's private storage only if the user turns on Record search video, which is off by default."
 
 ### Age Rating (IARC)
 
@@ -228,17 +229,22 @@ The earlier recommended text ("No biometric data is collected, transmitted, or s
 
 ### Store checklist (Android): what still needs the owner
 
-The code changes for submission are done (see "Build requirements"). These steps cannot be done in code:
+The Android app is not ready to submit. Two functional gaps remain in code, and further steps cannot be done in code:
+
+- [ ] **Models are not bundled, so detection does nothing.** The person detector, ReID and face models are not in the app's assets, so a search finds no one until they are added.
+- [ ] **Phone-camera analysis is not wired.** The CameraX `ImageAnalysis` use case has no caller, so the phone camera shows a preview but no frames reach the pipeline. It must be wired together with the model integration PR.
+
+These steps cannot be done in code:
 
 - [ ] **Upload key.** Create it and keep it safe, then sign the bundle with it (`docs/android-release-signing.md`). Never commit the keystore or its password.
 - [ ] **Play Console app and Play App Signing.** Create the app, choose a Google-generated app signing key, and upload the first signed bundle to an internal testing track.
 - [ ] **Hosted privacy policy.** Host `docs/privacy-policy.md` as a public web page, build with `-Pflightrisk.privacyPolicyUrl=<that address>`, and enter the same address in Play Console.
 - [ ] **Data Safety form.** Decide the provisional answers above, ideally with a lawyer.
-- [ ] **Face detection declaration** and the **content rating** questionnaire (17+ or equivalent).
+- [ ] **Content rating** questionnaire (17+ or equivalent). Google Play has no separate face detection declaration.
 - [ ] **Target audience and content**: adults only; not designed for children.
 - [ ] **Store listing**: title, short and full description (see "Store Listing Notes"), the 512 x 512 icon (`branding/play_store_icon_512.png`), a 1024 x 500 feature graphic, and at least two phone screenshots. None of the last two exist yet.
 - [ ] **Test on real devices.** No device or emulator has run the app. At least: the privacy notice and onboarding (including "Set up a search later"), the Search screen with and without a target photo, edge-to-edge layout on Android 15 and 16 (status bar, navigation bar, a display cutout in landscape), predictive back, the camera preview, a device or emulator without a camera, and a 16 KB page size emulator image.
-- [ ] **A real cloud reasoning call** with a Claude key, to confirm `claude-sonnet-5-5` answers in the MATCH / CONFIDENCE / REASONING format at low effort (only a stub server was used).
+- [ ] **A real cloud reasoning call** with a Claude key, to confirm `claude-sonnet-5-5` answers in the MATCH / CONFIDENCE / REASONING format at high effort, and to measure how long a call takes against the 120 s read timeout (only a stub server was used).
 - [ ] **Versioning.** Raise `versionCode` for every upload.
 - [ ] **Model download host.** Decide whether the on-device model download (Google storage) is named in the privacy policy and the Data Safety form.
 
@@ -283,7 +289,7 @@ Claude (Anthropic) is the only cloud provider on Android. Cloud reasoning is off
 - The Claude API key and the ground station keys are stored in `EncryptedSharedPreferences` (backed by the Android Keystore), never in plain preferences, files or logs. The opt-in file and the secure file are excluded from Auto Backup and device transfer, so the opt-in is not restored to another device.
 - A "Cloud active: images are sent to Anthropic" indicator shows in Settings and on the Search screen while cloud is the active backend.
 - The first-launch privacy notice (`PrivacyNoticeScreen`, text in `PrivacyNoticeText.kt`) is shown before any permission prompt. It describes the camera, on-device processing, the ground station, phone-as-edge, the Tello drone, cloud reasoning and location, says that video is not recorded unless the user turns it on, and links to the privacy policy.
-- The request names `claude-sonnet-5-5` (one constant, `CloudClaudeLlmBackend.DEFAULT_MODEL`), sets low effort in `output_config`, and sends no sampling parameters and no assistant prefill. A refusal (`stop_reason: "refusal"`) is reported as an error, not read as an answer. The key is sent only in the `x-api-key` header and is never logged.
+- The request names `claude-sonnet-5-5` (one constant, `CloudClaudeLlmBackend.DEFAULT_MODEL`), sets high effort in `output_config` with `max_tokens` 8192, and sends no sampling parameters and no assistant prefill. The request is not streamed, so the read timeout is 120 s and the whole call is capped at 150 s; it runs on the existing background worker, one item at a time. It also sends the `server-side-fallback-2026-07-01` beta header and `"fallbacks": "default"`, as the desktop agent does for this model, so a safety-classifier decline is re-run on a fallback model on Anthropic's side. Images are scaled to 768 px on the long edge before they are sent, and the reference photo is encoded once per search. A 401 or 403 marks the saved key as rejected (no more requests until a new key is saved) and shows a notice; other 4xx codes are shown in the notice; three failures in a row pause cloud reasoning for 60 s. A refusal (`stop_reason: "refusal"`) is reported as an error, not read as an answer. The key is sent only in the `x-api-key` header and is never logged.
 
 ### Phone as an Edge (Android)
 
@@ -296,13 +302,12 @@ Off by default, and not available on iOS. When the user turns on "Send detection
 - [ ] All permission usage descriptions set in Info.plist (iOS) and AndroidManifest.xml (Android)
 - [ ] Privacy Nutrition Labels configured in App Store Connect (iOS)
 - [ ] Data Safety section completed in Google Play Console (Android)
-- [ ] Face detection declaration submitted (Google Play)
 - [ ] Age rating set to 17+ on both platforms
 - [ ] App Review Notes prepared (iOS)
 - [ ] Cloud LLM opt-in disclosure implemented in-app
 - [ ] App Review notes for the local network permission and the ATS exception pasted into App Store Connect
 - [ ] Owner confirmation of the App Privacy questionnaire answers for the ground link and the cloud opt-in
-- [ ] Owner and lawyer confirmation of the Google Play Data Safety answers and the face detection declaration, which are provisional (see `docs/mobile-followups.md`)
+- [ ] Owner and lawyer confirmation of the Google Play Data Safety answers, which are provisional (see `docs/mobile-followups.md`)
 - [x] `CHANGE_WIFI_STATE` removed from the Android manifest; the Android privacy notice covers the ground station link and phone-as-edge and links to the privacy policy
 - [x] Android: target API 36, 16 KB aligned native libraries, release build with R8, release signing configuration, adaptive icon (see "Build requirements")
 - [ ] Android: the owner steps in "Store checklist (Android)"

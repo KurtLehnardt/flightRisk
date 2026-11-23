@@ -30,7 +30,7 @@ enum class SearchReadiness(
  * one state in which nothing can be searched.
  *
  * @param hasTarget Whether a target photo has been chosen.
- * @param hasCamera Whether the device has any camera (PackageManager.FEATURE_CAMERA_ANY).
+ * @param hasCamera Whether the device has a back or front camera the preview can use (not only an external one).
  * @param frameSourceMode Where frames come from: the phone camera or a connected drone.
  */
 fun searchReadiness(

@@ -33,6 +33,14 @@ class PrivacyNoticeTextTest {
         assertTrue(PrivacyNoticeText.POLICY_URL.none { it.isWhitespace() })
     }
 
+    @Test fun theDefaultPolicyAddressPointsAtTheRepositoryPolicyFile() {
+        // The default lives in app/build.gradle.kts (tests run with mobile/app as the working directory).
+        val gradle = java.io.File("build.gradle.kts").readText()
+        val default = Regex("""val defaultPrivacyPolicyUrl = "([^"]+)"""").find(gradle)!!.groupValues[1]
+        assertTrue(default, default.endsWith("docs/privacy-policy.md"))
+        assertTrue(java.io.File("../../docs/privacy-policy.md").isFile)
+    }
+
     @Test fun recordingExplanationSaysWhatWhereBackupAndDelete() {
         val e = PrivacySettingsText.RECORD_EXPLANATION
         assertTrue(e.contains("video"))

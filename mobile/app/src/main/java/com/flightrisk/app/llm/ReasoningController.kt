@@ -31,7 +31,7 @@ data class ReasoningUiState(
 ) {
     val selected: ReasoningProvider get() = status.selected
     val cloudOptIn: Boolean get() = status.cloudOptIn
-    val hasSavedKey: Boolean get() = status.keyState == ClaudeKeyState.FOUND
+    val hasSavedKey: Boolean get() = status.keyState == ClaudeKeyState.FOUND || status.keyState == ClaudeKeyState.INVALID
     val secureStorageUnavailable: Boolean get() = status.keyState == ClaudeKeyState.UNAVAILABLE
     val isCloudActive: Boolean get() = status.isCloudActive
 

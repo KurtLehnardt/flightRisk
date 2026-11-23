@@ -59,6 +59,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -292,6 +293,21 @@ fun SearchScreen(
 
             // Ground station link: "Sending detections to <host>" while images of people go out.
             GroundLinkIndicatorBanner()
+
+            // The full "no target" card is hidden while a search runs, so keep a compact reminder.
+            if (state.isSearching && readiness == SearchReadiness.NO_TARGET) {
+                Text(
+                    text = "No target photo: detecting people only",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .testTag("search.noTargetBanner"),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
 
             if (state.isSearching) {
                 HudOverlay(

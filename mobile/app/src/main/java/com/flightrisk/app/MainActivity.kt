@@ -101,11 +101,15 @@ class MainActivity : ComponentActivity() {
     private var targetQualityReport by mutableStateOf<QualityReport?>(null)
 
     /**
-     * Whether the device has any camera. The manifest does not require one, so the
-     * app also installs on devices without a camera, which can search with a drone.
+     * Whether the device has a camera the search preview can use. The preview binds the
+     * back or the front camera only, so a device whose only camera is an external one
+     * (FEATURE_CAMERA_EXTERNAL, which FEATURE_CAMERA_ANY also reports) counts as having
+     * none. The manifest does not require a camera, so the app also installs on devices
+     * without one, which can search with a drone.
      */
     private val deviceHasCamera: Boolean by lazy {
-        packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
+        packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA) ||
+            packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_FRONT)
     }
 
     // Ground console (U3). One block: the ViewModel is owned by the activity, so it outlives tab
@@ -409,6 +413,11 @@ class MainActivity : ComponentActivity() {
                     Log.i(TAG, "PersonDetector loaded")
                 } catch (e: Exception) {
                     Log.w(TAG, "PersonDetector failed to load (YOLO model missing?)", e)
+                } catch (e: LinkageError) {
+                    // The native runtime did not load (UnsatisfiedLinkError, or
+                    // ExceptionInInitializerError from the library's static init). Search
+                    // goes on without this model, as when the model file is missing.
+                    Log.w(TAG, "PersonDetector: native library did not load", e)
                 }
             }
 
@@ -418,6 +427,11 @@ class MainActivity : ComponentActivity() {
                     Log.i(TAG, "PersonReID loaded")
                 } catch (e: Exception) {
                     Log.w(TAG, "PersonReID failed to load (CLIP model missing?)", e)
+                } catch (e: LinkageError) {
+                    // The native runtime did not load (UnsatisfiedLinkError, or
+                    // ExceptionInInitializerError from the library's static init). Search
+                    // goes on without this model, as when the model file is missing.
+                    Log.w(TAG, "PersonReID: native library did not load", e)
                 }
             }
 
@@ -427,6 +441,11 @@ class MainActivity : ComponentActivity() {
                     Log.i(TAG, "FaceRecognizer loaded")
                 } catch (e: Exception) {
                     Log.w(TAG, "FaceRecognizer failed to load (SCRFD/ArcFace models missing?)", e)
+                } catch (e: LinkageError) {
+                    // The native runtime did not load (UnsatisfiedLinkError, or
+                    // ExceptionInInitializerError from the library's static init). Search
+                    // goes on without this model, as when the model file is missing.
+                    Log.w(TAG, "FaceRecognizer: native library did not load", e)
                 }
             }
 

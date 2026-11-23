@@ -13,7 +13,7 @@ This note explains how to sign the FlightRisk Android release build for Google P
 | Key alias | `keyAlias` | `FLIGHTRISK_UPLOAD_KEY_ALIAS` |
 | Key password | `keyPassword` | `FLIGHTRISK_UPLOAD_KEY_PASSWORD` |
 
-- Each value is looked up in `mobile/keystore.properties` first and then in the environment, so a CI job can keep the passwords in its secret store and the rest in the file.
+- Each value is looked up in the environment first and then in `mobile/keystore.properties`, so a CI job can keep the passwords in its secret store and the rest in the file. The environment wins. If a value is set in both places and the two differ, the build fails (the message names the value, never shows it). Passwords are used exactly as written, with no trimming.
 - A relative `storeFile` path is resolved against the `mobile/` directory.
 - When all four values are found, `assembleRelease` and `bundleRelease` sign with that key.
 - When any value is missing, the release APK and bundle are built unsigned, and Gradle prints a warning that starts with `WARNING: FlightRisk release signing is not configured`. An unsigned bundle cannot be uploaded to Google Play.
@@ -90,4 +90,4 @@ Google confirms by email when the new key can be used.
 
 - Raise `versionCode` (and `versionName` as needed) in `mobile/app/build.gradle.kts`. Play rejects a bundle whose `versionCode` was already used.
 - Build with the hosted privacy policy address: `./gradlew bundleRelease -Pflightrisk.privacyPolicyUrl=https://...` (see `docs/app-store-compliance.md`).
-- Check that every 64-bit native library is 16 KB aligned: `mobile/scripts/check-16kb-alignment.sh`.
+- Check that every 64-bit native library is 16 KB aligned, in both the bundle and the APK: `mobile/scripts/check-16kb-alignment.sh mobile/app/build/outputs/bundle/release/app-release.aab` and the same with the APK path. With no argument the script checks the newest release APK or AAB, and it fails when the file holds no native libraries.

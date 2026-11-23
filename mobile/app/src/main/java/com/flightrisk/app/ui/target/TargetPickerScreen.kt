@@ -117,6 +117,18 @@ fun TargetPickerScreen(
         }
     }
 
+    // The picker can be missing (no photo picker and no document app); say so instead of doing nothing.
+    val launchPhotoPicker: () -> Unit = {
+        try {
+            photoPickerLauncher.launch(
+                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+            )
+        } catch (e: ActivityNotFoundException) {
+            Log.w(TAG, "No app can pick a photo", e)
+            Toast.makeText(context, "This device has no app that can pick a photo", Toast.LENGTH_LONG).show()
+        }
+    }
+
     // Camera capture launcher
     var photoUri by remember { mutableStateOf<Uri?>(null) }
     var photoFile by remember { mutableStateOf<java.io.File?>(null) }
@@ -175,11 +187,7 @@ fun TargetPickerScreen(
             ) {
                 Button(
                     onClick = {
-                        photoPickerLauncher.launch(
-                            PickVisualMediaRequest(
-                                ActivityResultContracts.PickVisualMedia.ImageOnly
-                            )
-                        )
+                        launchPhotoPicker()
                     },
                     modifier = Modifier.sizeIn(minHeight = 48.dp),
                 ) {
@@ -208,6 +216,7 @@ fun TargetPickerScreen(
                                 TempCameraPhotos.delete(file)
                                 photoFile = null
                                 photoUri = null
+                                Toast.makeText(context, "No camera app is installed. Use Select Photo instead.", Toast.LENGTH_LONG).show()
                             } catch (e: SecurityException) {
                                 // ACTION_IMAGE_CAPTURE is refused while the app declares the
                                 // CAMERA permission but the person has not granted it.
@@ -261,11 +270,7 @@ fun TargetPickerScreen(
                     // Allow selecting a different photo
                     OutlinedButton(
                         onClick = {
-                            photoPickerLauncher.launch(
-                                PickVisualMediaRequest(
-                                    ActivityResultContracts.PickVisualMedia.ImageOnly
-                                )
-                            )
+                            launchPhotoPicker()
                         },
                         modifier = Modifier
                             .fillMaxWidth()

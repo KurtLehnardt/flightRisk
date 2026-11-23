@@ -3,6 +3,7 @@ package com.flightrisk.app.ui.onboarding
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.util.Log
@@ -24,6 +25,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
@@ -96,9 +98,19 @@ fun OnboardingScreen(
     var currentStep by remember { mutableIntStateOf(1) }
     var selectedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var qualityReport by remember { mutableStateOf<QualityReport?>(null) }
+    var noDialerDialog by remember { mutableStateOf(false) }
     val skip = {
         saveOnboardingComplete(context)
         onSkip()
+    }
+
+    if (noDialerDialog) {
+        AlertDialog(
+            onDismissRequest = { noDialerDialog = false },
+            title = { Text("Cannot place a call") },
+            text = { Text("This device can't place calls. Call 911 from a phone now.") },
+            confirmButton = { TextButton(onClick = { noDialerDialog = false }) { Text("OK") } },
+        )
     }
 
     // Back goes to the previous step. On the first step no callback is registered,
@@ -120,12 +132,17 @@ fun OnboardingScreen(
                 1 -> EmergencyCalloutStep(
                     onContinue = { currentStep = 2 },
                     onCall911 = {
-                        val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:911"))
-                        try {
-                            context.startActivity(intent)
-                        } catch (e: ActivityNotFoundException) {
-                            // A tablet without telephony has no dialer.
-                            Log.w(TAG, "No app can dial 911 on this device")
+                        // A tablet without telephony cannot place a call even if an app
+                        // answers the dial intent, so say so instead of doing nothing.
+                        if (!context.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY)) {
+                            noDialerDialog = true
+                        } else {
+                            try {
+                                context.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:911")))
+                            } catch (e: ActivityNotFoundException) {
+                                Log.w(TAG, "No app can dial 911 on this device")
+                                noDialerDialog = true
+                            }
                         }
                     },
                 )

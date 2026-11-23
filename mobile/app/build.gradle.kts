@@ -25,9 +25,12 @@ require(privacyPolicyUrl.startsWith("https://") && privacyPolicyUrl.none { it ==
 // Release signing
 // ---------------------------------------------------------------------------
 // The upload key is read from mobile/keystore.properties (gitignored) or from
-// environment variables. Each value is looked up in the file first and then in
-// the environment, so a CI job can keep the passwords in its secret store and
-// the rest in the file. When the four values are not all found, the release
+// environment variables. Each value is looked up in the environment first and
+// then in the file, so a CI job can keep the passwords in its secret store and
+// the rest in the file. The environment wins, as it does in most build tools.
+// If a value is set in both places and the two differ, the build fails instead
+// of signing with a key the person did not expect. Passwords are used exactly
+// as written (not trimmed). When the four values are not all found, the release
 // build is left unsigned and a warning is printed. No value is ever logged.
 // See docs/android-release-signing.md.
 val keystoreProperties = Properties().apply {
@@ -35,14 +38,28 @@ val keystoreProperties = Properties().apply {
     if (file.isFile) file.inputStream().use { load(it) }
 }
 
-fun signingValue(propertyName: String, environmentName: String): String? =
-    keystoreProperties.getProperty(propertyName)?.trim()?.takeIf { it.isNotEmpty() }
-        ?: providers.environmentVariable(environmentName).orNull?.trim()?.takeIf { it.isNotEmpty() }
+fun signingValue(propertyName: String, environmentName: String, trim: Boolean = true): String? {
+    fun clean(raw: String?): String? {
+        if (raw == null) return null
+        val value = if (trim) raw.trim() else raw
+        return value.takeIf { it.isNotEmpty() }
+    }
+    val fromFile = clean(keystoreProperties.getProperty(propertyName))
+    val fromEnvironment = clean(providers.environmentVariable(environmentName).orNull)
+    // Never put a value in the message: it may be a password.
+    if (fromFile != null && fromEnvironment != null && fromFile != fromEnvironment) {
+        throw GradleException(
+            "Release signing: $propertyName in keystore.properties differs from $environmentName. " +
+                "Set it in only one place, or make the two equal.",
+        )
+    }
+    return fromEnvironment ?: fromFile
+}
 
 val releaseStoreFile = signingValue("storeFile", "FLIGHTRISK_UPLOAD_STORE_FILE")
-val releaseStorePassword = signingValue("storePassword", "FLIGHTRISK_UPLOAD_STORE_PASSWORD")
+val releaseStorePassword = signingValue("storePassword", "FLIGHTRISK_UPLOAD_STORE_PASSWORD", trim = false)
 val releaseKeyAlias = signingValue("keyAlias", "FLIGHTRISK_UPLOAD_KEY_ALIAS")
-val releaseKeyPassword = signingValue("keyPassword", "FLIGHTRISK_UPLOAD_KEY_PASSWORD")
+val releaseKeyPassword = signingValue("keyPassword", "FLIGHTRISK_UPLOAD_KEY_PASSWORD", trim = false)
 val hasReleaseSigning = listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword)
     .all { it != null }
 
@@ -105,6 +122,21 @@ android {
 
     sourceSets {
         getByName("androidTest").assets.srcDir("$projectDir/schemas")
+    }
+}
+
+// A signed release is a build meant for Play. Warn when it still links to the
+// policy file on GitHub, which Play does not accept as a privacy policy page.
+if (hasReleaseSigning && privacyPolicyUrl == defaultPrivacyPolicyUrl) {
+    gradle.taskGraph.whenReady {
+        val releaseTasks = allTasks.filter { it.project == project && it.name.contains("Release") }
+        if (releaseTasks.isNotEmpty()) {
+            logger.warn(
+                "WARNING: This signed release still links to the default privacy policy address " +
+                    "(the policy file on GitHub). Google Play needs a public, hosted page: set " +
+                    "-Pflightrisk.privacyPolicyUrl=https://... (docs/app-store-compliance.md).",
+            )
+        }
     }
 }
 

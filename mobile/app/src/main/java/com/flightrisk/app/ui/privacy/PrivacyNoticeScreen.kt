@@ -25,8 +25,10 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import com.flightrisk.app.privacy.PrivacyNoticeText
 
 /**
@@ -79,7 +81,13 @@ fun PrivacyNoticeScreen(
         TextButton(
             onClick = {
                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse(PrivacyNoticeText.POLICY_URL))
-                runCatching { context.startActivity(intent) }
+                try {
+                    context.startActivity(intent)
+                } catch (e: ActivityNotFoundException) {
+                    Toast.makeText(context, "No app can open the privacy policy link", Toast.LENGTH_LONG).show()
+                } catch (e: SecurityException) {
+                    Toast.makeText(context, "The privacy policy link could not be opened", Toast.LENGTH_LONG).show()
+                }
             },
             modifier = Modifier.sizeIn(minHeight = 48.dp),
         ) {

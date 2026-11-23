@@ -56,7 +56,7 @@ class CloudClaudeRequestTest {
 
         assertEquals(CloudClaudeLlmBackend.DEFAULT_MODEL, body.getValue("model").jsonPrimitive.content)
         assertEquals(CloudClaudeLlmBackend.MAX_TOKENS, body.getValue("max_tokens").jsonPrimitive.int)
-        assertEquals("low", body.getValue("output_config").jsonObject.getValue("effort").jsonPrimitive.content)
+        assertEquals("high", body.getValue("output_config").jsonObject.getValue("effort").jsonPrimitive.content)
         // Sampling parameters are rejected on this model, and "thinking": {"type": "disabled"} is a 400.
         for (field in listOf("temperature", "top_p", "top_k", "thinking", "tool_choice", "stop_sequences")) {
             assertNull("unexpected field $field", body[field])
@@ -134,7 +134,129 @@ class CloudClaudeRequestTest {
         val body = Json.parseToJsonElement(
             CloudClaudeLlmBackend.requestBody("some-model", listOf(JsonObject(mapOf("type" to JsonPrimitive("text"))))),
         ).jsonObject
+        // A model without the refusal fallback gets no "fallbacks" field.
         assertEquals(setOf("model", "max_tokens", "output_config", "messages"), body.keys)
         assertEquals("some-model", body.getValue("model").jsonPrimitive.content)
+    }
+
+    @Test
+    fun `effort is high, the output limit is 8192 and the timeouts cover a non-streamed generation`() {
+        assertEquals("high", CloudClaudeLlmBackend.EFFORT)
+        assertEquals(8192, CloudClaudeLlmBackend.MAX_TOKENS)
+        assertTrue(CloudClaudeLlmBackend.READ_TIMEOUT_MS >= 120_000L)
+        assertEquals(150_000L, CloudClaudeLlmBackend.CALL_TIMEOUT_MS)
+    }
+
+    @Test
+    fun `the default model asks for the server-side refusal fallback like the desktop agent`() = runBlocking {
+        val h = enabledHarness()
+        h.backend.analyzeMatch(bitmap, bitmap, null)
+        val request = h.server.requests.single()
+        assertEquals("server-side-fallback-2026-07-01", request.beta)
+        assertEquals("default", sentBody(h).getValue("fallbacks").jsonPrimitive.content)
+    }
+
+    @Test
+    fun `an answer with no text is an error, not a no-match`() = runBlocking {
+        val h = enabledHarness(http200("""{"stop_reason":"end_turn","content":[{"type":"thinking","thinking":"","signature":"sig"}]}"""))
+        val result = h.backend.analyzeMatch(bitmap, bitmap, null)
+        assertFalse(result.isMatch)
+        assertEquals("error", result.confidence)
+    }
+
+    @Test
+    fun `images are scaled to 768 pixels on the long edge and small ones are left alone`() {
+        assertEquals(768 to 432, CloudClaudeLlmBackend.scaledSize(1920, 1080))
+        assertEquals(432 to 768, CloudClaudeLlmBackend.scaledSize(1080, 1920))
+        assertEquals(768 to 768, CloudClaudeLlmBackend.scaledSize(4000, 4000))
+        assertEquals(640 to 480, CloudClaudeLlmBackend.scaledSize(640, 480))
+        assertEquals(768 to 600, CloudClaudeLlmBackend.scaledSize(768, 600))
+    }
+
+    @Test
+    fun `the reference photo is encoded once per search`() = runBlocking {
+        val h = enabledHarness()
+        val reference = fakeBitmap()
+        h.backend.analyzeMatch(reference, fakeBitmap(), null)
+        h.backend.analyzeMatch(reference, fakeBitmap(), null)
+        h.backend.analyzeMatch(reference, fakeBitmap(), null)
+        // One reference encode plus three crops.
+        assertEquals(4, h.encodeCount.get())
+        // A different reference (a new search) is encoded again.
+        h.backend.analyzeMatch(fakeBitmap(), fakeBitmap(), null)
+        assertEquals(6, h.encodeCount.get())
+    }
+
+    private fun http(code: Int, text: String) =
+        "HTTP/1.1 $code $text\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
+
+    @Test
+    fun `a 401 marks the key invalid, shows a notice without the key and stops sending`() = runBlocking {
+        val h = enabledHarness(http(401, "Unauthorized"))
+        val result = h.backend.analyzeMatch(bitmap, bitmap, null)
+        assertEquals("error", result.confidence)
+        assertTrue(result.reasoning.contains("401"))
+        assertEquals(ClaudeKeyState.INVALID, h.gate.keyState)
+        assertNull(h.gate.keyIfOpen())
+        val status = h.selector.status.value
+        assertFalse(status.isCloudActive)
+        assertTrue(status.notice!!.contains("rejected"))
+        assertTrue(h.logs.none { it.contains(TEST_CLAUDE_KEY) })
+        assertFalse(status.toString().contains(TEST_CLAUDE_KEY))
+        // No second request is sent with the rejected key.
+        assertEquals(CloudClaudeLlmBackend.BLOCKED, h.backend.analyzeMatch(bitmap, bitmap, null))
+        assertEquals(1, h.server.requests.size)
+        // Saving a new key gives it a fresh try.
+        assertTrue(h.gate.saveKey("another-key"))
+        assertEquals(ClaudeKeyState.FOUND, h.gate.keyState)
+    }
+
+    @Test
+    fun `another 4xx status is shown in the reasoning notice while cloud stays active`() = runBlocking {
+        val h = enabledHarness(http(400, "Bad Request"))
+        val result = h.backend.analyzeMatch(bitmap, bitmap, null)
+        assertTrue(result.reasoning.contains("400"))
+        val status = h.selector.status.value
+        assertTrue(status.notice!!.contains("HTTP 400"))
+        assertTrue(status.cloudProblem!!.contains("400"))
+        assertTrue(status.isCloudActive)
+    }
+
+    @Test
+    fun `three failures in a row open the breaker for 60 seconds and the banner follows`() = runBlocking {
+        val h = enabledHarness(http(500, "Server Error"))
+        repeat(3) { h.backend.analyzeMatch(bitmap, bitmap, null) }
+        assertEquals(3, h.server.requests.size)
+        assertTrue(h.backend.breakerOpen)
+        assertFalse(h.backend.isAvailable)
+        var status = h.selector.status.value
+        assertTrue(status.cloudCoolingOff)
+        assertFalse(status.isCloudActive)
+        assertTrue(status.notice!!.contains("Cloud Claude is unavailable"))
+
+        // While open, nothing is encoded or sent.
+        val encodedBefore = h.encodeCount.get()
+        assertEquals(CloudClaudeLlmBackend.BLOCKED, h.backend.analyzeMatch(bitmap, bitmap, null))
+        assertEquals(3, h.server.requests.size)
+        assertEquals(encodedBefore, h.encodeCount.get())
+
+        // After the cool-off one request is allowed again, and a success closes the breaker.
+        h.nowMs += CloudClaudeLlmBackend.COOL_OFF_MS + 1
+        assertFalse(h.backend.breakerOpen)
+        h.server.rawResponse = http200("""{"content":[{"type":"text","text":"MATCH: no\nCONFIDENCE: high\nREASONING: x"}]}""")
+        val ok = h.backend.analyzeMatch(bitmap, bitmap, null)
+        assertEquals("high", ok.confidence)
+        status = h.selector.status.value
+        assertFalse(status.cloudCoolingOff)
+        assertNull(status.cloudProblem)
+        assertTrue(status.isCloudActive)
+    }
+
+    @Test
+    fun `a refusal does not count toward the breaker`() = runBlocking {
+        val h = enabledHarness(http200("""{"stop_reason":"refusal","stop_details":{"type":"refusal","category":"cyber"},"content":[]}"""))
+        repeat(4) { h.backend.analyzeMatch(bitmap, bitmap, null) }
+        assertFalse(h.backend.breakerOpen)
+        assertEquals(4, h.server.requests.size)
     }
 }
