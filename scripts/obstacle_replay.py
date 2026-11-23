@@ -28,7 +28,8 @@ Arguments:
         ``centre_floor_span`` (n, min, p10, median, p90, max, share of None), a clear-rate
         threshold sweep, and the probability of N consecutive clears (N-of-N voting, N=1..3).
         Votes are resampled on the capture times so that consecutive votes are about
-        ``--vote-interval-s`` apart, and no window spans a refused or stale gap. ``--clear`` and
+        ``--vote-interval-s`` apart, and a gap of more than 3 median frame intervals (a refused or stale
+        stretch) ends a run, so no window spans it. ``--clear`` and
         ``--obstacle`` take comma separated labels and add the best separating threshold per
         metric with its error rates (each recording weighted equally, per-recording false clears,
         the margin, a leave-one-recording-out estimate); that threshold is also the one the voting
@@ -120,7 +121,7 @@ def parse_args(args=None):
              "--obstacle labels give a fitted one (default 1.0)"
     )
     parser.add_argument(
-        "--vote-interval-s", type=float, default=DEFAULT_VOTE_INTERVAL_S,
+        "--vote-interval-s", type=float, default=None,
         help="With --metrics-report: the spacing of consecutive votes in seconds, resampled on the capture "
              f"times (default {DEFAULT_VOTE_INTERVAL_S}, about settle plus inference; 0 votes on every frame)"
     )
@@ -135,7 +136,7 @@ def parse_args(args=None):
         parser.error("--min-safe-depth must be a finite number")
     if parsed.ratio_threshold is not None and not math.isfinite(parsed.ratio_threshold):
         parser.error("--ratio-threshold must be a finite number")
-    if not math.isfinite(parsed.vote_interval_s) or parsed.vote_interval_s < 0:
+    if parsed.vote_interval_s is not None and (not math.isfinite(parsed.vote_interval_s) or parsed.vote_interval_s < 0):
         parser.error("--vote-interval-s must be a finite number, 0 or more")
     if parsed.metrics_report:
         if parsed.frames or parsed.video:
@@ -160,8 +161,11 @@ def parse_args(args=None):
                   file=sys.stderr)
         if parsed.ratio_threshold is None:
             parsed.ratio_threshold = 1.0
-    elif parsed.json_out or parsed.clear or parsed.obstacle or parsed.ratio_threshold is not None:
-        parser.error("--json, --clear, --obstacle and --ratio-threshold need --metrics-report")
+        if parsed.vote_interval_s is None:
+            parsed.vote_interval_s = DEFAULT_VOTE_INTERVAL_S
+    elif (parsed.json_out or parsed.clear or parsed.obstacle or parsed.ratio_threshold is not None
+          or parsed.vote_interval_s is not None):
+        parser.error("--json, --clear, --obstacle, --ratio-threshold and --vote-interval-s need --metrics-report")
     elif not (parsed.frames or parsed.video):
         parser.error("one of --frames, --video or --metrics-report is required")
     return parsed
@@ -454,13 +458,33 @@ def check_recording(label, directory):
         )
 
 
-def check_json_target(json_out):
-    """Raise RecordingError unless the report can be written to ``json_out``."""
-    parent = Path(json_out).resolve().parent
-    if not parent.is_dir():
-        raise RecordingError(f"--json: the folder {parent} does not exist")
-    if Path(json_out).is_dir():
+PROTECTED_NAMES = (INDEX_NAME, "meta.json")
+
+
+def check_json_target(json_out, recordings=()):
+    """Raise RecordingError unless the report can be written to ``json_out`` without harming a recording.
+
+    A field recording cannot be made again, so the report is refused inside any of the listed recording
+    folders, and under the name of a recording's own files (``frames.csv``, ``meta.json``) anywhere.
+    ``recordings`` is the ``(label, directory)`` pairs of the run.
+    """
+    target = Path(json_out).resolve()
+    if not target.parent.is_dir():
+        raise RecordingError(f"--json: the folder {target.parent} does not exist")
+    if target.is_dir():
         raise RecordingError(f"--json: {json_out} is a folder")
+    if target.name.lower() in PROTECTED_NAMES:
+        raise RecordingError(
+            f"--json: {json_out} is named like a recording file ({', '.join(PROTECTED_NAMES)}) and would "
+            "overwrite recorded data; choose another name"
+        )
+    for label, directory in recordings:
+        folder = Path(directory).resolve()
+        if target == folder or folder in target.parents:
+            raise RecordingError(
+                f"--json: {json_out} is inside the recording {label} ({directory}); a recording is never "
+                "written to, so choose a file outside it"
+            )
 
 
 def collect_metrics(directory, stride, guard):
@@ -516,19 +540,36 @@ def median_interval(times):
 
 
 def vote_segments(values, times, interval_s):
+    """Split a recording's per-frame values into runs of votes; see ``_vote_runs`` (values only)."""
+    return [[value for value, _t in run] for run in _vote_runs(values, times, interval_s)]
+
+
+def median_vote_spacing(times, interval_s, values=None):
+    """The median time in seconds between consecutive votes inside a run, or None without two votes in a run."""
+    if times is None:
+        return None
+    values = [0] * len(times) if values is None else values
+    steps = []
+    for run in _vote_runs(values, times, interval_s):
+        steps.extend(b[1] - a[1] for a, b in zip(run, run[1:]))
+    return float(np.median(steps)) if steps else None
+
+
+def _vote_runs(values, times, interval_s):
     """Split a recording's per-frame values into runs of votes, as ``[[value, ...], ...]``.
 
     With capture times, the frames are resampled so that consecutive votes are at least
     ``interval_s`` apart (0 keeps every frame), and a gap between two frames of more than
     ``GAP_FACTOR`` median frame intervals, or a time that goes backwards, ends the run, so that
     no window of votes spans frames the recorder refused as stale. Without capture times the
-    values are one run in frame order and are not resampled.
+    values are one run in frame order and are not resampled. Each run is ``[(value, time), ...]``
+    (the time is None without capture times).
     """
     if not values:
         return []
     interval = median_interval(times) if times is not None and len(times) == len(values) else None
     if interval is None:
-        return [list(values)]
+        return [[(v, None) for v in values]]
     gap = GAP_FACTOR * interval
     segments, current = [], []
     last_vote = previous = None
@@ -539,7 +580,7 @@ def vote_segments(values, times, interval_s):
             current, last_vote = [], None
         previous = t
         if last_vote is None or interval_s <= 0 or t - last_vote >= interval_s - 1e-9:
-            current.append(value)
+            current.append((value, t))
             last_vote = t
     if current:
         segments.append(current)
@@ -631,7 +672,13 @@ def best_threshold(clear_values, obstacle_values):
         })
     best = dict(min(scored, key=lambda r: (r["balanced_error"], r["false_clear"], r["threshold"])))
     higher = [v for v in observed if v > best["threshold"]]
-    best["midpoint"] = (best["threshold"] + min(higher)) / 2 if higher else best["threshold"]
+    best["midpoint"] = best["threshold"]
+    if higher:
+        halfway = (best["threshold"] + min(higher)) / 2
+        # Next to the lowest obstacle value the average can round up to the observed value itself, which
+        # would call that obstacle clear; the threshold is kept unless the midpoint is strictly below it.
+        if halfway < min(higher):
+            best["midpoint"] = halfway
     safe_rows = [r for r in scored if r["false_clear"] == 0]
     safe = min(safe_rows, key=lambda r: (r["false_block"], r["threshold"])) if safe_rows else None
     clear_present = _present(clear)
@@ -709,14 +756,37 @@ def build_report(per_label, clear_labels, obstacle_labels, score_threshold, rati
             "frames": len(rec["rows"]),
             "height_cm": rec.get("height_cm"),
         }
+        usable = times is not None and len(times) == len(rec["rows"]) and median_interval(times) is not None
+        spacing = median_vote_spacing(times, vote_interval_s) if usable else None
+        report["sampling"][label]["median_vote_spacing_s"] = spacing
         if not rec["rows"]:
             report["warnings"].append(f"{label}: no frames (n=0); its numbers are empty")
+        elif len(rec["rows"]) >= 2 and not usable:
+            missing = sum(1 for t in times if t is None) if times is not None else len(rec["rows"])
+            report["warnings"].append(
+                f"{label}: {missing} of {len(rec['rows'])} frames have no usable captured_at_s, so its votes are "
+                "in frame order, are not resampled and no gap ends a run; its vote spacing is unknown"
+            )
+        elif spacing is not None and vote_interval_s > 0 and spacing > 1.2 * vote_interval_s:
+            report["warnings"].append(
+                f"{label}: the median achieved vote spacing is {spacing:.3f} s, more than 20% over "
+                f"--vote-interval-s {vote_interval_s:g} s (the frames are too sparse to vote that fast; "
+                "a lower stride or a longer interval matches it better)"
+            )
     heights = {rec.get("height_cm") for rec in recs.values() if rec.get("height_cm") is not None}
     if len(heights) > 1:
         report["warnings"].append(
             f"recordings were made at different heights ({', '.join(f'{h:g}' for h in sorted(heights))} cm); "
             "a ratio threshold does not carry over between heights")
+    known = [rec.get("height_cm") is not None for rec in recs.values()]
+    if any(known) and not all(known):
+        unknown = [label for label, rec in recs.items() if rec.get("height_cm") is None]
+        report["warnings"].append(
+            f"some recordings state their height and others do not (unknown: {', '.join(unknown)}); "
+            "they may have been made at different heights, and a ratio threshold does not carry over"
+        )
     use_fit = bool(clear_labels and obstacle_labels)
+    fitted_caveat = None
     for name in METRIC_NAMES:
         series = {label: [row[name] for row in rec["rows"]] for label, rec in recs.items()}
         entry = {"summary": {label: summarize(vals) for label, vals in series.items()}}
@@ -745,6 +815,10 @@ def build_report(per_label, clear_labels, obstacle_labels, score_threshold, rati
             "p_consecutive_clear": {},
             "votes": {},
         }
+        if source == SOURCE_FITTED:
+            entry["voting"]["validated"] = False
+            entry["voting"]["caveat"] = separation["caveat"]
+            fitted_caveat = separation["caveat"]
         for label, rec in recs.items():
             segments = vote_segments(series[label], rec.get("times"), vote_interval_s)
             entry["voting"]["votes"][label] = sum(len(s) for s in segments)
@@ -752,6 +826,8 @@ def build_report(per_label, clear_labels, obstacle_labels, score_threshold, rati
                 str(n): consecutive_clear_rate_segments(segments, operating, n) for n in VOTE_LENGTHS
             }
         report["metrics"][name] = entry
+    if fitted_caveat is not None:
+        report["caveat"] = fitted_caveat
     return report
 
 
@@ -772,12 +848,13 @@ def format_report(report):
         lines.append(f"Warning: {warning}")
     lines.append("")
     lines.append("Recordings (a vote is one frame kept after resampling on capture time):")
-    lines.append(f"{'label':<{width}}  {'frames':>6} {'stride':>6} {'frame dt s':>10} {'height cm':>10}")
+    lines.append(f"{'label':<{width}}  {'frames':>6} {'stride':>6} {'frame dt s':>10} {'vote dt s':>9} {'height cm':>10}")
     for label in labels:
         s = report["sampling"][label]
         height = "unknown" if s["height_cm"] is None else f"{s['height_cm']:g}"
         lines.append(
-            f"{label:<{width}}  {s['frames']:>6} {s['stride']:>6} {_fmt(s['median_frame_interval_s']):>10} {height:>10}"
+            f"{label:<{width}}  {s['frames']:>6} {s['stride']:>6} {_fmt(s['median_frame_interval_s']):>10} "
+            f"{_fmt(s.get('median_vote_spacing_s')):>9} {height:>10}"
         )
     lines.append(f"Vote interval: {report['vote_interval_s']:g} s; a gap of more than {GAP_FACTOR:g} frame "
                  "intervals ends a run of votes.")
@@ -880,7 +957,7 @@ def run_metrics_report(recordings, stride, min_safe_depth, clear_labels=(), obst
             problems.append(str(exc))
     if json_out:
         try:
-            check_json_target(json_out)
+            check_json_target(json_out, recordings)
         except RecordingError as exc:
             problems.append(str(exc))
     if problems:
