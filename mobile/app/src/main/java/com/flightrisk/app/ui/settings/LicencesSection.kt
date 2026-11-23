@@ -1,6 +1,7 @@
 package com.flightrisk.app.ui.settings
 
 import android.content.Context
+import android.util.Log
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -72,11 +73,30 @@ object LicencesText {
     /** The libraries the build generated ([R.raw.aboutlibraries]), sorted by name; empty when unreadable. */
     fun readLibraries(context: Context): List<Library> =
         try {
-            val json = context.resources.openRawResource(R.raw.aboutlibraries).bufferedReader().use { it.readText() }
-            Libs.Builder().withJson(json).build().libraries.sortedBy { (it.name.ifBlank { it.uniqueId }).lowercase() }
+            parseLibraries(context.resources.openRawResource(R.raw.aboutlibraries).bufferedReader().use { it.readText() })
         } catch (e: Exception) {
+            logFailure(e)
             emptyList()
         }
+
+    /** Parses the generated library list, sorted by name. Logs and returns an empty list when it is malformed. */
+    fun parseLibraries(json: String): List<Library> =
+        try {
+            // Libs.Builder logs a malformed list itself and returns no libraries, so an empty result is logged too.
+            Libs.Builder().withJson(json).build().libraries.sortedBy { (it.name.ifBlank { it.uniqueId }).lowercase() }
+                .also { if (it.isEmpty()) logFailure(IllegalStateException("The generated library list is empty")) }
+        } catch (e: Exception) {
+            logFailure(e)
+            emptyList()
+        }
+
+    private fun logFailure(e: Exception) {
+        try {
+            Log.w("LicencesText", "The generated library list could not be read", e)
+        } catch (_: RuntimeException) {
+            // android.util.Log is not available in plain JVM unit tests.
+        }
+    }
 
     /** A library's display name: its name, or its coordinates when the POM has none. */
     fun nameOf(library: Library): String = library.name.ifBlank { library.uniqueId }

@@ -167,6 +167,9 @@ android {
 
     testOptions {
         unitTests.all { test ->
+            // The licence-list parse test reads the generated library list.
+            test.dependsOn("prepareLibraryDefinitionsRelease")
+            test.systemProperty("flightrisk.librariesJson", layout.buildDirectory.file("generated/aboutLibraries/release/res/raw/aboutlibraries.json").get().asFile.path)
             // Golden fixtures of `make_models.py verify` (gitignored; the tests that need them
             // are skipped when they are missing) and, optionally, installed models to run.
             test.systemProperty("flightrisk.goldenDir", goldenDir)
@@ -323,6 +326,7 @@ androidComponents {
         val guardApk = registerLicenceGuard(
             "licenceGuard${name}Apk", "APK", variant.artifacts.get(SingleArtifact.APK),
         )
+        tasks.matching { it.name == "bundle$name" || it.name == "assemble$name" }.configureEach { dependsOn(checkLicenceTexts) }
         tasks.matching { it.name == "bundle$name" }.configureEach { finalizedBy(guardBundle) }
         tasks.matching { it.name == "assemble$name" }.configureEach { finalizedBy(guardApk) }
     }
@@ -341,9 +345,18 @@ ksp {
 // AboutLibraries reads every dependency's POM at build time and writes
 // aboutlibraries.json (a raw resource) for the Licences screen, with the full
 // licence texts. Only the release variant's runtime dependencies are listed.
-// The build fails when a library has no licence or one outside the allowed list.
+// Offline and reproducible: the plugin fetches nothing (offlineMode), and the
+// licence texts come from the committed files in config/aboutlibraries/licenses
+// (SPDX texts for Apache-2.0, MIT, BSD-3-Clause and BSD-2-Clause, plus libyuv's
+// own notice, attached to camera-core in config/aboutlibraries/libraries).
+// The build fails (strictMode FAIL) when a library has no licence or one
+// outside the allowed list, and checkLicenceTexts fails the release build when
+// a library has no licence at all or a licence without text (reviewed URL-only
+// licences excepted).
 aboutLibraries {
+    offlineMode = true
     collect {
+        configPath = file("config/aboutlibraries")
         includePlatform = false
     }
     library {
@@ -363,8 +376,61 @@ aboutLibraries {
             "com.google.android.gms:play-services-location",
             "com.google.android.gms:play-services-tasks",
         ))
+        // camera-core's POM names libyuv's BSD licence by URL only; the text is committed as "BSD License (libyuv)".
         allowedLicensesMap.put("BSD License", listOf("androidx.camera:camera-core"))
+        allowedLicensesMap.put("BSD License (libyuv)", listOf("androidx.camera:camera-core"))
         allowedLicensesMap.put("GNU General Public License, version 2 (GPL2), with the classpath exception", listOf("org.checkerframework:checker-compat-qual"))
+    }
+}
+
+// Fails the release build when the generated library list has a library with no
+// licence, or a licence with no text. The licences below carry only a URL on
+// purpose (reviewed): the Android SDK licence on the Play services libraries,
+// and the GPL2 + classpath exception that checker-compat-qual offers beside its
+// MIT text.
+val urlOnlyLicences = mapOf(
+    "ASDKL" to setOf(
+        "com.google.android.gms:play-services-base",
+        "com.google.android.gms:play-services-basement",
+        "com.google.android.gms:play-services-location",
+        "com.google.android.gms:play-services-tasks",
+    ),
+    "da5e524a4235731b9b96281090f5f82d" to setOf("org.checkerframework:checker-compat-qual"),
+    // camera-core's POM pointer to libyuv; the libyuv text is attached beside it.
+    "44d1a25c593283261968a15c8cc213cd" to setOf("androidx.camera:camera-core"),
+)
+val checkLicenceTexts = tasks.register("checkLicenceTexts") {
+    group = "verification"
+    description = "Fails when a library in the generated licence list has no licence or a licence without text."
+    val generated = layout.buildDirectory.file("generated/aboutLibraries/release/res/raw/aboutlibraries.json")
+    dependsOn("prepareLibraryDefinitionsRelease")
+    inputs.file(generated)
+    doLast {
+        @Suppress("UNCHECKED_CAST")
+        val root = groovy.json.JsonSlurper().parse(generated.get().asFile) as Map<String, Any?>
+        @Suppress("UNCHECKED_CAST")
+        val licences = root["licenses"] as Map<String, Map<String, Any?>>
+        @Suppress("UNCHECKED_CAST")
+        val libraries = root["libraries"] as List<Map<String, Any?>>
+        val problems = mutableListOf<String>()
+        for (library in libraries) {
+            val id = library["uniqueId"].toString()
+            @Suppress("UNCHECKED_CAST")
+            val ids = (library["licenses"] as? List<String>).orEmpty()
+            if (ids.isEmpty()) problems += "$id: no licence"
+            for (licenceId in ids) {
+                val text = licences[licenceId]?.get("content")?.toString().orEmpty()
+                if (text.isBlank() && id !in (urlOnlyLicences[licenceId] ?: emptySet())) {
+                    problems += "$id: licence $licenceId has no text"
+                }
+            }
+        }
+        if (problems.isNotEmpty()) {
+            throw GradleException(
+                "Licence text check failed. Add the text under app/config/aboutlibraries/licenses:\n" +
+                    problems.joinToString("\n"),
+            )
+        }
     }
 }
 
@@ -375,7 +441,7 @@ dependencies {
     // Reads the generated library list for the Licences screen (core only, no UI artifact).
     implementation("com.mikepenz:aboutlibraries-core:12.2.4")
     // The contract's JSON element types appear in its public API
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
 
     // Core Android
     implementation("androidx.core:core-ktx:1.13.1")
@@ -439,6 +505,8 @@ dependencies {
 
     // Testing
     testImplementation("junit:junit:4.13.2")
+    // A real org.json for unit tests: the Android stub throws, and the licence list parser needs it.
+    testImplementation("org.json:json:20240303")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
     // A desktop SQLite engine (already in the Gradle cache as a Room compiler
     // dependency) to run the Room migration SQL in FlightRiskMigrationTest.
