@@ -1,0 +1,367 @@
+files in scope: 54; findings: 328; files with findings: 37
+by kind: {'assign': 212, 'kwarg': 68, 'default': 43, 'compare': 5}
+    41 flightrisk/drone/tello.py
+    26 flightrisk/drone/safety.py
+    21 flightrisk/drone/coverage.py
+    21 flightrisk/drone/mavlink_fleet.py
+    21 flightrisk/drone/obstacle_sensor.py
+    18 flightrisk/drone/mavlink.py
+    17 flightrisk/drone/fleet_scale.py
+    14 flightrisk/drone/search.py
+    14 flightrisk/edge_device.py
+    13 flightrisk/drone/coordinator.py
+    11 flightrisk/fleet_protocol/constants.py
+    10 flightrisk/dashboard/manual_control.py
+     9 flightrisk/launcher/settings.py
+     8 flightrisk/drone/fake.py
+     7 flightrisk/drone/fleet_plan_check.py
+     7 flightrisk/drone/lane_executor.py
+     6 flightrisk/drone/autopilot.py
+     6 flightrisk/drone/fleet_patterns.py
+     6 flightrisk/drone/mavsdk_link.py
+     6 flightrisk/drone/template_backend.py
+     5 flightrisk/drone/tello_bound.py
+     4 flightrisk/drone/controller.py
+     4 flightrisk/drone/coverage_sim.py
+     4 flightrisk/drone/geo.py
+     4 flightrisk/drone/lane_flight.py
+     4 flightrisk/drone/plan_edit.py
+     3 flightrisk/dashboard/safety.py
+     3 flightrisk/drone/footprints.py
+     3 flightrisk/drone/plan_paths.py
+     3 flightrisk/launcher/preflight.py
+     2 flightrisk/dashboard/ceiling.py
+     2 flightrisk/drone/obstacle.py
+     1 flightrisk/drone/fleet.py
+     1 flightrisk/drone/geolocate.py
+     1 flightrisk/drone/midas_model.py
+     1 flightrisk/drone/snapshot.py
+     1 flightrisk/drone/udp_endpoints.py
+flightrisk/dashboard/ceiling.py:89 [assign] REPLY_TIMEOUT_S = 5.0
+flightrisk/dashboard/ceiling.py:91 [assign] RECONNECT_GAP_S = 5.0
+flightrisk/dashboard/manual_control.py:100 [assign] DEFAULT_ORPHAN_LAND_S = 120.0
+flightrisk/dashboard/manual_control.py:101 [assign] MIN_ORPHAN_LAND_S = 30.0
+flightrisk/dashboard/manual_control.py:129 [assign] MANUAL_REPLY_TIMEOUT_S = 4.0
+flightrisk/dashboard/manual_control.py:130 [assign] _TAKEOFF_REPLY_TIMEOUT_S = 20.0
+flightrisk/dashboard/manual_control.py:131 [assign] _RESUME_REPLY_TIMEOUT_S = 6.0
+flightrisk/dashboard/manual_control.py:134 [assign] _RELEASE_GRACE_S = 3.0
+flightrisk/dashboard/manual_control.py:135 [assign] DEFAULT_STEP_CM = 30
+flightrisk/dashboard/manual_control.py:136 [assign] DEFAULT_ROTATE_DEG = 30
+flightrisk/dashboard/manual_control.py:138 [assign] _ORPHAN_LAND_RETRY_S = 2.0
+flightrisk/dashboard/manual_control.py:476 [kwarg] timeout = 30.0
+flightrisk/dashboard/safety.py:21 [assign] DEFAULT_RTH_MIN_BATTERY_PCT = 40
+flightrisk/dashboard/safety.py:26 [assign] battery_warn_pct = 20
+flightrisk/dashboard/safety.py:27 [assign] battery_critical_pct = 10
+flightrisk/drone/autopilot.py:195 [assign] _AP_FENCE_ALT_MAX_BIT = 1
+flightrisk/drone/autopilot.py:196 [assign] _AP_FENCE_CIRCLE_BIT = 2
+flightrisk/drone/autopilot.py:220 [assign] FENCE_MARGIN_M = 5.0
+flightrisk/drone/autopilot.py:222 [assign] MAX_FENCE_ALT_M = 120.0
+flightrisk/drone/autopilot.py:386 [assign] MIN_OA_MARGIN_M = 2.0
+flightrisk/drone/autopilot.py:388 [assign] MIN_OA_LOOKAHEAD_M = 5.0
+flightrisk/drone/controller.py:106 [assign] min_move_cm = 20
+flightrisk/drone/controller.py:107 [assign] max_move_cm = 500
+flightrisk/drone/controller.py:108 [assign] max_altitude_m = 120
+flightrisk/drone/controller.py:392 [default] goto_gps.timeout = 300.0
+flightrisk/drone/coordinator.py:111 [assign] DEFAULT_ZONE_GAP_CM = 100
+flightrisk/drone/coordinator.py:114 [assign] DEFAULT_ALT_SLOTS_CM = 100
+flightrisk/drone/coordinator.py:114 [assign] DEFAULT_ALT_SLOTS_CM = 130
+flightrisk/drone/coordinator.py:122 [assign] MIN_START_BATTERY = 30
+flightrisk/drone/coordinator.py:125 [assign] TELEMETRY_FRESH_S = 2.0
+flightrisk/drone/coordinator.py:133 [assign] TELLO_MIN_MOVE_CM = 20
+flightrisk/drone/coordinator.py:134 [assign] TELLO_MAX_MOVE_CM = 500
+flightrisk/drone/coordinator.py:136 [assign] RETASK_WAIT_S = 2.0
+flightrisk/drone/coordinator.py:146 [assign] LOST_OBSTACLE_S = 20.0
+flightrisk/drone/coordinator.py:172 [assign] _FENCE_TOLERANCE_CM = 1e-06
+flightrisk/drone/coordinator.py:709 [default] __init__.dedup_radius_cm = 80
+flightrisk/drone/coordinator.py:1091 [default] sync.timeout_s = 1.0
+flightrisk/drone/coordinator.py:1164 [default] start.lead_s = 2.0
+flightrisk/drone/coverage.py:23 [assign] MAX_ALT_M = 120.0
+flightrisk/drone/coverage.py:26 [assign] DEFAULT_SWAP_TIME_S = 180.0
+flightrisk/drone/coverage.py:105 [assign] TELLO_VIDEO_WIDTH_PX = 960
+flightrisk/drone/coverage.py:106 [assign] TELLO_VIDEO_HEIGHT_PX = 720
+flightrisk/drone/coverage.py:287 [default] tello_sweep_model.height_m = 1.0
+flightrisk/drone/coverage.py:341 [default] plan_coverage.person_height_m = 1.7
+flightrisk/drone/coverage.py:344 [default] plan_coverage.turn_time_s = 6.0
+flightrisk/drone/coverage.py:156 [assign] person_height_m = 1.7
+flightrisk/drone/coverage.py:56 [kwarg] width_px = 2592
+flightrisk/drone/coverage.py:57 [kwarg] height_px = 1936
+flightrisk/drone/coverage.py:58 [kwarg] hfov_deg = 82.6
+flightrisk/drone/coverage.py:60 [kwarg] max_speed_mps = 8.0
+flightrisk/drone/coverage.py:66 [kwarg] max_alt_m = 30.0
+flightrisk/drone/coverage.py:67 [kwarg] max_range_m = 100.0
+flightrisk/drone/coverage.py:72 [kwarg] width_px = 3840
+flightrisk/drone/coverage.py:73 [kwarg] height_px = 2160
+flightrisk/drone/coverage.py:74 [kwarg] hfov_deg = 93.0
+flightrisk/drone/coverage.py:75 [kwarg] gimbal_pitch_deg = -90.0
+flightrisk/drone/coverage.py:76 [kwarg] max_speed_mps = 12.0
+flightrisk/drone/coverage.py:98 [kwarg] sweep_width_m = 30.0
+flightrisk/drone/coverage.py:173 [compare] 0 < self.hfov_deg < 180 = 180
+flightrisk/drone/coverage_sim.py:477 [default] estimate_plan.cell_cm = 10.0
+flightrisk/drone/coverage_sim.py:121 [assign] speed_cm_s = 100.0
+flightrisk/drone/coverage_sim.py:122 [assign] move_overhead_s = 1.5
+flightrisk/drone/coverage_sim.py:245 [assign] cell_cm = 10.0
+flightrisk/drone/fake.py:61 [assign] battery_pct = 100.0
+flightrisk/drone/fake.py:62 [assign] temperature_c = 40.0
+flightrisk/drone/fake.py:64 [assign] takeoff_height_m = 1.0
+flightrisk/drone/fake.py:79 [assign] frame_height = 480
+flightrisk/drone/fake.py:80 [assign] frame_width = 640
+flightrisk/drone/fake.py:143 [kwarg] min_move_cm = 20
+flightrisk/drone/fake.py:144 [kwarg] max_move_cm = 500
+flightrisk/drone/fake.py:145 [kwarg] max_altitude_m = 10
+flightrisk/drone/fleet.py:29 [assign] _CALL_DEADLINE_S = 30.0
+flightrisk/drone/fleet_patterns.py:170 [assign] DEFAULT_PLACEMENT_OFFSET_CM = 50
+flightrisk/drone/fleet_patterns.py:173 [assign] DEFAULT_TAKEOFF_STAGGER_S = 2.0
+flightrisk/drone/fleet_patterns.py:176 [assign] DEFAULT_ALT_SLOTS_CM = 100
+flightrisk/drone/fleet_patterns.py:176 [assign] DEFAULT_ALT_SLOTS_CM = 160
+flightrisk/drone/fleet_patterns.py:229 [default] expanding_square_lanes.initial_side_cm = 100
+flightrisk/drone/fleet_patterns.py:229 [default] expanding_square_lanes.growth_cm = 100
+flightrisk/drone/fleet_plan_check.py:136 [assign] DEFAULT_MIN_SEPARATION_CM = 150
+flightrisk/drone/fleet_plan_check.py:139 [assign] DEFAULT_PLACEMENT_TOLERANCE_CM = 10
+flightrisk/drone/fleet_plan_check.py:151 [assign] MAX_AREA_SIDE_CM = 20000
+flightrisk/drone/fleet_plan_check.py:177 [assign] ALTITUDE_TOLERANCE_CM = 10
+flightrisk/drone/fleet_plan_check.py:183 [assign] COVERAGE_LINE_SPACING_CM = 10.0
+flightrisk/drone/fleet_plan_check.py:201 [assign] _MAX_PLACEMENT_TOLERANCE_CM = 500
+flightrisk/drone/fleet_plan_check.py:202 [assign] _MAX_STAGGER_S = 60.0
+flightrisk/drone/fleet_scale.py:48 [assign] MAX_FIELD_AREA_SIDE_M = 500.0
+flightrisk/drone/fleet_scale.py:50 [assign] MIN_SLOT_SEPARATION_M = 5.0
+flightrisk/drone/fleet_scale.py:52 [assign] _FENCE_MARGIN_M = 5.0
+flightrisk/drone/fleet_scale.py:54 [assign] _MIN_STRIP_M = 2.0
+flightrisk/drone/fleet_scale.py:56 [assign] _MIN_HOLE_M = 0.1
+flightrisk/drone/fleet_scale.py:145 [default] field_scale.area_m = 60.0
+flightrisk/drone/fleet_scale.py:145 [default] field_scale.area_m = 60.0
+flightrisk/drone/fleet_scale.py:146 [default] field_scale.alt_slots_m = 15.0
+flightrisk/drone/fleet_scale.py:146 [default] field_scale.alt_slots_m = 20.0
+flightrisk/drone/fleet_scale.py:63 [kwarg] width_px = 4608
+flightrisk/drone/fleet_scale.py:64 [kwarg] height_px = 2592
+flightrisk/drone/fleet_scale.py:65 [kwarg] hfov_deg = 66.0
+flightrisk/drone/fleet_scale.py:66 [kwarg] gimbal_pitch_deg = -90.0
+flightrisk/drone/fleet_scale.py:67 [kwarg] max_speed_mps = 3.0
+flightrisk/drone/fleet_scale.py:128 [kwarg] area_cm = 400
+flightrisk/drone/fleet_scale.py:128 [kwarg] area_cm = 400
+flightrisk/drone/fleet_scale.py:129 [kwarg] strip_cm = 75
+flightrisk/drone/footprints.py:35 [assign] MAX_SCAN_INTERVALS = 30000000
+flightrisk/drone/footprints.py:38 [assign] _MAX_FOOTPRINT_CM = 10000000.0
+flightrisk/drone/footprints.py:238 [default] covered_fraction.line_spacing_cm = 10.0
+flightrisk/drone/geo.py:15 [assign] EARTH_RADIUS_M = 6371008.8
+flightrisk/drone/geo.py:67 [default] waypoints_to_gps.alt_m = 30.0
+flightrisk/drone/geo.py:99 [default] lawnmower_gps.alt_m = 30.0
+flightrisk/drone/geo.py:192 [default] pattern_to_gps.alt_m = 30.0
+flightrisk/drone/geolocate.py:25 [assign] hfov_deg = 90.0
+flightrisk/drone/lane_executor.py:187 [assign] TELEMETRY_INTERVAL_S = 0.5
+flightrisk/drone/lane_executor.py:193 [assign] _TELEMETRY_JOIN_S = 0.5
+flightrisk/drone/lane_executor.py:194 [assign] MONITOR_INTERVAL_S = 0.05
+flightrisk/drone/lane_executor.py:196 [assign] LAND_RETRY_S = 2.0
+flightrisk/drone/lane_executor.py:199 [assign] MAX_START_LEAD_S = 120.0
+flightrisk/drone/lane_executor.py:200 [assign] MAX_START_LATE_S = 5.0
+flightrisk/drone/lane_executor.py:784 [default] shutdown.timeout = 5.0
+flightrisk/drone/lane_flight.py:155 [assign] OBSTACLE_RETRY_PAUSE_S = 0.5
+flightrisk/drone/lane_flight.py:159 [assign] HEADING_TOLERANCE_DEG = 10.0
+flightrisk/drone/lane_flight.py:173 [assign] _SENSE_JOIN_GRACE_S = 0.5
+flightrisk/drone/lane_flight.py:188 [assign] _START_SPIN_S = 0.02
+flightrisk/drone/mavlink.py:62 [assign] _MOVE_SPEED = 1.0
+flightrisk/drone/mavlink.py:64 [assign] _RTSP_RECONNECT_DELAY = 5.0
+flightrisk/drone/mavlink.py:65 [assign] _HEARTBEAT_TIMEOUT = 5.0
+flightrisk/drone/mavlink.py:66 [assign] _GPS_ARRIVAL_RADIUS = 2.0
+flightrisk/drone/mavlink.py:688 [default] goto_gps.timeout = 300.0
+flightrisk/drone/mavlink.py:370 [assign] interval = 0.1
+flightrisk/drone/mavlink.py:413 [assign] interval = 0.1
+flightrisk/drone/mavlink.py:452 [assign] interval = 0.1
+flightrisk/drone/mavlink.py:116 [kwarg] min_move_cm = 10
+flightrisk/drone/mavlink.py:117 [kwarg] max_move_cm = 50000
+flightrisk/drone/mavlink.py:118 [kwarg] max_altitude_m = 120
+flightrisk/drone/mavlink.py:377 [kwarg] timeout = 2.0
+flightrisk/drone/mavlink.py:383 [kwarg] timeout = 2.0
+flightrisk/drone/mavlink.py:420 [kwarg] timeout = 2.0
+flightrisk/drone/mavlink.py:426 [kwarg] timeout = 2.0
+flightrisk/drone/mavlink.py:460 [kwarg] timeout = 2.0
+flightrisk/drone/mavlink.py:467 [kwarg] timeout = 2.0
+flightrisk/drone/mavlink.py:516 [kwarg] timeout = 10.0
+flightrisk/drone/mavlink_fleet.py:212 [assign] _POLL_S = 0.1
+flightrisk/drone/mavlink_fleet.py:213 [assign] _TAKEOFF_RETRY_S = 2.0
+flightrisk/drone/mavlink_fleet.py:214 [assign] _HEADING_TOLERANCE_DEG = 10.0
+flightrisk/drone/mavlink_fleet.py:217 [assign] _TAKEOFF_ALT_RANGE_M = 2.0
+flightrisk/drone/mavlink_fleet.py:217 [assign] _TAKEOFF_ALT_RANGE_M = 20.0
+flightrisk/drone/mavlink_fleet.py:224 [assign] _STATIONARY_RADIUS_M = 0.5
+flightrisk/drone/mavlink_fleet.py:256 [assign] takeoff_alt_m = 5.0
+flightrisk/drone/mavlink_fleet.py:258 [assign] speed_mps = 3.0
+flightrisk/drone/mavlink_fleet.py:269 [assign] stale_after_s = 3.0
+flightrisk/drone/mavlink_fleet.py:270 [assign] takeoff_timeout_s = 60.0
+flightrisk/drone/mavlink_fleet.py:272 [assign] arrival_radius_m = 1.0
+flightrisk/drone/mavlink_fleet.py:274 [assign] arrival_alt_m = 0.7
+flightrisk/drone/mavlink_fleet.py:276 [assign] move_timeout_margin_s = 20.0
+flightrisk/drone/mavlink_fleet.py:278 [assign] yaw_rate_dps = 30.0
+flightrisk/drone/mavlink_fleet.py:280 [assign] param_refresh_s = 30.0
+flightrisk/drone/mavlink_fleet.py:283 [assign] fence_breach_margin_cm = 300.0
+flightrisk/drone/mavlink_fleet.py:289 [assign] rtl_accept_s = 5.0
+flightrisk/drone/mavlink_fleet.py:293 [assign] stationary_s = 3.0
+flightrisk/drone/mavlink_fleet.py:308 [compare] self.speed_mps > 15 = 15
+flightrisk/drone/mavlink_fleet.py:553 [compare] state.rel_alt_m > 1.0 = 1.0
+flightrisk/drone/mavlink_fleet.py:531 [kwarg] timeout = 2.0
+flightrisk/drone/mavsdk_link.py:71 [assign] DEFAULT_CONNECT_TIMEOUT_S = 30.0
+flightrisk/drone/mavsdk_link.py:73 [assign] DEFAULT_COMMAND_TIMEOUT_S = 10.0
+flightrisk/drone/mavsdk_link.py:75 [assign] _TELEMETRY_RATE_HZ = 10.0
+flightrisk/drone/mavsdk_link.py:149 [kwarg] timeout = 5.0
+flightrisk/drone/mavsdk_link.py:163 [kwarg] timeout = 5.0
+flightrisk/drone/mavsdk_link.py:234 [kwarg] timeout = 2.0
+flightrisk/drone/midas_model.py:64 [assign] _DOWNLOAD_TIMEOUT_S = 60.0
+flightrisk/drone/obstacle.py:60 [default] __init__.min_safe_depth = 0.35
+flightrisk/drone/obstacle.py:61 [default] __init__.check_interval = 0.5
+flightrisk/drone/obstacle_sensor.py:45 [assign] OBSTACLE_STEP_CM = 50
+flightrisk/drone/obstacle_sensor.py:47 [assign] OBSTACLE_STEP_MIN_CM = 20
+flightrisk/drone/obstacle_sensor.py:48 [assign] OBSTACLE_STEP_MAX_CM = 100
+flightrisk/drone/obstacle_sensor.py:50 [assign] OBSTACLE_STEP_FIELD_CM = 500
+flightrisk/drone/obstacle_sensor.py:56 [assign] OBSTACLE_SETTLE_S = 0.3
+flightrisk/drone/obstacle_sensor.py:58 [assign] OBSTACLE_SETTLE_RANGE_S = 0.1
+flightrisk/drone/obstacle_sensor.py:58 [assign] OBSTACLE_SETTLE_RANGE_S = 3.0
+flightrisk/drone/obstacle_sensor.py:61 [assign] OBSTACLE_FRAME_WAIT_S = 0.7
+flightrisk/drone/obstacle_sensor.py:64 [assign] OBSTACLE_SENSE_TIMEOUT_S = 2.0
+flightrisk/drone/obstacle_sensor.py:66 [assign] OBSTACLE_SENSE_RETRIES = 3
+flightrisk/drone/obstacle_sensor.py:68 [assign] OBSTACLE_SENSOR_DOWN_S = 10.0
+flightrisk/drone/obstacle_sensor.py:79 [assign] OBSTACLE_MIN_SAFE_DEPTH = 0.35
+flightrisk/drone/obstacle_sensor.py:84 [assign] OBSTACLE_MIN_SAFE_DEPTH_RANGE = 0.05
+flightrisk/drone/obstacle_sensor.py:84 [assign] OBSTACLE_MIN_SAFE_DEPTH_RANGE = 0.9
+flightrisk/drone/obstacle_sensor.py:86 [assign] OBSTACLE_DETECTION_WAIT_S = 1.0
+flightrisk/drone/obstacle_sensor.py:93 [assign] MAX_DECODE_LAG_S = 0.3
+flightrisk/drone/obstacle_sensor.py:95 [assign] MAX_DECODE_LAG_RANGE_S = 0.1
+flightrisk/drone/obstacle_sensor.py:95 [assign] MAX_DECODE_LAG_RANGE_S = 2.0
+flightrisk/drone/obstacle_sensor.py:367 [assign] heading_tol_deg = 1.0
+flightrisk/drone/obstacle_sensor.py:423 [default] __init__.latency_ms = 1.0
+flightrisk/drone/obstacle_sensor.py:616 [assign] _POLL_S = 0.05
+flightrisk/drone/plan_edit.py:62 [assign] DEFAULT_STRIP_CM = 75
+flightrisk/drone/plan_edit.py:63 [assign] MAX_STRIP_CM = 1000
+flightrisk/drone/plan_edit.py:73 [assign] MAX_FOOTPRINT_CM = 5000
+flightrisk/drone/plan_edit.py:424 [assign] alt = 100
+flightrisk/drone/plan_paths.py:67 [assign] SNAP_TARGET_CM = 25
+flightrisk/drone/plan_paths.py:70 [assign] SNAP_TOLERANCE_CM = 40
+flightrisk/drone/plan_paths.py:84 [assign] _FENCE_SLACK_CM = 1e-06
+flightrisk/drone/safety.py:104 [assign] DEFAULT_LINK_LOSS_LAND_S = 3.0
+flightrisk/drone/safety.py:105 [assign] DEFAULT_MIN_TAKEOFF_BATTERY = 30
+flightrisk/drone/safety.py:106 [assign] DEFAULT_LAND_BATTERY = 15
+flightrisk/drone/safety.py:107 [assign] DEFAULT_GEOFENCE_CM = 500
+flightrisk/drone/safety.py:108 [assign] DEFAULT_ALT_SLOT_CM = 100
+flightrisk/drone/safety.py:112 [assign] DEFAULT_FIELD_LINK_LOSS_HOLD_S = 10.0
+flightrisk/drone/safety.py:117 [assign] MIN_MOVE_CM = 20
+flightrisk/drone/safety.py:118 [assign] MAX_MOVE_CM = 500
+flightrisk/drone/safety.py:130 [assign] DEFAULT_CEILING_CM = 200
+flightrisk/drone/safety.py:131 [assign] DEFAULT_CEILING_MARGIN_CM = 60
+flightrisk/drone/safety.py:134 [assign] MIN_CEILING_CM = 150
+flightrisk/drone/safety.py:136 [assign] MAX_CEILING_CM = 1000
+flightrisk/drone/safety.py:139 [assign] MIN_CEILING_MARGIN_CM = 30
+flightrisk/drone/safety.py:198 [kwarg] max_move_cm = 5000
+flightrisk/drone/safety.py:201 [kwarg] min_alt_slot_cm = 1000
+flightrisk/drone/safety.py:202 [kwarg] max_alt_slot_cm = 12000
+flightrisk/drone/safety.py:203 [kwarg] min_ceiling_cm = 1000
+flightrisk/drone/safety.py:204 [kwarg] max_ceiling_cm = 12000
+flightrisk/drone/safety.py:205 [kwarg] min_ceiling_margin_cm = 300
+flightrisk/drone/safety.py:206 [kwarg] max_geofence_cm = 50000
+flightrisk/drone/safety.py:207 [kwarg] default_geofence_cm = 3000
+flightrisk/drone/safety.py:208 [kwarg] default_alt_slot_cm = 1500
+flightrisk/drone/safety.py:209 [kwarg] default_ceiling_cm = 3000
+flightrisk/drone/safety.py:210 [kwarg] default_ceiling_margin_cm = 500
+flightrisk/drone/safety.py:372 [compare] 0 <= min_takeoff_battery <= 100 = 100
+flightrisk/drone/safety.py:374 [compare] 0 <= land_battery <= 100 = 100
+flightrisk/drone/search.py:64 [default] generate_expanding_square.initial_side_cm = 100
+flightrisk/drone/search.py:65 [default] generate_expanding_square.growth_cm = 100
+flightrisk/drone/search.py:92 [default] generate_sector.radius_cm = 300
+flightrisk/drone/search.py:120 [default] generate_parallel_track.width_cm = 400
+flightrisk/drone/search.py:121 [default] generate_parallel_track.depth_cm = 400
+flightrisk/drone/search.py:122 [default] generate_parallel_track.strip_width_cm = 150
+flightrisk/drone/search.py:154 [default] generate_track_line.length_cm = 500
+flightrisk/drone/search.py:155 [default] generate_track_line.sweep_width_cm = 100
+flightrisk/drone/search.py:190 [default] generate_spiral.radius_cm = 50
+flightrisk/drone/search.py:191 [default] generate_spiral.growth_per_turn_cm = 100
+flightrisk/drone/search.py:271 [default] split_parallel_track_zones.width_cm = 400
+flightrisk/drone/search.py:272 [default] split_parallel_track_zones.depth_cm = 400
+flightrisk/drone/search.py:273 [default] split_parallel_track_zones.strip_width_cm = 150
+flightrisk/drone/search.py:289 [default] split_sector_zones.radius_cm = 300
+flightrisk/drone/snapshot.py:263 [assign] GPS_MAX_AGE_S = 5.0
+flightrisk/drone/tello.py:56 [assign] _FAILURE_LOG_INTERVAL_S = 10.0
+flightrisk/drone/tello.py:87 [assign] _LAND_DEADLINE_S = 25.0
+flightrisk/drone/tello.py:90 [assign] _COMMAND_REPLY_TIMEOUT_S = 7.0
+flightrisk/drone/tello.py:91 [assign] _TAKEOFF_REPLY_TIMEOUT_S = 20.0
+flightrisk/drone/tello.py:114 [assign] _TAKEOFF_CONFIRM_S = 6.0
+flightrisk/drone/tello.py:115 [assign] _TAKEOFF_GROUND_AFTER_S = 3.0
+flightrisk/drone/tello.py:122 [assign] _TIME_BETWEEN_COMMANDS_S = 0.1
+flightrisk/drone/tello.py:123 [assign] _REPLY_POLL_S = 0.01
+flightrisk/drone/tello.py:125 [assign] _LAND_ATTEMPTS = 3
+flightrisk/drone/tello.py:132 [assign] _STATE_FRESH_S = 0.5
+flightrisk/drone/tello.py:140 [assign] _STATE_LOST_S = 3.0
+flightrisk/drone/tello.py:155 [assign] _STATE_READINGS_KEPT = 128
+flightrisk/drone/tello.py:161 [assign] _GROUND_HEIGHT_CM = 10
+flightrisk/drone/tello.py:166 [assign] _GROUND_TOF_CM = 30
+flightrisk/drone/tello.py:171 [assign] _GROUND_READINGS = 3
+flightrisk/drone/tello.py:178 [assign] _MOTOR_OFF_S = 2.0
+flightrisk/drone/tello.py:186 [assign] _MOTOR_RUN_GAP_S = 1.0
+flightrisk/drone/tello.py:206 [assign] _TAKEOFF_LIFT_GUARD_S = 10.0
+flightrisk/drone/tello.py:211 [assign] _LAND_GROUND_WAIT_S = 6.0
+flightrisk/drone/tello.py:234 [assign] _LAND_STALL_S = 1.0
+flightrisk/drone/tello.py:239 [assign] _LAND_DESCENT_STALL_S = 2.0
+flightrisk/drone/tello.py:240 [assign] _LAND_DESCENT_CM = 5
+flightrisk/drone/tello.py:242 [assign] _STATE_POLL_INTERVAL_S = 2.0
+flightrisk/drone/tello.py:244 [assign] _ZERO_HEIGHT_POLLS = 3
+flightrisk/drone/tello.py:251 [assign] _CONNECT_ATTEMPTS = 3
+flightrisk/drone/tello.py:256 [assign] _KEEPALIVE_INTERVAL_S = 10.0
+flightrisk/drone/tello.py:257 [assign] _KEEPALIVE_TIMEOUT_S = 5
+flightrisk/drone/tello.py:267 [assign] _STREAM_RESTART_PAUSE_S = 1.0
+flightrisk/drone/tello.py:269 [assign] _STREAM_CHANNEL_WAIT_S = 30.0
+flightrisk/drone/tello.py:270 [assign] _STREAM_CHANNEL_POLL_S = 0.05
+flightrisk/drone/tello.py:2350 [assign] TAKEOFF_HEIGHT_CM = 80
+flightrisk/drone/tello.py:2357 [default] __init__.battery = 100
+flightrisk/drone/tello.py:571 [kwarg] min_move_cm = 20
+flightrisk/drone/tello.py:572 [kwarg] max_move_cm = 500
+flightrisk/drone/tello.py:573 [kwarg] max_altitude_m = 10
+flightrisk/drone/tello.py:682 [kwarg] retry_count = 1
+flightrisk/drone/tello.py:2368 [kwarg] min_move_cm = 20
+flightrisk/drone/tello.py:2369 [kwarg] max_move_cm = 500
+flightrisk/drone/tello.py:2370 [kwarg] max_altitude_m = 10
+flightrisk/drone/tello.py:563 [kwarg] retry_count = 1
+flightrisk/drone/tello.py:680 [kwarg] retry_count = 1
+flightrisk/drone/tello_bound.py:94 [assign] _RECV_POLL_S = 0.2
+flightrisk/drone/tello_bound.py:100 [assign] _VIDEO_STOP_JOIN_S = 1.0
+flightrisk/drone/tello_bound.py:108 [assign] MAX_QUEUE_AGE_S = 2.0
+flightrisk/drone/tello_bound.py:117 [assign] _LOG_INTERVAL_S = 10.0
+flightrisk/drone/tello_bound.py:757 [default] __init__.retry_count = 1
+flightrisk/drone/template_backend.py:135 [assign] _height_m = 0.8
+flightrisk/drone/template_backend.py:136 [assign] height = 80
+flightrisk/drone/template_backend.py:102 [assign] battery = 90
+flightrisk/drone/template_backend.py:67 [kwarg] min_move_cm = 20
+flightrisk/drone/template_backend.py:68 [kwarg] max_move_cm = 500
+flightrisk/drone/template_backend.py:69 [kwarg] max_altitude_m = 10
+flightrisk/drone/udp_endpoints.py:31 [assign] _NETSTAT_TIMEOUT_S = 15.0
+flightrisk/edge_device.py:229 [assign] _CAMERA_ERROR_LOG_EVERY_S = 30.0
+flightrisk/edge_device.py:249 [assign] DEFAULT_STRIDE_MAX_SKIP_S = 1.0
+flightrisk/edge_device.py:250 [assign] STRIDE_MAX_SKIP_RANGE_S = 5.0
+flightrisk/edge_device.py:267 [assign] _FAKE_SPEED_CM_S = 100.0
+flightrisk/edge_device.py:269 [assign] _CONTROL_RECV_TIMEOUT_S = 0.1
+flightrisk/edge_device.py:276 [assign] _FLEET_RECONNECT_MAX_DELAY_S = 2.0
+flightrisk/edge_device.py:284 [assign] _FRAME_ERROR_GIVE_UP_S = 10.0
+flightrisk/edge_device.py:1024 [default] run_edge_device.recv_timeout = 0.01
+flightrisk/edge_device.py:627 [default] stop.timeout = 1.0
+flightrisk/edge_device.py:672 [default] __init__.retry_s = 1.0
+flightrisk/edge_device.py:1425 [kwarg] match_threshold = 0.55
+flightrisk/edge_device.py:890 [kwarg] timeout = 5.0
+flightrisk/edge_device.py:1435 [kwarg] match_threshold = 0.35
+flightrisk/edge_device.py:1125 [kwarg] timeout = 2.0
+flightrisk/fleet_protocol/constants.py:272 [assign] CLOCK_SYNC_MIN_SAMPLES = 4
+flightrisk/fleet_protocol/constants.py:275 [assign] HEARTBEAT_INTERVAL_S = 1.0
+flightrisk/fleet_protocol/constants.py:277 [assign] TELEMETRY_INTERVAL_S = 0.5
+flightrisk/fleet_protocol/constants.py:279 [assign] PONG_BUDGET_S = 0.02
+flightrisk/fleet_protocol/constants.py:282 [assign] HELLO_TIMEOUT_S = 2.0
+flightrisk/fleet_protocol/constants.py:287 [assign] NUDGE_MIN_CM = 20
+flightrisk/fleet_protocol/constants.py:288 [assign] NUDGE_MAX_CM = 500
+flightrisk/fleet_protocol/constants.py:289 [assign] DEFAULT_HOVER_TIMEOUT_S = 20.0
+flightrisk/fleet_protocol/constants.py:290 [assign] MAX_HOVER_TIMEOUT_S = 120.0
+flightrisk/fleet_protocol/constants.py:300 [assign] MAX_LANE_DISTANCE_CM = 100000
+flightrisk/fleet_protocol/constants.py:308 [assign] MAX_DEPTH = 8
+flightrisk/launcher/preflight.py:47 [assign] PROBE_TIMEOUT_S = 2.5
+flightrisk/launcher/preflight.py:49 [assign] MIN_TAKEOFF_BATTERY = 30
+flightrisk/launcher/preflight.py:204 [default] _tcp_reachable.timeout = 2.0
+flightrisk/launcher/settings.py:49 [assign] DEFAULT_GEOFENCE_CM = 450
+flightrisk/launcher/settings.py:50 [assign] DEFAULT_CEILING_CM = 200
+flightrisk/launcher/settings.py:51 [assign] DEFAULT_MARGIN_CM = 60
+flightrisk/launcher/settings.py:54 [assign] DEFAULT_SLOTS_CM = 100
+flightrisk/launcher/settings.py:54 [assign] DEFAULT_SLOTS_CM = 130
+flightrisk/launcher/settings.py:61 [assign] MAX_GEOFENCE_CM = 5000
+flightrisk/launcher/settings.py:562 [kwarg] geofence_cm = 500
+flightrisk/launcher/settings.py:550 [kwarg] slots = 50
+flightrisk/launcher/settings.py:550 [kwarg] slots = 80

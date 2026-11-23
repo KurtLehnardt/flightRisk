@@ -1,0 +1,146 @@
+"""Exact prototype of the issue #197 guard rule (design.md section 9). Read-only.
+
+A finding is an int or float literal (not a bool; a unary minus is folded in)
+that is either:
+  (A) the whole value, or a numeric element of a tuple value, bound to a
+      unit-named target: an assignment or annotated assignment target
+      (name or attribute), a dataclass field, a function parameter default,
+      or a keyword argument; or
+  (B) an operand of an ordering comparison (<, <=, >, >=) whose other
+      operand is a unit-named Name or Attribute.
+Values 0 and 0.0 are exempt (the "off"/origin sentinel).
+Key = (path, kind, binding name, value): stable across line moves.
+"""
+from __future__ import annotations
+
+import ast
+import re
+import sys
+from pathlib import Path
+
+UNIT_RE = re.compile(
+    r"(?:_|^)(cm|mm|m|km|s|ms|deg|dps|mps|pct|percent|c|hz)$"
+    r"|(?:_|^)(cm|ms|deg|m|s)_(?:range|min|max)$"
+    r"|height|alt(?:itude)?(?:_|$)|ceiling|margin|geofence|fence|slot|timeout|delay|interval|budget|"
+    r"settle|lag|battery|distance|step|separation|spacing|gap|offset|strip|width|depth|speed|radius|"
+    r"tolerance|threshold|temp|retries|retry|votes|attempts|readings|samples|sidestep|relook|clearance",
+    re.IGNORECASE,
+)
+
+
+def _num(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        v = _num(node.operand)
+        return None if v is None else -v
+    return None
+
+
+def _nums(node):
+    v = _num(node)
+    if v is not None:
+        return [v]
+    if isinstance(node, ast.Tuple):
+        out = []
+        for e in node.elts:
+            ev = _num(e)
+            if ev is not None:
+                out.append(ev)
+        return out
+    return []
+
+
+def _name(t):
+    if isinstance(t, ast.Name):
+        return t.id
+    if isinstance(t, ast.Attribute):
+        return t.attr
+    return None
+
+
+def findings(path: Path, rel: str):
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    out = []
+
+    def add(kind, name, value, line):
+        if value == 0:
+            return
+        out.append((rel, kind, name, value, line))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                n = _name(t)
+                if n and UNIT_RE.search(n):
+                    for v in _nums(node.value):
+                        add("assign", n, v, node.lineno)
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            n = _name(node.target)
+            if n and UNIT_RE.search(n):
+                for v in _nums(node.value):
+                    add("assign", n, v, node.lineno)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            a = node.args
+            pos = a.posonlyargs + a.args
+            for arg, d in list(zip(pos[len(pos) - len(a.defaults):], a.defaults)) + [
+                (k, d) for k, d in zip(a.kwonlyargs, a.kw_defaults) if d is not None
+            ]:
+                if UNIT_RE.search(arg.arg):
+                    for v in _nums(d):
+                        add("default", f"{getattr(node, 'name', 'lambda')}.{arg.arg}", v, d.lineno)
+        elif isinstance(node, ast.keyword) and node.arg and UNIT_RE.search(node.arg):
+            for v in _nums(node.value):
+                add("kwarg", node.arg, v, node.value.lineno)
+        elif isinstance(node, ast.Compare):
+            operands = [node.left, *node.comparators]
+            ordering = all(isinstance(op, (ast.Lt, ast.LtE, ast.Gt, ast.GtE)) for op in node.ops)
+            if not ordering:
+                continue
+            names = [_name(o) for o in operands if isinstance(o, (ast.Name, ast.Attribute))]
+            if any(n and UNIT_RE.search(n) for n in names):
+                for o in operands:
+                    v = _num(o)
+                    if v is not None:
+                        add("compare", ast.unparse(node)[:70], v, node.lineno)
+    return out
+
+
+SCOPE_GLOBS = [
+    "flightrisk/drone/*.py",
+    "flightrisk/edge_device.py",
+    "flightrisk/launcher/settings.py",
+    "flightrisk/launcher/commands.py",
+    "flightrisk/launcher/preflight.py",
+    "flightrisk/dashboard/ceiling.py",
+    "flightrisk/dashboard/manual_control.py",
+    "flightrisk/dashboard/safety.py",
+    "flightrisk/dashboard/__main__.py",
+    "flightrisk/fleet_protocol/constants.py",
+]
+
+
+def main():
+    root = Path(sys.argv[1])
+    verbose = "-v" in sys.argv
+    files = sorted({p for g in SCOPE_GLOBS for p in root.glob(g)})
+    allf = []
+    for p in files:
+        allf += findings(p, str(p.relative_to(root)))
+    by_file = {}
+    for f in allf:
+        by_file.setdefault(f[0], []).append(f)
+    print(f"files in scope: {len(files)}; findings: {len(allf)}; files with findings: {len(by_file)}")
+    by_kind = {}
+    for f in allf:
+        by_kind[f[1]] = by_kind.get(f[1], 0) + 1
+    print("by kind:", by_kind)
+    for k, v in sorted(by_file.items(), key=lambda kv: -len(kv[1])):
+        print(f"  {len(v):4d} {k}")
+    if verbose:
+        for f in allf:
+            print(f"{f[0]}:{f[4]} [{f[1]}] {f[2]} = {f[3]}")
+
+
+if __name__ == "__main__":
+    main()
