@@ -32,8 +32,8 @@ from flightrisk.dashboard import __main__ as dashboard_main
 from flightrisk.dashboard import manual_control
 from flightrisk.drone import plan_edit, safety, temp_preflight
 from flightrisk.drone.mavlink_fleet import MavlinkFleetOptions
-from flightrisk.params.resolver import ParamRefused, resolve, resolve_unit, today_accepts_from_golden
-from flightrisk.params.spec import Source
+from flightrisk.params.resolver import ParamRefused, resolve, resolve_unit, spec_for, today_accepts_from_golden
+from flightrisk.params.spec import Edit, Source
 
 GOLDEN = json.loads((Path(__file__).parent / "golden" / "flight_params.json").read_text())
 TODAY = today_accepts_from_golden(GOLDEN)
@@ -202,10 +202,10 @@ _ROOM_ATTR = {"GEOFENCE_CM": "geofence_cm", "CEILING_CM": "ceiling_cm", "CEILING
 _FIELD_ATTR = {"geofence_m": "envelope.geofence_cm", "ceiling_m": "envelope.ceiling_cm",
                "ceiling_margin_m": "envelope.ceiling_margin_cm", "alt_slot_m": "envelope.alt_slot_cm"}
 _FIELD_INPUTS = {
-    "geofence_m": _numbers(-1, 0, 4.99, 5, 30, 500, 500.01, 1.234),
-    "ceiling_m": _numbers(9.99, 10, 30, 120, 120.01, 12.345),
-    "ceiling_margin_m": _numbers(2.99, 3, 5, 30, 30.01),
-    "alt_slot_m": _numbers(9.99, 10, 15, 120, 120.01),
+    "geofence_m": _numbers(-1, 0, 4.99, 5, 30, 500, 500.01, 1.234, 1e307),
+    "ceiling_m": _numbers(9.99, 10, 30, 120, 120.01, 12.345, 1e307),
+    "ceiling_margin_m": _numbers(2.99, 3, 5, 30, 30.01, 1e307),
+    "alt_slot_m": _numbers(9.99, 10, 15, 120, 120.01, 1e307),
 }
 _FIELD_FLAG = {"geofence_m": "--geofence-m", "ceiling_m": "--ceiling-m", "ceiling_margin_m": "--ceiling-margin-m",
                "alt_slot_m": "--alt-slot-m"}
@@ -217,7 +217,7 @@ def _probes() -> list[Probe]:
     # so that the ceiling-minus-margin cross check (a constraint, not parity) does not bite.
     room = {
         "GEOFENCE_CM": (_numbers(-5, 0, 1, 39, 40, 500, 5000, 5001, 100000), {}),
-        "CEILING_CM": (_numbers(149, 150, 200, 1000, 1001, 150.5), {}),
+        "CEILING_CM": (_numbers(149, 150, 200, 1000, 1001, 150.5, 1e308), {}),
         "CEILING_MARGIN_CM": (_numbers(29, 30, 60, 500, 501, 900), {G + "CEILING_CM": "1000"}),
     }
     for short, (inputs, companions) in room.items():
@@ -324,10 +324,10 @@ def _more_probes() -> list[Probe]:
     out.append(Probe("--fleet-area-cm", T, "plan.area_cm", dashboard_main._parse_area, area, flag=True))
     out.append(Probe("--takeoff-alt-m", F, "takeoff.height_cm",
                      lambda raw: MavlinkFleetOptions(takeoff_alt_m=_flag_value("--takeoff-alt-m", raw))
-                     .takeoff_alt_m * 100.0, _numbers(-1, 0, 1.99, 2, 5, 20, 20.01, "abc", "nan"), flag=True))
+                     .takeoff_alt_m * 100.0, _numbers(-1, 0, 1.99, 2, 5, 20, 20.01, 1e307, "abc", "nan"), flag=True))
     out.append(Probe("--speed-mps", F, "move.speed_cm_s",
                      lambda raw: MavlinkFleetOptions(speed_mps=_flag_value("--speed-mps", raw))
-                     .speed_mps * 100.0, _numbers(-1, 0, 0.49, 0.5, 3, 15, 15.01, "abc", "nan"), flag=True))
+                     .speed_mps * 100.0, _numbers(-1, 0, 0.49, 0.5, 3, 15, 15.01, 1e307, "abc", "nan"), flag=True))
     return out
 
 
@@ -382,6 +382,10 @@ ACCEPTED_TODAY_REFUSED_BY_RESOLVE_UNIT = frozenset({
     # K-6: a link-loss detect time under 1.5 heartbeat intervals, which today accepts.
     (T, G + "LINK_LOSS_LAND_S", "1.4"),
     (F, G + "LINK_LOSS_LAND_S", "1.4"),
+    # K-3 on the Tello: a minimum takeoff battery at or under the 25 % return floor, which today accepts.
+    (T, G + "MIN_TAKEOFF_BATTERY", "15"),
+    (T, G + "MIN_TAKEOFF_BATTERY", "19"),
+    (T, G + "MIN_TAKEOFF_BATTERY", "20"),
 })
 
 
@@ -414,3 +418,35 @@ UNCOMPARED = {
 
 def test_uncompared_list_is_small_and_explicit() -> None:
     assert len(UNCOMPARED) == 3
+
+
+#: Test-adapter fact overrides that today's ObstacleSettings honours on any MAVLink drone and that the
+#: resolver ignores on a production (not simulated) MAVLink unit, by N-10 and FACT-3. This is a behaviour
+#: change at adoption, pinned here so A3 records it in design section 27.
+IGNORED_ON_PRODUCTION_UNIT = frozenset({
+    (F, G + "OBSTACLE_STEP_CM"),
+    (F, G + "OBSTACLE_TURN"),
+    (F, G + "OBSTACLE_SETTLE_S"),
+    (F, G + "OBSTACLE_MIN_SAFE_DEPTH"),
+    (F, G + "OBSTACLE_PERSON_FRACTION"),
+    (F, G + "OBSTACLE_CLEAR_VOTES"),
+    (F, G + "OBSTACLE_RELOOK"),
+    (F, G + "OBSTACLE_SIDESTEP_CM"),
+    (F, G + "OBSTACLE_SIDESTEPS"),
+})
+
+
+def test_fact_overrides_ignored_on_a_production_mavlink_unit_are_pinned() -> None:
+    found = set()
+    for probe, raw in CASES:
+        if probe.model != F or not probe.simulated or probe.flag or not raw.strip():
+            continue
+        if spec_for(probe.param_id).edit.get(F) is not Edit.FACT:
+            continue
+        if _today(lambda: probe.read(raw)) == REFUSED:
+            continue
+        out = resolve(F, "drone-1", {Source.ENV: {**probe.companions, probe.name: raw}},
+                      simulated=False, today_accepts=TODAY)
+        if out[probe.param_id].source is Source.PROFILE:
+            found.add((probe.model, probe.name))
+    assert found == IGNORED_ON_PRODUCTION_UNIT

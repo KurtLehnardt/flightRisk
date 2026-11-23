@@ -283,3 +283,193 @@ def test_read_only_everywhere_id_in_params_file_is_refused(tmp_path):
     ro = next(s for s in TABLE if set(e.value for e in s.edit.values()) == {"read_only"})
     with pytest.raises(ParamRefused):
         files.load_params_file(_write(tmp_path, {"version": 1, "defaults": {ro.id: ro.defaults[G]}}))
+
+
+# Critic round 1, F1: a value that overflows to infinity after unit scaling must be refused, as today.
+@pytest.mark.parametrize("source,name,text", [
+    (Source.ENV, "FLIGHTRISK_FIELD_CEILING_M", "1e307"),
+    (Source.ENV, "FLIGHTRISK_FIELD_GEOFENCE_M", "1e307"),
+    (Source.ENV, "FLIGHTRISK_FIELD_CEILING_MARGIN_M", "1e307"),
+    (Source.ENV, "FLIGHTRISK_FIELD_ALT_SLOT_M", "1e307"),
+    (Source.CLI, "--ceiling-m", "1e307"),
+    (Source.CLI, "--geofence-m", "1e307"),
+    (Source.CLI, "--ceiling-margin-m", "1e307"),
+    (Source.CLI, "--alt-slot-m", "1e307"),
+    (Source.CLI, "--speed-mps", "1e307"),
+    (Source.CLI, "--takeoff-alt-m", "1e307"),
+])
+def test_a_metre_value_that_overflows_once_scaled_is_refused(source, name, text):
+    with pytest.raises(ParamRefused):
+        _resolve(G, {source: {name: text}}, scale="field")
+
+
+@pytest.mark.parametrize("text", ["1e308", "1e309"])
+def test_a_centimetre_value_near_the_float_limit_is_refused(text):
+    # Today's room envelope refuses both (1e309 parses as inf); the geofence has no upper end today.
+    with pytest.raises(ParamRefused):
+        _resolve("tello", {Source.ENV: {"FLIGHTRISK_CEILING_CM": text}})
+
+
+def test_a_non_finite_number_is_never_inside_a_range():
+    from flightrisk.params.resolver import TodayRange, _outside_range
+    assert _outside_range(float("inf"), TodayRange(None, None)) == "hi"
+    assert _outside_range(float("-inf"), TodayRange(None, None)) == "lo"
+    assert _outside_range(float("nan"), TodayRange(0, 10)) is not None
+    assert _outside_range(10 ** 400, TodayRange(None, None)) == "hi"
+
+
+# Critic round 1, F2: a name today's code does not read gets the target bound, never an open range.
+@pytest.mark.parametrize("text", ["-50", "0", "9", "51"])
+def test_the_new_land_battery_name_is_checked_against_the_target_bound(text):
+    with pytest.raises(ParamRefused):
+        _resolve("tello", {Source.ENV: {"FLIGHTRISK_LAND_BATTERY": text}})
+
+
+def test_the_new_land_battery_name_inside_the_target_bound_is_accepted():
+    assert _resolve("tello", {Source.ENV: {"FLIGHTRISK_LAND_BATTERY": "20"}})["battery.critical_pct"].value == 20
+
+
+@pytest.mark.parametrize("source,name,text", [
+    (Source.ENV, "FLIGHTRISK_FLEET_STRIP_CM", "-5"),
+    (Source.ENV, "FLIGHTRISK_FLEET_STRIP_CM", "0"),
+    (Source.CLI, "--fleet-strip-cm", "0"),
+    (Source.CLI, "--fleet-strip-cm", "-5"),
+])
+def test_a_fleet_strip_that_is_not_positive_is_refused_as_today(source, name, text):
+    # Today: flightrisk/dashboard/__main__.py:193 refuses --fleet-strip-cm <= 0.
+    with pytest.raises(ParamRefused):
+        _resolve("tello", {source: {name: text}})
+
+
+def test_a_positive_fleet_strip_keeps_todays_open_upper_end():
+    assert _resolve("tello", {Source.ENV: {"FLIGHTRISK_FLEET_STRIP_CM": "5000"}})["plan.strip_cm"].value == 5000
+
+
+def test_a_new_name_with_no_bound_is_not_honoured():
+    result = _resolve("tello", {Source.ENV: {"FLIGHTRISK_LINK_LOSS_WAIT_S": "-5"}})
+    assert result["link.loss_wait_s"].value == 0
+    assert result["link.loss_wait_s"].source is Source.PROFILE
+
+
+def _table_names():
+    for spec in TABLE:
+        for name in ([spec.env] if spec.env else []) + [a.name for a in spec.env_aliases] + list(spec.cli):
+            yield spec, name
+
+
+def _runtime_reads(name: str) -> bool:
+    root = Path(__file__).resolve().parent.parent
+    needle = f'"{name}"'
+    for base in ("flightrisk", "scripts"):
+        for path in (root / base).rglob("*.py"):
+            rel = path.relative_to(root).as_posix()
+            if rel.startswith("flightrisk/params/") or rel == "scripts/make_param_golden.py":
+                continue
+            if needle in path.read_text(encoding="utf-8"):
+                return True
+    return False
+
+
+@pytest.mark.parametrize("name", sorted({n for _, n in _table_names()}))
+def test_read_today_matches_a_reader_in_todays_code(name):
+    from flightrisk.params.table import read_today
+    assert read_today(name) is _runtime_reads(name)
+
+
+def test_an_open_today_range_is_backed_by_a_cited_reader():
+    from flightrisk.params.resolver import _new_name_without_bound
+    from flightrisk.params.table import TODAY_READ_AS_KIND, TODAY_READS, read_today
+    names = {n for _, n in _table_names()}
+    assert set(TODAY_READS) <= names and set(TODAY_READ_AS_KIND) <= names
+    for spec, name in _table_names():
+        for profile, default in spec.defaults.items():
+            if default is None or (TODAY.get(name) or {}).get(profile) is not None:
+                continue
+            # No recorded today range: the value is open only for a name today's code reads. Any other
+            # name is checked against the target bound, or is not honoured when the row has none.
+            assert (read_today(name) or spec.bounds.get(profile) is not None
+                    or _new_name_without_bound(spec, profile, name)
+                    or spec.kind.value in ("bool", "enum")), (name, profile)
+
+
+# Critic round 1, F5 and F8: oversized numbers and loader gaps are refused cleanly.
+def test_an_oversized_integer_in_a_json_layer_is_refused_cleanly():
+    with pytest.raises(ParamRefused):
+        files.parse_params({"version": 1, "defaults": {"battery.critical_pct": 10 ** 400}})
+    with pytest.raises(ParamRefused):
+        _resolve("tello", {Source.FILE: {"battery.critical_pct": 10 ** 400}})
+
+
+def test_a_params_file_with_a_huge_integer_is_refused_cleanly(tmp_path):
+    path = tmp_path / "params.json"
+    path.write_text('{"version": 1, "defaults": {"battery.critical_pct": ' + "9" * 5000 + "}}", encoding="utf-8")
+    with pytest.raises(ParamRefused):
+        files.load_params_file(path)
+
+
+@pytest.mark.parametrize("version", [True, 1.0])
+def test_a_params_file_version_must_be_the_integer_1(version):
+    with pytest.raises(ParamRefused):
+        files.parse_params({"version": version})
+
+
+def test_a_dangling_params_symlink_is_refused_not_treated_as_missing(tmp_path):
+    path = tmp_path / "params.json"
+    path.symlink_to(tmp_path / "missing.json")
+    with pytest.raises(ParamRefused):
+        files.load_params_file(path)
+
+
+# Critic round 2: R2-1 oversized integers, R2-2 and R2-3 the unbounded row, NIT R2-5 negative zero.
+HUGE = "9" * 400
+
+
+@pytest.mark.parametrize("model, name", [("tello", "FLIGHTRISK_TELLO_SETTLE_SAMPLES"),
+                                         (G, "FLIGHTRISK_OBSTACLE_STEP_CM")])
+def test_a_400_digit_ascii_int_is_refused_cleanly(model, name):
+    with pytest.raises(ParamRefused):
+        _resolve(model, {Source.ENV: {name: HUGE}}, simulated=True)
+
+
+def test_a_400_digit_fleet_area_is_refused_cleanly():
+    with pytest.raises(ParamRefused):
+        _resolve(G, {Source.ENV: {"FLIGHTRISK_FLEET_AREA_CM": HUGE}})
+    with pytest.raises(ParamRefused):
+        _resolve(G, {Source.CLI: {"--fleet-area-cm": HUGE}})
+
+
+def test_every_today_read_parse_kind_refuses_a_400_digit_value_cleanly():
+    from flightrisk.params.table import TODAY_READS
+    for name, read in TODAY_READS.items():
+        if read.parse == "choice":
+            continue
+        source = Source.CLI if name.startswith("--") else Source.ENV
+        refused = False
+        for model in ("tello", G):
+            try:
+                _resolve(model, {source: {name: HUGE}}, simulated=True)
+            except ParamRefused:
+                refused = True
+        assert refused, name
+
+
+@pytest.mark.parametrize("source", [Source.FILE, Source.INVENTORY, Source.LAUNCHER])
+@pytest.mark.parametrize("value", [-5, 0, 10, 600])
+def test_link_loss_wait_is_refused_from_id_layers_on_a_tello(source, value):
+    with pytest.raises(ParamRefused):
+        _resolve("tello", {source: {"link.loss_wait_s": value}})
+
+
+def test_link_loss_wait_env_is_still_ignored_on_a_tello():
+    got = _resolve("tello", {Source.ENV: {"FLIGHTRISK_LINK_LOSS_WAIT_S": "-5"}})
+    assert got["link.loss_wait_s"].source is Source.PROFILE
+
+
+def test_the_ignored_without_bound_allowlist_has_exactly_one_entry():
+    from flightrisk.params.resolver import IGNORED_WITHOUT_BOUND
+    assert IGNORED_WITHOUT_BOUND == frozenset({("tello", "FLIGHTRISK_LINK_LOSS_WAIT_S")})
+
+
+def test_a_negative_zero_float_resolves_to_positive_zero():
+    got = _resolve(G, {Source.ENV: {"FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S": "-0"}})["link.loss_wait_s"].value
+    assert str(got) == "0.0"

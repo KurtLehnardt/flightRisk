@@ -28,6 +28,7 @@ Decisions:
 from __future__ import annotations
 
 import dataclasses
+import math
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional, Union
 
@@ -123,6 +124,10 @@ def custom_model(model_id: str, record: Mapping[str, Any]) -> CustomModel:
         elif field not in ("extends",) + DESCRIPTOR_FIELDS + PARAM_FIELDS:
             raise _refuse(model_id, f"`{field}`", "is not a field of a custom model")
 
+    bad = _non_finite_field(record)
+    if bad is not None:
+        raise _refuse(model_id, f"`{bad}`", "holds a number that is not finite")
+
     profile = base.profile
     bounds: dict[str, Bound] = {}
     for param_id, given in (record.get("param_bounds") or {}).items():
@@ -131,7 +136,8 @@ def custom_model(model_id: str, record: Mapping[str, Any]) -> CustomModel:
         lo = given.get("lo") if isinstance(given, Mapping) else None
         hi = given.get("hi") if isinstance(given, Mapping) else None
         field = f"`param_bounds.{param_id}`"
-        if base_bound is None or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (lo, hi)):
+        if base_bound is None or not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                                         and _finite(v) for v in (lo, hi)):
             raise _refuse(model_id, field, "is not a numeric bound the base has")
         if lo > hi:
             raise _refuse(model_id, field, f"{_num(lo)} to {_num(hi)} is empty")
@@ -157,6 +163,30 @@ def custom_model(model_id: str, record: Mapping[str, Any]) -> CustomModel:
     model = CustomModel(narrowed, base, bounds, defaults, f"inventory.json models.{model_id}")
     _refuse_less_safe_defaults(model)
     return model
+
+
+def _finite(value: Union[int, float]) -> bool:
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _non_finite_field(value: Any, path: str = "") -> Optional[str]:
+    """The dotted path of the first number in ``value`` that is NaN, infinite or too large, or None."""
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            found = _non_finite_field(item, f"{path}.{key}" if path else str(key))
+            if found is not None:
+                return found
+    elif isinstance(value, (list, tuple)):
+        for i, item in enumerate(value):
+            found = _non_finite_field(item, f"{path}[{i}]")
+            if found is not None:
+                return found
+    elif isinstance(value, (int, float)) and not isinstance(value, bool) and not _finite(value):
+        return path or "value"
+    return None
 
 
 def _outside(value: Any, bound: Bound) -> bool:

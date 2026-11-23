@@ -26,8 +26,14 @@ Decisions:
    ``FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S`` and ``--link-loss-hold-s`` from 0,
    ``--speed-mps`` above 0 to 15 m/s). A3 to A5 add the target bounds to
    these names as a deliberate change recorded in design section 27. Only
-   with ``today_accepts=None`` (no golden data) is an environment or flag
-   value checked against the target bound.
+   with ``today_accepts=None`` (no golden data), or for a name today's code
+   does not read at all (``table.read_today`` is false, for example
+   ``FLIGHTRISK_LAND_BATTERY`` and ``FLIGHTRISK_LINK_LOSS_WAIT_S``), is an
+   environment or flag value checked against the target bound. On a custom
+   or unknown model, which has no today behaviour to keep, an environment or
+   flag value must also stay inside the model's own bound, so the effective
+   range is today's range intersected with the model's bound. Built-in
+   models are unaffected.
 2. Where today's code clamps (``policy: clamp``, row 23
    ``FLIGHTRISK_MANUAL_ORPHAN_LAND_S``, "min 30, clamped"), the resolver
    clamps to the same end and logs it (risk R5). C5 turns this into a
@@ -144,6 +150,7 @@ from flightrisk.params.table import (
     PARSE_CHOICE,
     TABLE,
     TODAY_READS,
+    read_today,
     TodayRead,
 )
 
@@ -286,8 +293,30 @@ def spec_for(param_id: str) -> Optional[ParamSpec]:
     return _BY_ID.get(param_id)
 
 
+def _is_numeric(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    """True for a finite int or float that converts to a float; an oversized int is not a number."""
+    if not _is_numeric(value):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _finite(value: Any, raw: Any) -> Any:
+    """Return ``value`` if every number in it is finite; raises ``_WrongType`` otherwise.
+
+    This is the one finiteness check every layer passes after the last conversion step (parse, unit
+    scale and rounding), so a metre value that overflows to infinity once scaled is refused.
+    """
+    items = value if isinstance(value, tuple) else (value,)
+    if any(_is_numeric(item) and not _is_number(item) for item in items):
+        raise _WrongType(raw)
+    return value
 
 
 def _whole(value: float) -> Union[int, float]:
@@ -364,6 +393,8 @@ def _from_today_text(spec: ParamSpec, raw: str, read: TodayRead, scale: float) -
             values = values * 2
         if len(values) != 2 or min(values) <= 0:
             raise _WrongType(raw)
+        if not all(_is_number(v) for v in values):
+            raise _WrongType(raw)
         return _typed_list(spec, [_scaled(v, scale, Kind.INT) for v in values])
     number: Union[int, float]
     if read.parse == PARSE_ASCII_INT:
@@ -379,7 +410,7 @@ def _from_today_text(spec: ParamSpec, raw: str, read: TodayRead, scale: float) -
             number = float(text)
         except ValueError as exc:
             raise _WrongType(raw) from exc
-    if not math.isfinite(number):
+    if not _is_number(number) or not math.isfinite(number):
         raise _WrongType(raw)
     if read.metres_below is not None and 0 < number < read.metres_below:
         number = number * _METRE_SCALE
@@ -450,7 +481,8 @@ def _refusal(spec: ParamSpec, model: DroneModel, unit_id: str, value: Any, detai
     profile = model.profile
     if spec.is_fact(profile):
         log.warning("refused test-adapter override %s=%r for %s on %s", detail, value, spec.id, unit_id)
-        return ParamRefused(FACT_OVERRIDE_REFUSED, param_id=spec.id, source=source)
+        # A fact refusal carries no param_id, so no caller can render the fact's id (design 7.5).
+        return ParamRefused(FACT_OVERRIDE_REFUSED, source=source)
     lo, hi = bound if bound else (None, None)
     target = spec.bounds.get(profile)
     if target is not None:
@@ -477,6 +509,9 @@ def _outside_range(value: Any, rng: TodayRange) -> Optional[str]:
     """``"lo"`` or ``"hi"`` when a number (or any item of a pair or list) passes that end of ``rng``."""
     items = value if isinstance(value, tuple) else (value,)
     for item in items:
+        if _is_numeric(item) and not _is_number(item):
+            # A non-finite or oversized number is never inside a range.
+            return "lo" if item < 0 else "hi"
         if not _is_number(item):
             continue
         if rng.lo is not None and (item < rng.lo or (rng.lo_open and item == rng.lo)):
@@ -496,23 +531,32 @@ def _today_range(today_accepts: Optional[TodayAccepts], name: str, profile: str)
 
 
 def _check_bound(spec: ParamSpec, model: DroneModel, unit_id: str, value: Any, detail: str, source: Source,
-                 name: Optional[str], today_accepts: Optional[TodayAccepts]) -> Any:
-    """Return the value to use after the bound check, clamped where today's code clamps; raise if refused."""
+                 name: Optional[str], today_accepts: Optional[TodayAccepts], model_bound: bool = False) -> Any:
+    """Return the value to use after the bound check, clamped where today's code clamps; raise if refused.
+
+    ``model_bound`` is true for a custom or unknown model: an environment or flag value must then also
+    stay inside the model's own bound, so the effective range is today's range intersected with it.
+    """
     profile = model.profile
-    if today_accepts is not None and name and source in _NAME_LAYERS:
-        # Decision 1: an environment or flag value is checked against today's range only. A name with no
-        # recorded range is open, as today's reader accepts any value its parse accepts.
+    target: Optional[Bound] = spec.bounds.get(profile)
+    if today_accepts is not None and name and source in _NAME_LAYERS and read_today(name):
+        # Decision 1: an environment or flag value of a name today's code reads is checked against today's
+        # range only. Such a name with no recorded range is open, as today's reader accepts any value its
+        # parse accepts. A name today's code does not read falls through to the target bound.
         today = _today_range(today_accepts, name, profile) or _OPEN
         end = _outside_range(value, today)
-        if end is None:
-            return value
-        if today.policy == "clamp" and not isinstance(value, tuple):
+        if end is not None:
+            if today.policy != "clamp" or isinstance(value, tuple):
+                raise _refusal(spec, model, unit_id, value, detail, (today.lo, today.hi), source)
             clamped = today.lo if end == "lo" else today.hi
             clamped = _whole(clamped) if spec.kind is Kind.INT else float(clamped)
             log.warning("%s=%r is outside %s to %s; clamped to %r as today", name, value, today.lo, today.hi, clamped)
-            return clamped
-        raise _refusal(spec, model, unit_id, value, detail, (today.lo, today.hi), source)
-    target: Optional[Bound] = spec.bounds.get(profile)
+            value = clamped
+        if model_bound and target is not None and _outside(value, target.lo, target.hi) is not None:
+            lo = target.lo if today.lo is None else max(today.lo, target.lo)
+            hi = target.hi if today.hi is None else min(today.hi, target.hi)
+            raise _refusal(spec, model, unit_id, value, detail, (lo, hi), source)
+        return value
     if target is not None and _outside(value, target.lo, target.hi) is not None:
         raise _refusal(spec, model, unit_id, value, detail, (target.lo, target.hi), source)
     return value
@@ -563,9 +607,23 @@ def _entries(source: Source, layer: Mapping[str, Any], scale: str, model: DroneM
 
 
 def _value_of(spec: ParamSpec, raw: Any, source: Source, name: Optional[_Name]) -> tuple[Any, bool]:
-    """The typed value and whether it is the row's off value; raises ``_WrongType``."""
+    """The typed value and whether it is the row's off value; raises ``_WrongType``.
+
+    Every layer's value passes ``_finite`` after its last conversion step.
+    """
     if _off_match(spec, raw):
         return spec.off_value, True
+    try:
+        value, is_off = _converted(spec, raw, source, name)
+    except OverflowError:
+        raise _WrongType(raw) from None
+    value = _finite(value, raw)
+    if isinstance(value, float):
+        value += 0.0  # -0.0 becomes 0.0
+    return value, is_off
+
+
+def _converted(spec: ParamSpec, raw: Any, source: Source, name: Optional[_Name]) -> tuple[Any, bool]:
     if source in _NAME_LAYERS:
         text = raw if isinstance(raw, str) else str(raw)
         if isinstance(raw, bool) or (raw is not None and not isinstance(raw, (str, int, float))):
@@ -574,6 +632,27 @@ def _value_of(spec: ParamSpec, raw: Any, source: Source, name: Optional[_Name]) 
             return _from_today_text(spec, text, name.read, name.scale), False
         return _from_text(spec, text, name.scale if name else 1.0), False
     return coerce_typed(spec, raw), False
+
+
+_NUMERIC_KINDS = (Kind.INT, Kind.FLOAT, Kind.INT_LIST, Kind.INT_PAIR)
+
+
+#: The only (profile, name) pairs whose value is ignored with a log line because no code reads the name
+#: and the row has no bound. C7 must add the bound before any code reads it. Pinned by a test.
+IGNORED_WITHOUT_BOUND = frozenset({("tello", "FLIGHTRISK_LINK_LOSS_WAIT_S")})
+
+
+def _new_name_without_bound(spec: ParamSpec, profile: str, name: str) -> bool:
+    """True for a number from a name today's code does not read, on a row with no target bound."""
+    return not read_today(name) and spec.kind in _NUMERIC_KINDS and spec.bounds.get(profile) is None
+
+
+def _unbounded_id_row(spec: ParamSpec, profile: str) -> bool:
+    """True for a row whose name is in ``IGNORED_WITHOUT_BOUND``; the file, inventory and launcher layers refuse it.
+
+    C7 must add the bound before any code reads it.
+    """
+    return bool(spec.env) and (profile, spec.env) in IGNORED_WITHOUT_BOUND
 
 
 def _is_test_unit(model: DroneModel, simulated: bool) -> bool:
@@ -655,7 +734,9 @@ def resolve(
     where it came from; the launcher layer may also hold the reserved
     ``confirmed`` object), ``env`` to a copy of the environment and ``cli`` to
     ``{flag: value}``. ``scale`` is ``room`` or ``field`` and defaults to the
-    model's scale. ``simulated`` is true only for a verified simulated unit.
+    model's scale. ``simulated`` is true only for a verified simulated unit
+    (CAP-6, N-15): it must come from board evidence, and never from the
+    environment, a flag, a file or the inventory.
     ``confirmations`` maps an id to the value a ``--confirm-less-safe`` flag
     names; ``resolve`` only accepts it, and ``resolve_unit`` checks it.
     ``features`` are the unit's inventory feature switches. Raises
@@ -704,10 +785,18 @@ def resolve(
             edit = spec.edit.get(profile)
             if source in _ID_LAYERS and edit in (Edit.FACT, Edit.READ_ONLY):
                 if edit is Edit.FACT:
-                    raise ParamRefused(FACT_NOT_SETTABLE.format(detail=detail), param_id=param_id, source=source)
+                    raise ParamRefused(FACT_NOT_SETTABLE.format(detail=detail), source=source)
                 raise _refusal(spec, drone, unit_id, raw, detail, None, source)
             if edit is Edit.READ_ONLY:
                 log.warning("%s is ignored: %s is read-only for %s", detail, param_id, drone.id)
+                continue
+            if source in _ID_LAYERS and _unbounded_id_row(spec, profile):
+                raise _refusal(spec, drone, unit_id, raw, detail, None, source)
+            if name is not None and _new_name_without_bound(spec, profile, name.name):
+                if (profile, name.name) not in IGNORED_WITHOUT_BOUND:
+                    raise _refusal(spec, drone, unit_id, raw, detail, None, source)
+                log.warning("%s is ignored: no code reads it today and %s has no bound for %s",
+                            detail, param_id, drone.id)
                 continue
             if edit is Edit.FACT:
                 if not test_unit:
@@ -722,7 +811,7 @@ def resolve(
                 raise ParamRefused(stored_switch_off(param_id, value, detail), param_id=param_id, source=source)
             if not is_off:
                 value = _check_bound(spec, drone, unit_id, value, detail, source,
-                                     name.name if name else None, today_accepts)
+                                     name.name if name else None, today_accepts, narrowing is not None)
             result[param_id] = _effective(spec, drone, value, bases[param_id], source, detail, is_off)
 
     return result
@@ -781,7 +870,7 @@ def check_resolved(
                 raise _unconfirmed(spec, model, effective, effective.base_default, launcher_present)
         elif effective.source in _NAME_LAYERS:
             log.warning("less-safe %s=%r from %s on %s", param_id, effective.value, effective.source_detail, unit_id)
-    violation = check_constraints(result, model.name)
+    violation = check_constraints(result, model.name, profile=model.profile)
     if violation is not None:
         raise ParamRefused(violation.message)
 

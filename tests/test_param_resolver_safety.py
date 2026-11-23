@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -26,11 +28,14 @@ from flightrisk.params.resolver import (
     resolve,
     resolve_unit,
     spec_for,
+    today_accepts_from_golden,
 )
 from flightrisk.params.spec import Confirm, EffectiveValue, Kind, Safer, Source
 from flightrisk.params.table import TABLE
 
 G = "generic_multirotor"
+TODAY = today_accepts_from_golden(json.loads(
+    (Path(__file__).resolve().parent / "golden" / "flight_params.json").read_text(encoding="utf-8")))
 CEILING = "envelope.ceiling_cm"
 GEOFENCE = "envelope.geofence_cm"
 #: Words an operator message must never contain, because they name a test-adapter fact or its variable.
@@ -225,6 +230,7 @@ def _with(model: str, **values) -> dict[str, EffectiveValue]:
 FAILING = {
     "K-1": ("tello", {"battery__critical_pct": 25}, "must be below `battery.return_floor_pct` 25 %"),
     "K-2": (G, {"battery__return_floor_pct": 29}, "must be at least `battery.critical_pct` 15 %"),
+    "K-3": ("tello", {"battery__min_takeoff_pct": 20}, "must be above `battery.return_floor_pct` 25 %"),
     "K-6": ("tello", {"link__loss_detect_s": 1.0}, "1.5 times the 1 s heartbeat interval"),
     "K-8": ("tello", {"envelope__ceiling_cm": 180}, "leaves 120 cm, below the 130 cm altitude slot"),
     "K-9": ("tello", {"tello__temp_warn_c": 96}, None),
@@ -238,8 +244,10 @@ def test_every_constraint_is_enforced_or_deferred_with_its_owner():
     enforced = {check.id for check in A1_CONSTRAINTS}
     assert enforced == set(FAILING)
     assert enforced | set(DEFERRED) == {f"K-{n}" for n in range(1, 19)}
-    assert not enforced & set(DEFERRED)
-    assert DEFERRED["K-3"] == ("resolver", "C6")
+    # K-3 is enforced for the Tello and deferred to C6 for the generic multirotor only.
+    assert enforced & set(DEFERRED) == {"K-3"}
+    assert DEFERRED["K-3"] == ("resolver, generic_multirotor profile", "C6")
+    assert constraints.K_3.profiles == frozenset({"tello"})
 
 
 @pytest.mark.parametrize("constraint_id", sorted(FAILING))
@@ -272,17 +280,31 @@ def test_k9_is_skipped_when_the_temperature_refusal_is_off():
     assert out["tello.temp_refuse_c"].value == "off"
 
 
-def test_k3_is_not_enforced_until_c6():
-    out = resolve_unit("tello", "drone-1", {Source.ENV: {"FLIGHTRISK_MIN_TAKEOFF_BATTERY": "20"}})
-    assert out["battery.min_takeoff_pct"].value == 20
-    assert constraints.K_3 not in A1_CONSTRAINTS
+@pytest.mark.parametrize("value", ["15", "19", "20", "25"])
+def test_k3_is_enforced_for_the_tello(value):
+    with pytest.raises(ParamRefused) as err:
+        resolve_unit("tello", "drone-1", {Source.ENV: {"FLIGHTRISK_MIN_TAKEOFF_BATTERY": value}},
+                     today_accepts=TODAY)
+    assert "must be above `battery.return_floor_pct` 25 %" in err.value.message
+
+
+def test_k3_is_enforced_for_a_tello_file_value():
+    with pytest.raises(ParamRefused):
+        resolve_unit("tello", "drone-1", {Source.FILE: {"battery.min_takeoff_pct": 20}},
+                     confirmations={"battery.min_takeoff_pct": "20"})
+
+
+def test_k3_waits_for_c6_on_the_generic_multirotor():
+    out = resolve_unit(G, "drone-1", {Source.ENV: {"FLIGHTRISK_MIN_TAKEOFF_BATTERY": "25"}}, today_accepts=TODAY)
+    assert out["battery.min_takeoff_pct"].value == 25
 
 
 @pytest.mark.parametrize("model", sorted(BUILTIN_MODELS))
 def test_every_profile_default_satisfies_the_a1_constraint_set(model):
     out = resolve_unit(model, "drone-1", {})
     name = BUILTIN_MODELS[model].name
-    assert check_constraints(out, name, A1_CONSTRAINTS + (constraints.K_16,)) is None
+    assert check_constraints(out, name, A1_CONSTRAINTS + (constraints.K_16,),
+                             profile=BUILTIN_MODELS[model].profile) is None
     if BUILTIN_MODELS[model].profile == "tello":
         assert check_constraints(out, name, (constraints.K_3,)) is None
     # K-3 is skipped for generic_multirotor: its 30 % takeoff minimum equals its 30 % floor
@@ -391,3 +413,82 @@ def test_a_fleet_takes_the_intersection_and_the_safer_default():
     })
     got = custom.fleet_bounds({"hex-1": G, "hex-2": wide})["separation.base_cm"]
     assert (got.bound.lo, got.bound.hi, got.default) == (200, 900, 250)
+
+
+# Critic round 1, F3: a NaN or infinite end must never widen a custom model's bound.
+NAN, INF = float("nan"), float("inf")
+
+
+@pytest.mark.parametrize("bounds", [
+    {"battery.critical_pct": {"lo": NAN, "hi": 50}},
+    {"battery.critical_pct": {"lo": 10, "hi": NAN}},
+    {CEILING: {"lo": 150, "hi": NAN}},
+    {CEILING: {"lo": -INF, "hi": 200}},
+    {CEILING: {"lo": 150, "hi": INF}},
+    {CEILING: {"lo": 150, "hi": 10 ** 400}},
+])
+def test_a_custom_bound_with_a_non_finite_end_is_refused(bounds):
+    with pytest.raises(ParamRefused) as err:
+        custom.custom_model("my-tello", {"extends": "tello", "param_bounds": bounds})
+    assert err.value.message.startswith("Custom model my-tello is refused: ")
+
+
+@pytest.mark.parametrize("record", [
+    {"param_defaults": {CEILING: NAN}},
+    {"name": "x", "mounts": [{"weight_g": INF}]},
+])
+def test_a_non_finite_number_anywhere_in_a_custom_model_is_refused(record):
+    with pytest.raises(ParamRefused):
+        custom.custom_model("my-tello", {"extends": "tello", **record})
+
+
+def test_the_critics_nan_model_is_refused():
+    with pytest.raises(ParamRefused):
+        custom.custom_model("my-tello", {"extends": "tello", "param_bounds": {
+            "battery.critical_pct": {"lo": NAN, "hi": 50}, CEILING: {"lo": 150, "hi": NAN}}})
+
+
+@pytest.mark.parametrize("param_id,value", [("battery.critical_pct", -100), (CEILING, 99999)])
+def test_an_inventory_value_outside_the_base_bound_is_refused_on_a_custom_model(param_id, value):
+    model = custom.custom_model("my-tello", {"extends": "tello", "param_bounds": {
+        "battery.critical_pct": {"lo": 10, "hi": 50}, CEILING: {"lo": 150, "hi": 1000}}})
+    with pytest.raises(ParamRefused):
+        resolve_unit(model, "t-1", {Source.INVENTORY: {param_id: value}},
+                     confirmations={param_id: str(value)})
+
+
+# Critic round 1, F4: a custom model's narrowed bound holds for every layer, environment and flags included.
+def _low_ceiling():
+    return custom.custom_model("low-ceiling", {"extends": "tello", "param_bounds": {CEILING: {"lo": 150, "hi": 200}}})
+
+
+@pytest.mark.parametrize("layers", [
+    {Source.ENV: {"FLIGHTRISK_CEILING_CM": "1000"}},
+    {Source.ENV: {"FLIGHTRISK_CEILING_CM": "201"}},
+    {Source.FILE: {CEILING: 1000}},
+    {Source.INVENTORY: {CEILING: 1000}},
+    {Source.LAUNCHER: {CEILING: 1000}},
+])
+def test_a_narrowed_bound_is_enforced_for_every_layer(layers):
+    with pytest.raises(ParamRefused) as err:
+        resolve(_low_ceiling(), "t-1", layers, today_accepts=TODAY)
+    assert "200" in err.value.message
+
+
+def test_a_narrowed_bound_is_enforced_for_a_flag():
+    hex_model = _hex(param_bounds={CEILING: {"lo": 1000, "hi": 6000}})
+    with pytest.raises(ParamRefused):
+        resolve(hex_model, "hex-1", {Source.CLI: {"--ceiling-m": "100"}}, today_accepts=TODAY)
+    assert resolve(hex_model, "hex-1", {Source.CLI: {"--ceiling-m": "50"}},
+                   today_accepts=TODAY)[CEILING].value == 5000
+
+
+def test_a_value_inside_both_today_and_the_narrowed_bound_is_accepted():
+    out = resolve(_low_ceiling(), "t-1", {Source.ENV: {"FLIGHTRISK_CEILING_CM": "180"}}, today_accepts=TODAY)
+    assert (out[CEILING].value, out[CEILING].lo, out[CEILING].hi) == (180, 150, 200)
+
+
+def test_a_fact_refusal_carries_no_param_id():
+    with pytest.raises(ParamRefused) as err:
+        resolve("tello", "drone-1", {Source.FILE: {"sensing.step_cm": 40}})
+    assert err.value.param_id is None
