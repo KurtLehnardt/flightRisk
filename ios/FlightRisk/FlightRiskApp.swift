@@ -13,18 +13,17 @@ struct FlightRiskApp: App {
     @State private var locationProvider: LocationProvider
     @State private var personDetector: PersonDetector
     @State private var personReID: PersonReID
-    @State private var faceRecognizer: FaceRecognizer
     @State private var frameSource = AVCaptureFrameSource()
     @State private var pipeline: SearchPipeline
+    @State private var targetNotice: String?
 
     init() {
         let config = FlightRiskConfig.shared
 
-        // Create vision components with config thresholds
+        // Create vision components with config thresholds. Matching is by appearance only:
+        // no face detection or face recognition model is loaded.
         let reid = PersonReID(threshold: config.vision.reidThreshold)
-        let face = FaceRecognizer(threshold: config.vision.faceMatchThreshold)
         _personReID = State(initialValue: reid)
-        _faceRecognizer = State(initialValue: face)
 
         // Create pipeline dependencies — each created once
         let selector = LlmSelector()
@@ -33,7 +32,8 @@ struct FlightRiskApp: App {
         _alertManager = State(initialValue: alert)
         let location = LocationProvider()
         _locationProvider = State(initialValue: location)
-        let detector = PersonDetector()
+        // The bundled YOLOX-S, or the user's own detector while one is imported and switched on.
+        let detector = PersonDetector(customStore: CustomDetectorStore.shared)
         _personDetector = State(initialValue: detector)
 
         // Create pipeline with the same instances
@@ -65,17 +65,16 @@ struct FlightRiskApp: App {
     private func setupPipeline() async {
         // PersonDetector loaded its model in init. If the model is missing or
         // broken, say so on the Search tab instead of searching silently.
-        viewModel.detectionUnavailableReason = personDetector.unavailableReason
+        refreshBanner()
+        personDetector.preload()
 
-        // Load vision models (PersonDetector loads in init; ReID and Face need explicit load)
-        _ = personReID.loadModel()
-        _ = faceRecognizer.loadModels()
+        // The appearance embedder needs an explicit load.
+        personReID.loadModel()
 
         // Set pipeline callbacks
         await pipeline.wireCallbacks(
             detection: personDetector,
-            reid: personReID,
-            face: faceRecognizer
+            reid: personReID
         )
 
         // Set frame source for the pipeline
@@ -107,21 +106,48 @@ struct FlightRiskApp: App {
 
         // Set initial backend status on the view model
         viewModel.updateBackendStatus(from: llmSelector)
+
+        // Importing, switching or removing the user's own detector can turn detection on or off.
+        // Dropping the user's detector after repeated failures, or a photo that cannot be used,
+        // also show on that banner.
+        Task { @MainActor in
+            for await _ in NotificationCenter.default.notifications(named: PersonDetector.customDetectorFailed) {
+                refreshBanner()
+            }
+        }
+        Task { @MainActor in
+            for await note in NotificationCenter.default.notifications(named: SearchPipeline.targetPhotoRejected) {
+                targetNotice = note.userInfo?["message"] as? String
+                refreshBanner()
+            }
+        }
+        for await _ in NotificationCenter.default.notifications(named: CustomDetectorStore.didChange) {
+            personDetector.preload()
+            refreshBanner()
+        }
+    }
+
+    /// Puts the most important message on the Search tab banner: detection off, then a dropped
+    /// custom detector, then a photo that could not be used.
+    @MainActor
+    private func refreshBanner() {
+        viewModel.detectionUnavailableReason = personDetector.unavailableReason
+            ?? personDetector.customFailureNotice
+            ?? targetNotice
+        viewModel.isUsingCustomDetector = personDetector.isUsingCustomModel
     }
 }
 
 // MARK: - Pipeline Wiring Extension
 
 extension SearchPipeline {
-    /// Set all three vision callbacks atomically within the actor's isolation.
+    /// Set both vision callbacks atomically within the actor's isolation.
     func wireCallbacks(
         detection: PipelineDetectionCallback,
-        reid: PipelineReidCallback,
-        face: PipelineFaceCallback
+        reid: PipelineReidCallback
     ) {
         self.detectionCallback = detection
         self.reidCallback = reid
-        self.faceCallback = face
     }
 
     /// Set the frame source for camera frame acquisition.
@@ -129,10 +155,28 @@ extension SearchPipeline {
         self.frameSource = source
     }
 
-    /// Set the target reference photo and compute ReID + face embeddings.
-    func setTargetPhoto(_ image: CGImage) {
+    /// Set the target reference photo and compute its appearance embedding.
+    ///
+    /// When the photo cannot be used, no target is kept and the Search tab banner says so.
+    @discardableResult
+    func setTargetPhoto(_ image: CGImage) -> Bool {
+        guard reidCallback?.setTarget(photo: image) == true else {
+            self.targetPhoto = nil
+            let message = SearchPipeline.targetPhotoRejectedMessage
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: SearchPipeline.targetPhotoRejected, object: nil,
+                                                userInfo: ["message": message])
+            }
+            return false
+        }
         self.targetPhoto = image
-        _ = reidCallback?.setTarget(photo: image)
-        _ = faceCallback?.setTarget(photo: image)
+        // A message-less post clears an earlier "photo could not be used" notice.
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: SearchPipeline.targetPhotoRejected, object: nil)
+        }
+        return true
     }
+
+    static let targetPhotoRejected = Notification.Name("FlightRiskTargetPhotoRejected")
+    static let targetPhotoRejectedMessage = "This photo could not be used for matching. Try another photo."
 }

@@ -157,7 +157,8 @@ The only exceptions are the optional features you turn on or start yourself: clo
 ## 10. Data Retention and Deletion
 
 - **Biometric templates and embeddings:** Not retained. Ephemeral and session-scoped. Discarded when the session ends.
-- **A person detector you imported (Android):** Stored in the app's private storage until you turn off "Bring your own detector", which deletes it, or clear the app's storage or uninstall the app.
+- **A person detector you import on iPhone (optional, off by default):** A model file, not personal data. It is kept in the app's own storage, excluded from device backups and never sent anywhere, until you remove it in Settings or uninstall the app.
+- **A person detector you import on Android (optional, off by default):** Stored in the app's private storage until you turn off "Bring your own detector", which deletes it, or clear the app's storage or uninstall the app.
 - **Session data on Android (video, match images, scores, reasoning text, description):** Stored locally until removed. Video and match images exist only if "Record search video" is on. Use "Delete saved sessions and recordings" in Settings, clear the app's storage in the system Settings, or uninstall the app. On iPhone no session data is stored.
 - **App deletion:** Uninstalling the app removes all locally stored data (backups made by the operating system are separate).
 

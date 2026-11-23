@@ -1,5 +1,4 @@
 import CoreGraphics
-import CoreImage
 import Vision
 import os
 
@@ -10,8 +9,9 @@ import os
 /// iOS Vision framework APIs to produce structured text from a `CGImage`.
 ///
 /// Port of the Android `ImageDescriptionExtractor.kt` concept. Combines
-/// multiple Vision framework requests (classification, face detection,
-/// text recognition) with manual pixel sampling for clothing colors.
+/// multiple Vision framework requests (classification, whole-body person
+/// detection, text recognition) with manual pixel sampling for clothing
+/// colors. It describes appearance only: no face is detected.
 enum ImageDescriptionExtractor {
 
     private static let logger = Logger(
@@ -25,7 +25,7 @@ enum ImageDescriptionExtractor {
     ///
     /// Uses multiple Vision framework requests:
     /// - `VNClassifyImageRequest` for scene/object classification
-    /// - `VNDetectFaceLandmarksRequest` for face presence and position
+    /// - `VNDetectHumanRectanglesRequest` for how many people are visible and how large
     /// - `VNRecognizeTextRequest` for visible text (logos, numbers on clothing)
     /// - Manual pixel sampling for dominant clothing colors
     ///
@@ -38,20 +38,21 @@ enum ImageDescriptionExtractor {
         let handler = VNImageRequestHandler(cgImage: image, options: [:])
 
         let classifyRequest = VNClassifyImageRequest()
-        let faceRequest = VNDetectFaceLandmarksRequest()
+        let personRequest = VNDetectHumanRectanglesRequest()
+        personRequest.upperBodyOnly = false
         let textRequest = VNRecognizeTextRequest()
         textRequest.recognitionLevel = .fast
 
         // Try batch first for efficiency; fall back to individual requests
         // so one failure doesn't drop all results
         do {
-            try handler.perform([classifyRequest, faceRequest, textRequest])
+            try handler.perform([classifyRequest, personRequest, textRequest])
         } catch {
             logger.debug("Batch Vision request failed, trying individually: \(error.localizedDescription)")
             // Run each independently — use fresh handlers after a batch failure
             // to avoid reusing handler state from the failed batch
             try? VNImageRequestHandler(cgImage: image, options: [:]).perform([classifyRequest])
-            try? VNImageRequestHandler(cgImage: image, options: [:]).perform([faceRequest])
+            try? VNImageRequestHandler(cgImage: image, options: [:]).perform([personRequest])
             try? VNImageRequestHandler(cgImage: image, options: [:]).perform([textRequest])
         }
 
@@ -61,9 +62,8 @@ enum ImageDescriptionExtractor {
             parts.append("- Scene labels: \(classifications.joined(separator: ", "))")
         }
 
-        // 2. Face detection
-        let faceInfo = parseFaceResults(faceRequest.results, image: image)
-        parts.append("- Face visible: \(faceInfo)")
+        // 2. People visible (whole body)
+        parts.append("- People visible: \(parsePersonResults(personRequest.results))")
 
         // 3. Text recognition (logos, numbers on clothing)
         let visibleText = parseTextResults(textRequest.results)
@@ -97,33 +97,21 @@ enum ImageDescriptionExtractor {
             .map { $0.identifier.replacingOccurrences(of: "_", with: " ") }
     }
 
-    /// Parse face detection results with `CIDetector` fallback.
+    /// Describe the whole-body person detections.
     ///
-    /// - Returns: Human-readable face presence description.
-    private static func parseFaceResults(_ results: [VNFaceObservation]?, image: CGImage) -> String {
-        guard let results, !results.isEmpty else {
-            // CIDetector fallback
-            let ciImage = CIImage(cgImage: image)
-            guard let detector = CIDetector(
-                ofType: CIDetectorTypeFace,
-                context: nil,
-                options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]
-            ) else { return "detection unavailable" }
-            let faces = detector.features(in: ciImage)
-            return faces.isEmpty ? "no" : "yes, \(faces.count) face(s)"
-        }
-        let face = results[0]
-        let bbox = face.boundingBox
-        let relativeSize = bbox.width * bbox.height
+    /// - Returns: "no", or how many people and how large the largest is in the image.
+    static func parsePersonResults(_ results: [VNHumanObservation]?) -> String {
+        guard let results, !results.isEmpty else { return "no" }
+        let largest = results.map { $0.boundingBox.height }.max() ?? 0
         let sizeDesc: String
-        if relativeSize > 0.15 {
+        if largest > 0.6 {
             sizeDesc = "large (close-up)"
-        } else if relativeSize > 0.05 {
+        } else if largest > 0.25 {
             sizeDesc = "medium"
         } else {
             sizeDesc = "small (distant)"
         }
-        return "yes, \(results.count) face(s), \(sizeDesc)"
+        return "yes, \(results.count) person(s), \(sizeDesc)"
     }
 
     /// Parse text recognition results.

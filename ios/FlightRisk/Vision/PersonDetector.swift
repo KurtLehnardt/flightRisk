@@ -1,27 +1,90 @@
 import CoreGraphics
-import CoreImage
 import CoreML
 import CoreText
+import CoreVideo
+import Foundation
 import os
-import Vision
+import PersonVision
 
-/// YOLO-based person detector using CoreML / Vision.
+/// Something that finds people in a frame and returns their boxes in frame pixels.
+protocol PersonDetectorBackend: AnyObject {
+    func persons(in image: RGBImage, scoreThreshold: Float) throws -> [DetectedBox]
+}
+
+/// The bundled detector: YOLOX-S (Apache-2.0), converted and pinned by
+/// `scripts/mobile_models/make_models.py`, with the contract in `docs/mobile-models.md`.
 ///
-/// Port of `PersonDetector.kt` (Android/ONNX) to iOS. Loads a YOLO11n
-/// CoreML model from the app bundle, runs inference on camera frames,
-/// and returns bounding boxes for detected persons (COCO class 0).
+/// The frame is letterboxed at the top-left of a 640 x 640 canvas filled with 114, handed to
+/// Core ML as a pixel buffer (the model's input is declared BGR, so Core ML orders the
+/// channels), and the `[1, 8400, 85]` output is decoded as upstream's postprocess does.
+final class YOLOXBackend: PersonDetectorBackend {
+    let model: MLModel
+    private var buffer: CVPixelBuffer?
+
+    init(url: URL, computeUnits: MLComputeUnits) throws {
+        let config = MLModelConfiguration()
+        config.computeUnits = computeUnits
+        model = try MLModel(contentsOf: url, configuration: config)
+    }
+
+    /// The raw `[8400 * 85]` output for a 640 x 640 RGB canvas that is already letterboxed.
+    func rawOutput(canvas: RGBImage) throws -> [Float] {
+        let pb = try ModelIO.pixelBuffer(canvas, reuse: &buffer)
+        let input = try MLDictionaryFeatureProvider(dictionary: [YOLOXContract.inputName: MLFeatureValue(pixelBuffer: pb)])
+        let out = try model.prediction(from: input)
+        guard let array = out.featureValue(for: YOLOXContract.outputName)?.multiArrayValue else {
+            throw ModelIO.Failure.output(YOLOXContract.outputName)
+        }
+        let values = ModelIO.floats(array)
+        guard values.count == YOLOXContract.rowCount * YOLOXContract.rowLength else {
+            throw ModelIO.Failure.output(YOLOXContract.outputName)
+        }
+        return values
+    }
+
+    func persons(in image: RGBImage, scoreThreshold: Float) throws -> [DetectedBox] {
+        let (canvas, geometry) = Letterbox.make(image)
+        return YOLOXDecoder.decode(try rawOutput(canvas: canvas), geometry: geometry, scoreThreshold: scoreThreshold)
+    }
+}
+
+/// A person detector the user imported (Settings > Your own person detector). FlightRisk never
+/// bundles, hosts or downloads one. An Ultralytics export expects the frame centred on the
+/// canvas; its output is one of the heads `CustomHeadLayout` knows.
+final class CustomYOLOBackend: PersonDetectorBackend {
+    let model: MLModel
+    let inputName: String
+    let outputName: String
+    let layout: CustomHeadLayout
+    private var buffer: CVPixelBuffer?
+
+    init(model: MLModel, inputName: String, outputName: String, layout: CustomHeadLayout) {
+        self.model = model
+        self.inputName = inputName
+        self.outputName = outputName
+        self.layout = layout
+    }
+
+    func persons(in image: RGBImage, scoreThreshold: Float) throws -> [DetectedBox] {
+        let (canvas, geometry) = Letterbox.make(image, placement: .centred)
+        let pb = try ModelIO.pixelBuffer(canvas, reuse: &buffer)
+        let input = try MLDictionaryFeatureProvider(dictionary: [inputName: MLFeatureValue(pixelBuffer: pb)])
+        let out = try model.prediction(from: input)
+        guard let array = out.featureValue(for: outputName)?.multiArrayValue else {
+            throw ModelIO.Failure.output("custom")
+        }
+        return CustomHeadDecoder.decodePersons(ModelIO.floats(array), layout: layout, geometry: geometry,
+                                               scoreThreshold: scoreThreshold)
+    }
+}
+
+/// Finds people in camera frames and cuts their crops for the appearance embedder.
+///
+/// It runs the bundled YOLOX-S, or the user's own model while one is imported and switched on
+/// (`CustomDetectorStore`); switching it off goes back to YOLOX-S. Boxes pass through the
+/// configurable `PersonBoxFilter` (loose by default, for people who are small in the frame), and
+/// each crop is cut from the full frame by the contract's crop rule.
 final class PersonDetector {
-
-    // MARK: - Constants
-
-    private static let inputSize = 640
-    private static let personClassId = 0
-    private static let nmsIouThreshold: Float = 0.45
-    private static let paddingGray: UInt8 = 114
-    private static let minBboxAreaRatio: Float = 0.008
-    private static let minBboxHeightRatio: Float = 0.12
-    private static let minAspectRatio: Float = 0.15
-    private static let maxAspectRatio: Float = 1.5
 
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.flightrisk",
@@ -29,52 +92,94 @@ final class PersonDetector {
     )
 
     private let confidence: Float
-    private let iouThreshold: Float
+    private let boxFilter: PersonBoxFilter
+    private let bundled: YOLOXBackend?
+    private let customStore: CustomDetectorStore?
+    private let bundledReason: String?
 
-    /// The CoreML model wrapper for Vision requests. `nil` when the
-    /// `.mlmodelc` bundle is missing — `detect()` returns an empty array
-    /// in that case.
-    private let vnModel: VNCoreMLModel?
+    /// Guards the fields below. Never held while a model loads or runs.
+    private let lock = NSLock()
+    /// Serialises loads of the user's model, so two threads never load it at once.
+    private let loadLock = NSLock()
+    private var customGeneration = -1
+    private var custom: CustomYOLOBackend?
+    private var consecutiveCustomFailures = 0
+    private var customDisabled = false
+    private var _customFailureNotice: String?
 
-    /// Why person detection is off, in words for the person using the app,
-    /// or `nil` when the model loaded. The Search tab shows it as a banner,
-    /// so a missing or broken model is never silent.
-    let unavailableReason: String?
+    /// How many frames in a row the user's model may fail before the bundled one takes over.
+    static let customFailureLimit = 3
 
-    /// True when the detection model loaded and `detect(frame:)` can find people.
-    var isAvailable: Bool { vnModel != nil }
+    /// Posted on the main queue when the user's model is dropped for the session.
+    static let customDetectorFailed = Notification.Name("FlightRiskCustomDetectorFailed")
 
-    private var debugFrameCount = 0
+    /// The banner text after the user's model failed and was dropped for the session.
+    static let customFailedNotice = "Your imported detector failed; using the built-in detector."
 
     // MARK: - Init
 
     /// - Parameters:
-    ///   - modelName: Name of the `.mlmodelc` bundle (without extension).
-    ///   - confidence: Minimum person-class confidence to keep a detection.
-    ///   - iouThreshold: IoU threshold for greedy NMS.
+    ///   - modelName: The compiled bundled model, without `.mlmodelc`.
+    ///   - confidence: The smallest person score kept.
+    ///   - boxFilter: Which person boxes are kept, by size and shape.
+    ///   - bundle: Where the compiled model is.
+    ///   - customStore: The user's own detector, or `nil` to use only the bundled one.
     init(
-        modelName: String = "YOLOPersonDetector",
+        modelName: String = YOLOXContract.modelName,
         confidence: Float = FlightRiskConfig.shared.vision.detectorConfidence,
-        iouThreshold: Float = 0.45
+        boxFilter: PersonBoxFilter = FlightRiskConfig.shared.vision.personBoxFilter,
+        bundle: Bundle = .main,
+        customStore: CustomDetectorStore? = nil
     ) {
         self.confidence = confidence
-        self.iouThreshold = iouThreshold
+        self.boxFilter = boxFilter
+        self.customStore = customStore
 
-        if let modelURL = Bundle.main.url(forResource: modelName, withExtension: "mlmodelc") {
+        if let url = BundledModels.url(modelName, in: bundle) {
             do {
-                let mlModel = try MLModel(contentsOf: modelURL)
-                self.vnModel = try VNCoreMLModel(for: mlModel)
-                self.unavailableReason = nil
+                bundled = try YOLOXBackend(url: url, computeUnits: BundledModels.computeUnits(for: "\(modelName).mlpackage", in: bundle))
+                bundledReason = nil
             } catch {
-                logger.warning("Failed to load CoreML model '\(modelName)': \(error.localizedDescription)")
-                self.vnModel = nil
-                self.unavailableReason = Self.loadFailedReason()
+                logger.warning("The bundled person detection model could not be loaded")
+                bundled = nil
+                bundledReason = Self.loadFailedReason()
             }
         } else {
-            logger.warning("CoreML model '\(modelName).mlmodelc' not found in bundle — detector disabled")
-            self.vnModel = nil
-            self.unavailableReason = Self.missingModelReason()
+            logger.warning("No person detection model in this build; detection is off")
+            bundled = nil
+            bundledReason = Self.missingModelReason()
         }
+    }
+
+    /// Why person detection is off, in words for the person using the app, or `nil` when a
+    /// detector is ready (the bundled one, or the user's own while it is on). The Search tab
+    /// shows it as a banner, so a missing or broken model is never silent.
+    ///
+    /// This reads settings and files only. It never loads a model, so it is safe on the main thread.
+    var unavailableReason: String? {
+        if bundled != nil { return nil }
+        lock.lock()
+        let disabled = customDisabled
+        lock.unlock()
+        if !disabled, let store = customStore, store.isUsable { return nil }
+        return bundledReason ?? Self.missingModelReason()
+    }
+
+    /// Set after the user's model failed repeatedly and was dropped for this session.
+    var customFailureNotice: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _customFailureNotice
+    }
+
+    /// True when `detect(frame:)` can find people with what is loaded now.
+    var isAvailable: Bool { activeBackend() != nil }
+
+    /// True while the user's own detector is the one in use. Never loads a model.
+    var isUsingCustomModel: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return custom != nil
     }
 
     /// The banner text when the model is not in the app bundle.
@@ -91,101 +196,105 @@ final class PersonDetector {
             + "Restart the app; if this stays, reinstall it."
     }
 
+    // MARK: - Backend choice
+
+    /// Loads the user's own model in the background when its settings changed, so the first
+    /// frame after an import does not wait for it.
+    func preload() {
+        Task.detached(priority: .utility) { [self] in ensureLoaded() }
+    }
+
+    /// Loads the user's own model when its settings changed since the last load. This is slow, so
+    /// it runs only on the pipeline's queue or a detached task, never on the main thread. The load
+    /// lock keeps two callers from loading at once; the second sees the finished result.
+    private func ensureLoaded() {
+        guard let store = customStore else { return }
+        loadLock.lock()
+        defer { loadLock.unlock() }
+        let generation = store.generation
+        lock.lock()
+        let stale = generation != customGeneration
+        lock.unlock()
+        guard stale else { return }
+        let backend = store.makeBackend()
+        lock.lock()
+        custom = backend
+        customGeneration = generation
+        consecutiveCustomFailures = 0
+        customDisabled = false
+        _customFailureNotice = nil
+        lock.unlock()
+        // The load finished or the model was switched off; the Search tab badge re-reads the state.
+        DispatchQueue.main.async { NotificationCenter.default.post(name: Self.customDetectorFailed, object: self) }
+    }
+
+    /// The loaded backend: the user's model, or the bundled one. Never loads.
+    private func activeBackend() -> PersonDetectorBackend? {
+        lock.lock()
+        defer { lock.unlock() }
+        return custom ?? bundled
+    }
+
+    /// Counts a failed frame of the user's model; after three in a row, drops it for the session.
+    private func customFailed(_ backend: PersonDetectorBackend, error: Error) {
+        lock.lock()
+        guard let current = custom, current === backend else { lock.unlock(); return }
+        consecutiveCustomFailures += 1
+        let drop = consecutiveCustomFailures >= Self.customFailureLimit
+        if drop {
+            custom = nil
+            customDisabled = true
+            _customFailureNotice = Self.customFailedNotice
+        }
+        lock.unlock()
+        logger.error("Custom detector failed: \(String(describing: type(of: error)))")
+        if drop {
+            DispatchQueue.main.async { NotificationCenter.default.post(name: Self.customDetectorFailed, object: self) }
+        }
+    }
+
+    private func customSucceeded(_ backend: PersonDetectorBackend) {
+        lock.lock()
+        if let current = custom, current === backend { consecutiveCustomFailures = 0 }
+        lock.unlock()
+    }
+
     // MARK: - Detection
 
-    /// Detect persons in a camera frame.
-    ///
-    /// - Parameter frame: RGB `CGImage` from the camera.
-    /// - Returns: Array of `Detection` for each detected person.
-    func detect(frame: CGImage) -> [Detection] {
-        guard let model = vnModel else { return [] }
-
-        // Letterbox resize to 640x640
-        let srcW = frame.width
-        let srcH = frame.height
-
-        let scale = min(
-            Float(Self.inputSize) / Float(srcW),
-            Float(Self.inputSize) / Float(srcH)
-        )
-        let newW = Int(Float(srcW) * scale)
-        let newH = Int(Float(srcH) * scale)
-        let padX = (Self.inputSize - newW) / 2
-        let padY = (Self.inputSize - newH) / 2
-
-        guard let letterboxed = createLetterboxedImage(
-            frame: frame, newW: newW, newH: newH, padX: padX, padY: padY
-        ) else {
-            logger.error("Failed to create letterboxed image")
-            return []
-        }
-
-        // Run CoreML inference via Vision
-        let request = VNCoreMLRequest(model: model)
-        request.imageCropAndScaleOption = .scaleFill
-
-        let handler = VNImageRequestHandler(cgImage: letterboxed, options: [:])
+    /// People in `image`, in frame pixels, after the score threshold, NMS and the box filter.
+    func persons(in image: RGBImage) -> [DetectedBox] {
+        ensureLoaded()
+        guard let backend = activeBackend() else { return [] }
         do {
-            try handler.perform([request])
+            let found = try backend.persons(in: image, scoreThreshold: confidence).filter {
+                boxFilter.cropBox($0, frameWidth: image.width, frameHeight: image.height) != nil
+            }
+            customSucceeded(backend)
+            return found
         } catch {
-            logger.error("Vision inference failed: \(error.localizedDescription)")
+            if backend is CustomYOLOBackend {
+                customFailed(backend, error: error)
+            } else {
+                logger.error("Person detection failed on a frame: \(String(describing: type(of: error)))")
+            }
             return []
         }
+    }
 
-        // Parse raw YOLO output from the MLMultiArray
-        guard let results = request.results else { return [] }
-        let rawDetections = parseYoloOutput(
-            results: results, frame: frame,
-            scale: scale, padX: padX, padY: padY
-        )
-
-        // Apply NMS
-        let boxes = rawDetections.map {
-            [Float($0.x1), Float($0.y1), Float($0.x2), Float($0.y2)]
-        }
-        let scores = rawDetections.map { $0.conf }
-        let nmsIndices = applyNms(boxes: boxes, scores: scores)
-
-        // Body-part filter and crop
-        let frameArea = Float(frame.width) * Float(frame.height)
-        let minArea = frameArea * Self.minBboxAreaRatio
-        let minHeight = Float(frame.height) * Self.minBboxHeightRatio
-
+    /// Detect people in a camera frame and cut each one's crop from the full frame.
+    ///
+    /// - Parameter frame: The camera frame.
+    /// - Returns: One `Detection` per person, highest score first.
+    func detect(frame: CGImage) -> [Detection] {
+        ensureLoaded()
+        guard isAvailable, let image = ModelIO.rgb(frame) else { return [] }
         var detections: [Detection] = []
-        var bodyPartFiltered = 0
-
-        for idx in nmsIndices {
-            let raw = rawDetections[idx]
-            let bboxW = Float(raw.x2 - raw.x1)
-            let bboxH = Float(raw.y2 - raw.y1)
-            let bboxArea = bboxW * bboxH
-            let aspectRatio = bboxH > 0 ? bboxW / bboxH : 0
-
-            if bboxArea < minArea || bboxH < minHeight ||
-                aspectRatio < Self.minAspectRatio || aspectRatio > Self.maxAspectRatio {
-                bodyPartFiltered += 1
-                continue
-            }
-
-            let cropRect = CGRect(
-                x: max(0, raw.x1),
-                y: max(0, raw.y1),
-                width: min(raw.x2 - raw.x1, frame.width - raw.x1),
-                height: min(raw.y2 - raw.y1, frame.height - raw.y1)
-            )
-            guard let crop = frame.cropping(to: cropRect) else { continue }
-
-            detections.append(Detection(
-                bbox: [raw.x1, raw.y1, raw.x2, raw.y2],
-                confidence: raw.conf,
-                crop: crop
-            ))
+        for box in persons(in: image) {
+            guard let p = CropRule.pixels(box, frameWidth: frame.width, frameHeight: frame.height),
+                  let crop = frame.cropping(to: CGRect(x: p.x1, y: p.y1, width: p.x2 - p.x1, height: p.y2 - p.y1))
+            else { continue }
+            detections.append(Detection(bbox: [p.x1, p.y1, p.x2, p.y2], confidence: box.score, crop: crop))
         }
-
-        if bodyPartFiltered > 0 {
-            logger.debug("Filtered \(bodyPartFiltered) body-part detections (too small or wrong aspect ratio)")
-        }
-        logger.debug("Detected \(detections.count) persons (\(rawDetections.count) pre-NMS)")
         return detections
     }
 
@@ -282,279 +391,6 @@ final class PersonDetector {
         return ctx.makeImage()
     }
 
-    // MARK: - IoU (static helper)
-
-    /// Compute IoU between two boxes `[x1, y1, x2, y2]`.
-    static func computeIou(box1: [Int], box2: [Int]) -> Float {
-        let x1 = max(box1[0], box2[0])
-        let y1 = max(box1[1], box2[1])
-        let x2 = min(box1[2], box2[2])
-        let y2 = min(box1[3], box2[3])
-        let intersection = Float(max(0, x2 - x1)) * Float(max(0, y2 - y1))
-        let area1 = Float(box1[2] - box1[0]) * Float(box1[3] - box1[1])
-        let area2 = Float(box2[2] - box2[0]) * Float(box2[3] - box2[1])
-        let union = area1 + area2 - intersection
-        return union > 0 ? intersection / union : 0
-    }
-
-    // MARK: - Private Helpers
-
-    /// Create a 640x640 letterboxed image with gray (114,114,114) padding.
-    private func createLetterboxedImage(
-        frame: CGImage, newW: Int, newH: Int, padX: Int, padY: Int
-    ) -> CGImage? {
-        let size = Self.inputSize
-        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
-              let ctx = CGContext(
-                  data: nil,
-                  width: size,
-                  height: size,
-                  bitsPerComponent: 8,
-                  bytesPerRow: size * 4,
-                  space: colorSpace,
-                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
-              ) else {
-            return nil
-        }
-
-        // Fill with gray padding (114/255)
-        let gray = CGFloat(Self.paddingGray) / 255.0
-        ctx.setFillColor(CGColor(red: gray, green: gray, blue: gray, alpha: 1))
-        ctx.fill(CGRect(x: 0, y: 0, width: size, height: size))
-
-        // Draw resized frame centered (CG origin is bottom-left)
-        let drawRect = CGRect(
-            x: padX,
-            y: size - padY - newH,
-            width: newW,
-            height: newH
-        )
-        ctx.draw(frame, in: drawRect)
-
-        return ctx.makeImage()
-    }
-
-    /// Raw intermediate detection before NMS/filtering.
-    private struct RawDetection {
-        let x1: Int
-        let y1: Int
-        let x2: Int
-        let y2: Int
-        let conf: Float
-    }
-
-    /// Parse YOLO output from Vision results.
-    ///
-    /// YOLO11n ONNX output shape is `[1, 84, N]` but CoreML may produce
-    /// `[1, N, 84]` or a different layout. We read the MLMultiArray shape
-    /// at runtime and adapt.
-    private func parseYoloOutput(
-        results: [VNObservation],
-        frame: CGImage,
-        scale: Float,
-        padX: Int,
-        padY: Int
-    ) -> [RawDetection] {
-        // Try to get raw MLMultiArray output first
-        if let coreMLObs = results.first as? VNCoreMLFeatureValueObservation,
-           let multiArray = coreMLObs.featureValue.multiArrayValue {
-            return parseMultiArray(
-                multiArray, frame: frame,
-                scale: scale, padX: padX, padY: padY
-            )
-        }
-
-        // Fallback: if Vision produced VNRecognizedObjectObservation
-        // (happens when CoreML model has NMS baked in)
-        if let objectResults = results as? [VNRecognizedObjectObservation] {
-            return parseRecognizedObjects(objectResults, frame: frame)
-        }
-
-        // Try to iterate all observations for any MLMultiArray
-        for obs in results {
-            if let featureObs = obs as? VNCoreMLFeatureValueObservation,
-               let multiArray = featureObs.featureValue.multiArrayValue {
-                return parseMultiArray(
-                    multiArray, frame: frame,
-                    scale: scale, padX: padX, padY: padY
-                )
-            }
-        }
-
-        logger.warning("No parseable YOLO output found in Vision results")
-        return []
-    }
-
-    /// Parse raw MLMultiArray from YOLO11n. Handles both [1, 84, N] and
-    /// [1, N, 84] layouts by inspecting the shape at runtime.
-    private func parseMultiArray(
-        _ multiArray: MLMultiArray,
-        frame: CGImage,
-        scale: Float,
-        padX: Int,
-        padY: Int
-    ) -> [RawDetection] {
-        let shape = multiArray.shape.map { $0.intValue }
-        guard shape.count >= 2 else {
-            logger.warning("Unexpected MLMultiArray shape: \(shape)")
-            return []
-        }
-
-        // Determine layout
-        // YOLO11n has 84 values per detection: 4 bbox + 80 class scores
-        let dim1 = shape.count > 1 ? shape[1] : 0
-        let dim2 = shape.count > 2 ? shape[2] : 0
-
-        let transposed: Bool
-        let numDetections: Int
-
-        if dim1 == 84 {
-            // Original ONNX layout: [1, 84, N] — columns are detections
-            transposed = false
-            numDetections = dim2
-        } else if dim2 == 84 {
-            // Transposed layout: [1, N, 84] — rows are detections
-            transposed = true
-            numDetections = dim1
-        } else {
-            logger.warning("Cannot determine YOLO output layout: shape \(shape)")
-            return []
-        }
-
-        // Diagnostic logging
-        debugFrameCount += 1
-        if debugFrameCount % 30 == 0 {
-            var maxPersonScore: Float = 0
-            var maxAnyClass: Float = 0
-            for i in 0..<numDetections {
-                let personScore = value(multiArray, detection: i, channel: 4 + Self.personClassId, transposed: transposed, dim1: dim1)
-                maxPersonScore = max(maxPersonScore, personScore)
-                for c in 4..<84 {
-                    let score = value(multiArray, detection: i, channel: c, transposed: transposed, dim1: dim1)
-                    maxAnyClass = max(maxAnyClass, score)
-                }
-            }
-            logger.debug("Output shape: \(shape), maxPersonScore=\(maxPersonScore), maxAnyClass=\(maxAnyClass), threshold=\(self.confidence)")
-        }
-
-        var rawDetections: [RawDetection] = []
-
-        for i in 0..<numDetections {
-            let personConf = value(multiArray, detection: i, channel: 4 + Self.personClassId, transposed: transposed, dim1: dim1)
-            if personConf < confidence { continue }
-
-            // Bbox: center_x, center_y, width, height (in letterboxed coords)
-            let cx = value(multiArray, detection: i, channel: 0, transposed: transposed, dim1: dim1)
-            let cy = value(multiArray, detection: i, channel: 1, transposed: transposed, dim1: dim1)
-            let w = value(multiArray, detection: i, channel: 2, transposed: transposed, dim1: dim1)
-            let h = value(multiArray, detection: i, channel: 3, transposed: transposed, dim1: dim1)
-
-            // Convert to corner coords and undo letterbox transform
-            let x1 = max(0, Int((cx - w / 2 - Float(padX)) / scale))
-            let y1 = max(0, Int((cy - h / 2 - Float(padY)) / scale))
-            let x2 = min(frame.width, Int((cx + w / 2 - Float(padX)) / scale))
-            let y2 = min(frame.height, Int((cy + h / 2 - Float(padY)) / scale))
-
-            if x2 > x1 && y2 > y1 {
-                rawDetections.append(RawDetection(x1: x1, y1: y1, x2: x2, y2: y2, conf: personConf))
-            }
-        }
-
-        return rawDetections
-    }
-
-    /// Read a single float from the MLMultiArray, handling both layouts.
-    private func value(
-        _ array: MLMultiArray,
-        detection i: Int,
-        channel c: Int,
-        transposed: Bool,
-        dim1: Int
-    ) -> Float {
-        let index: [NSNumber]
-        if transposed {
-            // [1, N, 84] — row i, column c
-            index = [0, NSNumber(value: i), NSNumber(value: c)]
-        } else {
-            // [1, 84, N] — row c, column i
-            index = [0, NSNumber(value: c), NSNumber(value: i)]
-        }
-        return array[index].floatValue
-    }
-
-    /// Fallback parser for when the CoreML model produces
-    /// `VNRecognizedObjectObservation` (NMS baked in).
-    private func parseRecognizedObjects(
-        _ observations: [VNRecognizedObjectObservation],
-        frame: CGImage
-    ) -> [RawDetection] {
-        var detections: [RawDetection] = []
-        let w = Float(frame.width)
-        let h = Float(frame.height)
-
-        for obs in observations {
-            // Check if top label is "person"
-            guard let topLabel = obs.labels.first,
-                  topLabel.identifier == "person" || topLabel.identifier == "0",
-                  topLabel.confidence >= confidence else {
-                continue
-            }
-
-            // Vision normalized coords: origin bottom-left, 0-1 range
-            let bbox = obs.boundingBox
-            let x1 = Int(Float(bbox.minX) * w)
-            let y1 = Int((1 - Float(bbox.maxY)) * h)
-            let x2 = Int(Float(bbox.maxX) * w)
-            let y2 = Int((1 - Float(bbox.minY)) * h)
-
-            if x2 > x1 && y2 > y1 {
-                detections.append(RawDetection(
-                    x1: max(0, x1),
-                    y1: max(0, y1),
-                    x2: min(frame.width, x2),
-                    y2: min(frame.height, y2),
-                    conf: topLabel.confidence
-                ))
-            }
-        }
-
-        return detections
-    }
-
-    /// Greedy NMS: suppress overlapping boxes by IoU.
-    private func applyNms(boxes: [[Float]], scores: [Float]) -> [Int] {
-        guard !boxes.isEmpty else { return [] }
-
-        let indices = scores.indices.sorted { scores[$0] > scores[$1] }
-        var keep: [Int] = []
-        var suppressed = [Bool](repeating: false, count: boxes.count)
-
-        for i in indices {
-            if suppressed[i] { continue }
-            keep.append(i)
-            for j in indices {
-                if suppressed[j] || i == j { continue }
-                if computeIouFloat(box1: boxes[i], box2: boxes[j]) > iouThreshold {
-                    suppressed[j] = true
-                }
-            }
-        }
-
-        return keep
-    }
-
-    /// IoU for float-array boxes (internal NMS use).
-    private func computeIouFloat(box1: [Float], box2: [Float]) -> Float {
-        let x1 = max(box1[0], box2[0])
-        let y1 = max(box1[1], box2[1])
-        let x2 = min(box1[2], box2[2])
-        let y2 = min(box1[3], box2[3])
-        let intersection = max(0, x2 - x1) * max(0, y2 - y1)
-        let area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
-        let area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
-        let union = area1 + area2 - intersection
-        return union > 0 ? intersection / union : 0
-    }
 }
 
 // MARK: - PipelineDetectionCallback

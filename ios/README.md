@@ -25,6 +25,7 @@ ios/
 ├── FlightRiskGround/            # local Swift package, no third-party dependencies
 │   ├── Sources/GroundProtocol   # models, reducer, allow-list, display text, plan geometry
 │   ├── Sources/SocketIOMini     # Engine.IO 4 / Socket.IO 5 client, LAN address policy
+│   ├── Sources/PersonVision     # detector and embedder pre- and postprocessing, user-model checks
 │   └── Tests/
 ├── FlightRiskTests/             # the app's unit tests
 ├── FlightRiskUITests/           # UI tests of the demo (LAND ALL never covered)
@@ -62,7 +63,7 @@ Before each archive for App Store Connect, on the release build machine:
 2. Build and install the models: `scripts/mobile_models/make_models.py all --targets ios`, in its own virtual environment installed with `pip install --require-hashes -r scripts/mobile_models/requirements.lock` (`docs/mobile-models.md`). It installs `YOLOXs.mlpackage`, `CLIPViTB16LAION.mlpackage`, `mobile-models.json` and `model-notices.md` into `ios/FlightRisk/Models`.
 3. Archive. The FlightRisk target's last build phase, "Licence guard (Release)", runs `scripts/mobile_models/licence_guard.py` (with `/usr/bin/env python3`, 3.9 or newer) on the built `.app` in every Release build, archives included, and fails the build if the app carries any Core ML model whose metadata does not name the pinned weights, any other model (by name, SHA-256 or bytes), or any zip or gzip file anywhere in the app, frameworks included. Debug builds skip it. To check an archive by hand: `python3 scripts/mobile_models/licence_guard.py path/to/FlightRisk.xcarchive`.
 
-`project.yml` still excludes `Models/**` from the target, so today nothing from that folder reaches the app. The app integration PR must add the installed `.mlpackage` files to the target as optional sources (so a checkout without them still builds), load them with the preprocessing in `docs/mobile-models.md`, and remove the code that loads the old models.
+The models are optional for a build. The FlightRisk target's build phase "Core ML models (optional)" compiles `YOLOXs.mlpackage` and `CLIPViTB16LAION.mlpackage` from `ios/FlightRisk/Models` into the app when they are there and copies `mobile-models.json` and `model-notices.md` beside them; `project.yml` keeps the folder out of the sources, because Xcode fails a build whose sources name a missing file. Without the models the app builds (a note in Debug, a warning in Release) and its Search tab shows "Person detection unavailable", so never archive for the store without them. Matching is by appearance only: the app has no face detection or face recognition model. Settings > About > Model licences shows `model-notices.md`. Settings > Person Detector can import a user's own YOLO model (off by default; see "Your own person detector (iOS)" in `docs/mobile-models.md`).
 
 ### App icon
 
@@ -92,6 +93,8 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
   -skipPackageUpdates -onlyUsePackageVersionsFromResolvedFile \
   -only-testing:FlightRiskTests -collect-test-diagnostics never test
 ```
+
+The model tests in `FlightRiskTests` (`OnDeviceModelTests`) run only in a build with the models installed and need the golden fixtures of `make_models.py verify`: pass `TEST_RUNNER_FLIGHTRISK_GOLDEN_DIR=<repo>/build/mobile_models/golden` to `xcodebuild` (the package tests read `FLIGHTRISK_GOLDEN_DIR`, and both fall back to `build/mobile_models/golden` in the checkout). They are skipped otherwise. `CustomDetectorTests` imports a user's own model end to end only when `TEST_RUNNER_FLIGHTRISK_TEST_CUSTOM_DETECTOR` names one on the test machine; never commit such a model.
 
 The demo's UI tests (`FlightRiskUITests`) run the same way with `-only-testing:FlightRiskUITests`. They start the demo from onboarding and check that LAND ALL stays visible and tappable at the default and the largest accessibility text size; they take a few minutes.
 

@@ -1,0 +1,25 @@
+{
+ "opencv": "5.1.0",
+ "cases": [
+  {
+   "width": 1920,
+   "height": 1080,
+   "canvas_sha256": "9923c495c719e39b1d9c69983af115641e0fb1c5f81d960dfc26aaf813639182"
+  },
+  {
+   "width": 1280,
+   "height": 720,
+   "canvas_sha256": "3d48e0a7f7e3de312f8913fb8299f4886f58192211bcc6ed9f7cff97fe5e2df1"
+  },
+  {
+   "width": 3840,
+   "height": 2160,
+   "canvas_sha256": "e3dda1f4547d765cf4dfc31a27c529a77d4838422e2c94001d57e4415aad0046"
+  },
+  {
+   "width": 1080,
+   "height": 1920,
+   "canvas_sha256": "4f968d413543fdb90b80eb43129dee882ab6d0f934439e108c2386e10b13004c"
+  }
+ ]
+}

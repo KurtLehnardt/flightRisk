@@ -77,6 +77,17 @@ struct SearchView: View {
                         .padding(.horizontal, 16)
                         .allowsHitTesting(false)
                 }
+                if viewModel.isUsingCustomDetector {
+                    Text("Detector: imported")
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(FlightRiskTheme.hudWhite)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.black.opacity(0.7), in: Capsule())
+                        .accessibilityLabel("Using your imported detector")
+                        .allowsHitTesting(false)
+                }
                 ReasoningStatusBanner()
                     .allowsHitTesting(false)
                 Spacer()

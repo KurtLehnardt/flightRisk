@@ -1,0 +1,78 @@
+{
+ "what": "Pillow 13.0.0's Image.resize(..., BICUBIC) of a deterministic pattern, value(x, y, c) = ((x * 31) ^ (y * 17) ^ (c * 101) ^ ((x * y) >> 3)) & 255, to torchvision's Resize(224) size, and its centre 224 x 224 crop: SHA-256 of the RGB bytes. Made with the conversion venv (scripts/mobile_models/requirements.lock).",
+ "pillow": "13.0.0",
+ "cases": [
+  {
+   "width": 226,
+   "height": 460,
+   "resized_width": 224,
+   "resized_height": 455,
+   "vertical_first": true,
+   "resized_sha256": "da771dfd667be93beae0a116989f29b138e2398bbcf3d8c311b8bee57fba08ba",
+   "crop_sha256": "fb17ce82c589144fac5b865c71d05a39dbcae888af5653e033a9a0b67709a3ef"
+  },
+  {
+   "width": 230,
+   "height": 700,
+   "resized_width": 224,
+   "resized_height": 681,
+   "vertical_first": true,
+   "resized_sha256": "98fbee3f133cb93fcee6015638eee99e5d83834043bcd5dd8b9e6854f8faef63",
+   "crop_sha256": "910056e28a2c465d7e26c169e2a4f11a5a680b43dca9006118be8b8ef0110944"
+  },
+  {
+   "width": 300,
+   "height": 900,
+   "resized_width": 224,
+   "resized_height": 672,
+   "vertical_first": true,
+   "resized_sha256": "c5c9dfa58154af8133d17f9e5e166aab35e182178a007a7f6a1949b44f2a9501",
+   "crop_sha256": "406bea49f49ac52d1467ac97f032f1ba6710f966015afcc70d300d6194fe869e"
+  },
+  {
+   "width": 400,
+   "height": 1200,
+   "resized_width": 224,
+   "resized_height": 672,
+   "vertical_first": true,
+   "resized_sha256": "847b83f7f6ab4f37da6ba37dde9f4a6b6c5f848030038607c81cc1653eaa11c6",
+   "crop_sha256": "963e90c81d534f978064c5ebe46abec9f2f3bcf5873e8d1c9ef26efea8d9e12f"
+  },
+  {
+   "width": 900,
+   "height": 300,
+   "resized_width": 672,
+   "resized_height": 224,
+   "vertical_first": false,
+   "resized_sha256": "ed968078777c2a6cdaa01b999347fdbd596b5cbe9569622133abe0d1d1fd06f1",
+   "crop_sha256": "076a4a50886fd64f0cd8372e76c960207c439b90825d6242e270f164d4c153f5"
+  },
+  {
+   "width": 40,
+   "height": 120,
+   "resized_width": 224,
+   "resized_height": 672,
+   "vertical_first": false,
+   "resized_sha256": "2a4a4014b52efeb7769d6d2e78dc460aefb72617359d605ba836552c51775253",
+   "crop_sha256": "7ac1d6f5117bca0008f736946fd65bac29bd3930ed336be238c28046286e2e51"
+  },
+  {
+   "width": 500,
+   "height": 520,
+   "resized_width": 224,
+   "resized_height": 232,
+   "vertical_first": false,
+   "resized_sha256": "010a7437a01b2bef8c2be789cd6605c33c155d9268f6518f4929e4005804f077",
+   "crop_sha256": "b307f48fba0ddfe238c8d700c4cbcd21f73a13f7b9b2377776f599cb570889d9"
+  },
+  {
+   "width": 19,
+   "height": 49,
+   "resized_width": 224,
+   "resized_height": 577,
+   "vertical_first": false,
+   "resized_sha256": "03a77daed29dc17fd5577d2299999944951cd30701a4767b0ed69b4a3280d328",
+   "crop_sha256": "672281ff0c31e9eb5e5975fdae163bfb87d987cde8bb0b686c5b67a999aeac3c"
+  }
+ ]
+}

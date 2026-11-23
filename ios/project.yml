@@ -30,6 +30,10 @@ targets:
   FlightRisk:
     type: application
     platform: iOS
+    # FlightRisk/Models holds the models scripts/mobile_models/make_models.py installs
+    # (gitignored, never committed). It is not a source folder: Xcode fails a build whose
+    # sources include a missing file, so the "Core ML models (optional)" phase below compiles
+    # the packages when they are there instead.
     sources:
       - path: FlightRisk
         excludes:
@@ -44,6 +48,8 @@ targets:
         product: GroundProtocol
       - package: FlightRiskGround
         product: SocketIOMini
+      - package: FlightRiskGround
+        product: PersonVision
     configFiles:
       Debug: Config/Signing.xcconfig
       Release: Config/Signing.xcconfig
@@ -55,6 +61,47 @@ targets:
     # are not checked. The phase reads the whole app folder, so it runs outside the
     # user script sandbox (ENABLE_USER_SCRIPT_SANDBOXING below) and on every build.
     postBuildScripts:
+      # The installed models are optional: a checkout without them builds, and the Search tab
+      # then shows "Person detection unavailable". When FlightRisk/Models holds them, this
+      # compiles YOLOXs.mlpackage and CLIPViTB16LAION.mlpackage into the app (as Xcode would
+      # compile a model in the sources; the compiled models keep their metadata, which the
+      # licence guard checks) and copies mobile-models.json and model-notices.md beside them.
+      # Models from an earlier build are removed first, so a removed model never lingers.
+      - name: Core ML models (optional)
+        shell: /bin/sh
+        basedOnDependencyAnalysis: false
+        script: |
+          set -eu
+          MODELS="$SRCROOT/FlightRisk/Models"
+          DEST="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
+          mkdir -p "$DEST"
+          missing=""
+          for name in YOLOXs CLIPViTB16LAION; do
+            rm -rf "$DEST/$name.mlmodelc"
+            if [ -d "$MODELS/$name.mlpackage" ]; then
+              xcrun coremlc compile "$MODELS/$name.mlpackage" "$DEST" \
+                --deployment-target "$IPHONEOS_DEPLOYMENT_TARGET" --sdkroot "$SDKROOT" \
+                --platform ios --container bundle-resources
+            else
+              missing="$missing $name.mlpackage"
+            fi
+          done
+          for file in mobile-models.json model-notices.md; do
+            rm -f "$DEST/$file"
+            if [ -f "$MODELS/$file" ]; then cp "$MODELS/$file" "$DEST/$file"; else missing="$missing $file"; fi
+          done
+          if [ -n "$missing" ]; then
+            if [ "$CONFIGURATION" = "Release" ] && [ "${FLIGHTRISK_ALLOW_RELEASE_WITHOUT_MODELS:-}" != "YES" ]; then
+              echo "error: this Release build is missing these files in ios/FlightRisk/Models:$missing. A store build needs both model packages, mobile-models.json and model-notices.md. Install them with scripts/mobile_models/make_models.py install (see docs/mobile-models.md). CI builds without models may set FLIGHTRISK_ALLOW_RELEASE_WITHOUT_MODELS=YES as a build setting; store builds must not."
+              exit 1
+            fi
+            echo "warning: these files are not in ios/FlightRisk/Models, so this build is incomplete or has no models:$missing (see docs/mobile-models.md)"
+          fi
+        outputPaths:
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/YOLOXs.mlmodelc
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/CLIPViTB16LAION.mlmodelc
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/mobile-models.json
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/model-notices.md
       - name: Licence guard (Release)
         shell: /bin/sh
         basedOnDependencyAnalysis: false
@@ -66,7 +113,7 @@ targets:
             echo "licence guard: skipped for the $CONFIGURATION configuration"
             exit 0
           fi
-          exec /usr/bin/env python3 "$SRCROOT/../scripts/mobile_models/licence_guard.py" "$TARGET_BUILD_DIR/$WRAPPER_NAME"
+          exec /usr/bin/python3 "$SRCROOT/../scripts/mobile_models/licence_guard.py" "$TARGET_BUILD_DIR/$WRAPPER_NAME"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.flightrisk.app
