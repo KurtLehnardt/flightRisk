@@ -172,3 +172,22 @@ def test_golden_pending_entries_match_section_27():
         for entry in row["profiles"].values():
             for pending in (entry or {}).get("pending", []):
                 assert pending["item"] in items.get(pending["pr"], set()), row["id"]
+
+
+def test_table_defaults_equal_the_constants_they_replace():
+    """Every origin today row with a today_ref has a table default equal to the driver constant."""
+    from flightrisk.params.table import TABLE
+
+    by_id = {row.id: row for row in TABLE}
+    checked = 0
+    for golden in _load()["rows"]:
+        for profile in PROFILES:
+            entry = golden["profiles"][profile]
+            if entry is None or entry["origin"] != "today" or not entry.get("today_ref"):
+                continue
+            value = _resolve(entry["today_ref"])
+            default = by_id[golden["id"]].defaults[profile]
+            default = list(default) if isinstance(default, tuple) else default
+            assert default == value, (golden["id"], profile)
+            checked += 1
+    assert checked > 60

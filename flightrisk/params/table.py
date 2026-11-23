@@ -37,6 +37,12 @@ UNSET = "unset"
 DEFERRED = "deferred"
 PER_MISSION = "per_mission"
 DERIVED_NADIR_SWATH = "derived:nadir_swath"
+PLACEHOLDER = "placeholder"
+DERIVED_MISSION_AREA = "derived:mission_area"
+DERIVED_LOSS_TIMEOUT = "derived:ground_loss_timeout"
+DERIVED_LOST_WINDOW_FLOOR = "derived:lost_window_floor"
+DERIVED_LOST_WINDOW_FIELD = "derived:lost_window_field"
+DERIVED_REFUSED_STEPS = "derived:refused_step_sum"
 
 #: Sentence every fact row carries in its description (risk R6).
 FACT_NOTE = "Test-adapter fact, read-only, not operator-facing."
@@ -47,28 +53,44 @@ SAFE_VALUES: dict[str, Any] = {
     "tello.temp_refuse_c": "on",
     "sensing.turn": True,
     "sensing.mode": "required",
+    "stranded.action": "return",
+    "task.end_action": "return",
+    "return.field_method": "edge_guided",
 }
 
-#: Later values from rows tagged "from <PR>" in parameters.md. ``value`` is
-#: None when the later value is a behaviour change, not a number.
+#: Later values from rows tagged "from <PR>" in parameters.md, one tuple per row id, as the golden file
+#: records them. ``profile`` names the profile the tag belongs to; ``where`` is "bounds" when the later
+#: change is to the bound, not the default. ``value`` is None when the later change is no single value.
 PENDING: dict[str, tuple[dict[str, Any], ...]] = {
     "envelope.geofence_cm": ({"pr": "C5", "item": 29, "profile": T, "value": 450},),
-    "envelope.alt_slot_cm": ({"pr": "C5", "item": 30, "profile": None, "value": None, "what": "confirmation"},),
     "battery.min_takeoff_pct": ({"pr": "C6", "item": 33, "profile": G, "value": 40},),
-    "battery.critical_pct": ({"pr": "B4", "item": 8, "profile": None, "value": None, "what": "autopilot critical level"},),
+    "battery.critical_pct": ({"pr": "B4", "item": 8, "profile": G, "value": "autopilot_critical_level"},),
     "link.loss_wait_s": (
-        {"pr": "C7", "item": 34, "profile": T, "value": 10.0},
-        {"pr": "C5", "item": 26, "profile": G, "value": None, "what": "bound 1.5-30"},
+        {"pr": "C7", "item": 34, "profile": T, "value": 10},
+        {"pr": "C7", "item": 34, "profile": T, "value": None, "where": "bounds"},
+        {"pr": "C5", "item": 26, "profile": G, "value": None, "where": "bounds"},
     ),
     "link.loss_action": ({"pr": "C7", "item": 34, "profile": T, "value": "return"},),
-    "stranded.countdown_s": (
-        {"pr": "C6", "item": 32, "profile": G, "value": None, "what": "ends in a return (field)"},
-        {"pr": "C7", "item": 34, "profile": T, "value": None, "what": "ends in a return (indoor)"},
-    ),
     "separation.base_cm": ({"pr": "D1", "item": 9, "profile": G, "value": 500},),
-    "plan.lost_obstacle_s": ({"pr": "D2", "item": 18, "profile": None, "value": None, "what": "row removed"},),
+    "link.ground_loss_timeout_s": (
+        {"pr": "C7", "item": 34, "profile": T, "value": 15},
+        {"pr": "D2", "item": 15, "profile": G, "value": 15},
+    ),
+    "lost.flying_window_s": (
+        {"pr": "C7", "item": 46, "profile": T, "value": DERIVED_LOST_WINDOW_FLOOR},
+        {"pr": "D2", "item": 18, "profile": G, "value": None},
+    ),
+    "search.required_overlap_pct": ({"pr": "D5", "item": 37, "profile": G, "value": 30},),
+    "stranded.action": (
+        {"pr": "C7", "item": 34, "profile": T, "value": "return"},
+        {"pr": "C6", "item": 32, "profile": G, "value": "return"},
+    ),
+    "task.end_action": (
+        {"pr": "C7", "item": 34, "profile": T, "value": "return"},
+        {"pr": "C6", "item": 32, "profile": G, "value": "return"},
+    ),
+    "return.field_method": ({"pr": "C6", "item": 45, "profile": G, "value": "edge_guided"},),
 }
-
 
 def _p(
     id: str,
@@ -158,12 +180,12 @@ ROWS_1_86: tuple[ParamSpec, ...] = (
        (3.0, 3.0), (_B(1.5, 10), _B(1.5, 30)), Safer.LOWER, Confirm.LESS_SAFE, _FE, _NS,
        env="FLIGHTRISK_LINK_LOSS_LAND_S"),
     _p("link.loss_wait_s", Unit.S, Kind.FLOAT, "Extra hold after a long ground-link loss, before the loss action.",
-       _ND, (0, 10.0), (_B(1.5, 30), _B(1.5, 30)), Safer.LOWER, Confirm.LESS_SAFE, _FE, _NS,
-       off_value=0, env="FLIGHTRISK_LINK_LOSS_WAIT_S",
+       _ND, (0, 10.0), (None, _B(1.5, 30)), Safer.LOWER, Confirm.LESS_SAFE, _FE, _NS,
+       env="FLIGHTRISK_LINK_LOSS_WAIT_S",
        env_aliases=(EnvAlias("FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S", 1.0),), cli=("--link-loss-hold-s",)),
-    _p("link.loss_action", Unit.ENUM, Kind.ENUM, "What the drone does after a long ground-link loss.", _ND,
-       ("land", "rtl"), (None, None), Safer.NONE, Confirm.NONE, _FE, _NS,
-       choices=("return", "land", "rtl"), env="FLIGHTRISK_FAILSAFE_ACTION", cli=("--failsafe-action",)),
+    _p("link.loss_action", Unit.ENUM, Kind.ENUM, "What the drone does after a long ground-link loss; the environment spelling rtl reads as return.", _ND,
+       ("land", "return"), (None, None), Safer.NONE, Confirm.NONE, _FE, _NS,
+       choices=("return", "land"), env="FLIGHTRISK_FAILSAFE_ACTION", cli=("--failsafe-action",)),
     _p("link.require_failsafes", Unit.BOOL, Kind.BOOL, "Refuse to fly unless the autopilot failsafes are set.", _ND,
        (None, True), (None, None), Safer.NONE, Confirm.LESS_SAFE, _FE, _NS,
        off_value=False, safety_switch=True),
@@ -330,5 +352,170 @@ ROWS_1_86: tuple[ParamSpec, ...] = (
        _ND, (None, 5.0), (None, _B(1, 10)), Safer.LOWER, Confirm.LESS_SAFE, _FE, _NS),
 )
 
-#: The whole registry so far; later steps append rows 87 to 162.
-TABLE: tuple[ParamSpec, ...] = ROWS_1_86
+SDK_NOTE = "Tello SDK or driver fact, shown with its source (D-F18)."
+
+
+def _sdk(id: str, unit: Unit, kind: Kind, default: Any, text: str) -> ParamSpec:
+    """One read-only Tello SDK or driver row (rows 87 to 110); a scalar is its own fixed bound."""
+    scalar = not isinstance(default, tuple)
+    return _p(id, unit, kind, f"{text} {SDK_NOTE}", _ND, (default, None),
+              (_B(default, default) if scalar else None, None), Safer.NONE, Confirm.NONE, _RO, _NS)
+
+
+_I, _F, _S, _C = Unit.PORT, Unit.S, Unit.CM, Unit.COUNT
+
+# Rows 87 to 110: Tello SDK and driver facts, read-only, tello only.
+ROWS_87_110: tuple[ParamSpec, ...] = (
+    _sdk("tello_sdk.command_port", _I, Kind.INT, 8889, "SDK command channel."),
+    _sdk("tello_sdk.state_port", _I, Kind.INT, 8890, "SDK state stream."),
+    _sdk("tello_sdk.video_port", _I, Kind.INT, 11111, "SDK video stream."),
+    _sdk("tello_sdk.command_reply_timeout_s", _F, Kind.FLOAT, 7.0, "Response timeout of a command."),
+    _sdk("tello_sdk.command_gap_s", _F, Kind.FLOAT, 0.1, "Smallest gap between commands."),
+    _sdk("tello_sdk.state_fresh_s", _F, Kind.FLOAT, 0.5, "Age below which a state packet is fresh."),
+    _sdk("tello_sdk.state_lost_s", _F, Kind.FLOAT, 3.0, "Silence after which the state counts as lost."),
+    _sdk("tello_sdk.motor_off_s", _F, Kind.FLOAT, 2.0, "Motor time unchanged this long proves the motors off."),
+    _sdk("tello_sdk.motor_run_gap_s", _F, Kind.FLOAT, 1.0, "Gap used to decide the motors are running."),
+    _sdk("tello_sdk.takeoff_confirm_s", _F, Kind.FLOAT, 6.0, "Window after a bare error reply to a takeoff."),
+    _sdk("tello_sdk.takeoff_ground_after_s", _F, Kind.FLOAT, 3.0, "Seconds before a takeoff may be called grounded."),
+    _sdk("tello_sdk.takeoff_lift_guard_s", _F, Kind.FLOAT, 10.0, "Guard window for the lift after a takeoff."),
+    _sdk("tello_sdk.land_deadline_s", _F, Kind.FLOAT, 25.0, "Deadline of a landing."),
+    _sdk("tello_sdk.land_ground_wait_s", _F, Kind.FLOAT, 6.0, "Wait for the ground reading after a landing."),
+    _sdk("tello_sdk.land_stall_s", _F, Kind.FLOAT, 1.0, "Stall time while landing."),
+    _sdk("tello_sdk.land_descent_stall_s", _F, Kind.FLOAT, 2.0, "Descent stall time while landing."),
+    _sdk("tello_sdk.land_descent_cm", _S, Kind.INT, 5, "Descent that counts as progress while landing."),
+    _sdk("tello_sdk.land_attempts", _C, Kind.INT, 3, "Landing attempts."),
+    _sdk("tello_sdk.connect_attempts", _C, Kind.INT, 3, "Connection attempts."),
+    _sdk("tello_sdk.keepalive_interval_s", _F, Kind.FLOAT, 10.0, "Keepalive interval, below the Tello's own 15 s auto-land."),
+    _sdk("tello_sdk.keepalive_timeout_s", _F, Kind.FLOAT, 5, "Keepalive reply timeout."),
+    _sdk("tello_sdk.tof_out_of_range_cm", _S, Kind.INT, 6553, "The tof reading out of the sensor's range."),
+    _sdk("tello_sdk.temp_reading_range_c", Unit.DEG_C_PAIR, Kind.INT_PAIR, (-40, 150), "A temp reply outside it is unknown."),
+    _sdk("tello_sdk.video_size_px", Unit.PX_PAIR, Kind.INT_PAIR, (960, 720), "Video stream size, unverified."),
+)
+
+_MS = Scope.MISSION
+_PL = Applies.PLAN
+_IF = Applies.IN_FLIGHT
+_LS = (Safer.HIGHER, Confirm.LESS_SAFE)
+_NB = (None, None)
+
+# Rows 111 to 128: spec v1 rows, every one new.
+ROWS_111_128: tuple[ParamSpec, ...] = (
+    _p("battery.return_floor_pct", Unit.PCT, Kind.INT, "Lowest battery level that starts a return.", _ND,
+       (25, 30), (_B(15, 90), _B(20, 90)), *_LS, _FE, _NS),
+    _p("battery.landing_reserve_pct", Unit.PCT, Kind.INT, "Charge left on landing at home.", _ND,
+       (10, 15), (_B(5, 50), _B(5, 50)), *_LS, _FE, _NS),
+    _p("battery.return_rate_pct_per_100m", Unit.PCT, Kind.FLOAT, "Battery cost of flying home per 100 m.", _ND,
+       (PLACEHOLDER, PLACEHOLDER), _NB, *_LS, _FE, _NS),
+    _p("battery.hover_rate_pct_per_min", Unit.PCT, Kind.FLOAT, "Battery cost of one minute of hover.", _ND,
+       (PLACEHOLDER, PLACEHOLDER), _NB, *_LS, _FE, _NS),
+    _p("position.uncertainty_bound_cm", Unit.CM, Kind.INT, "Largest position uncertainty before landing in place.", _ND,
+       (50, None), (_B(20, 75), None), Safer.LOWER, Confirm.LESS_SAFE, _FE, _NS),
+    _p("position.dr_growth_per_m_cm", Unit.CM, Kind.FLOAT, "Dead-reckoning growth per metre flown. " + FACT_NOTE, _ND,
+       (PLACEHOLDER, None), _NB, Safer.NONE, Confirm.NONE, _FACT, _NS),
+    _p("position.dr_growth_per_turn_cm", Unit.CM, Kind.FLOAT, "Dead-reckoning growth per turn. " + FACT_NOTE, _ND,
+       (PLACEHOLDER, None), _NB, Safer.NONE, Confirm.NONE, _FACT, _NS),
+    _p("position.dr_growth_per_min_hover_cm", Unit.CM, Kind.FLOAT, "Dead-reckoning growth per minute of hover. " + FACT_NOTE,
+       _ND, (PLACEHOLDER, None), _NB, Safer.NONE, Confirm.NONE, _FACT, _NS),
+    _p("home.accuracy_cm", Unit.CM, Kind.INT, "Home accuracy needed before takeoff.", _ND,
+       (None, 200), (None, _B(50, 500)), Safer.LOWER, Confirm.LESS_SAFE, _FE, _NS),
+    _p("home.max_offset_cm", Unit.CM, Kind.INT, "Largest offset between the autopilot's home and the drone.", _ND,
+       (None, 500), (None, _B(100, 1000)), Safer.LOWER, Confirm.LESS_SAFE, _FE, _NS),
+    _p("separation.landing_cm", Unit.CM, Kind.INT, "Homes closer than this share a landing area.", _MS,
+       (150, 1000), _NB, *_LS, _FE, _PL),
+    _p("airspace.close_band_floor_cm", Unit.CM, Kind.INT, "Height at which the close band starts.", _MS,
+       (None, 1000), (None, _B(1000, 12000)), *_LS, _FE, _PL),
+    _p("airspace.band_gap_cm", Unit.CM, Kind.INT, "Gap between the close band and the sweep band.", _MS,
+       (None, 500), (None, _B(300, 2000)), *_LS, _FE, _PL),
+    _p("retask.window_s", Unit.S, Kind.FLOAT, "Hover after the last task, then return.", _MS,
+       (20, 20), (_B(1, 120), _B(1, 120)), Safer.LOWER, Confirm.LESS_SAFE, _FE, _PL),
+    _p("return.blocked_wait_s", Unit.S, Kind.FLOAT, "Wait for a blocked return before holding or landing.", _ND,
+       (30, 30), (_B(0, 120), _B(0, 120)), Safer.LOWER, Confirm.LESS_SAFE, _FE, _NS),
+    _p("return.person_cue_wait_s", Unit.S, Kind.FLOAT, "Wait for a person's answer before landing.", _ND,
+       (30, 30), (_B(0, 300), _B(0, 300)), Safer.LOWER, Confirm.LESS_SAFE, _FE, _NS),
+    _p("noentry.lost_margin_cm", Unit.CM, Kind.INT, "Margin added to a lost drone's no-entry radius.", _MS,
+       (100, 500), _NB, *_LS, _FE, _PL),
+    _p("search.step_cycle_speed_cm_s", Unit.CM_PER_S, Kind.INT, "Speed cap of a step-and-look cycle.", _ND,
+       (30, None), (_B(30, 30), None), Safer.NONE, Confirm.NONE, _RO, _PL),
+)
+
+# Rows 129 to 145: find, search, escort and link rows.
+ROWS_129_145: tuple[ParamSpec, ...] = (
+    _p("find.on_find_policy", Unit.ENUM, Kind.ENUM, "What the fleet does when a target is found.", _MS,
+       ("keep_watch", "keep_watch"), _NB, Safer.NONE, Confirm.NONE, _UI, _IF,
+       choices=("keep_watch", "return_all", "land_all")),
+    _p("find.converge_count", Unit.COUNT, Kind.INT, "Drones that converge on a find.", _MS,
+       (1, 2), _NB, Safer.NONE, Confirm.NONE, _UI, _IF),
+    _p("find.approach_distance_cm", Unit.CM, Kind.INT, "Distance at which a drone approaches a find.", _MS,
+       (300, 1500), _NB, *_LS, _UI, _PL),
+    _p("find.verification_window_s", Unit.S, Kind.FLOAT, "Seconds allowed to verify a find.", _MS,
+       (60, 60), (_B(10, 300), _B(10, 300)), Safer.NONE, Confirm.NONE, _UI, _IF),
+    _p("find.local_search_on", Unit.BOOL, Kind.BOOL, "Whether a find starts a local search.", _MS,
+       (True, True), _NB, Safer.NONE, Confirm.NONE, _UI, _IF, choices=("true", "false")),
+    _p("find.running_speed_cm_s", Unit.CM_PER_S, Kind.INT, "Speed of a running target the fleet follows.", _MS,
+       (300, 400), (_B(50, 800), _B(50, 800)), Safer.HIGHER, Confirm.NONE, _UI, _IF),
+    _p("find.local_search_max_radius_cm", Unit.CM, Kind.INT, "Largest radius of a local search.", _MS,
+       (DERIVED_MISSION_AREA, 100000), _NB, Safer.NONE, Confirm.NONE, _UI, _IF),
+    _p("find.local_search_time_s", Unit.S, Kind.FLOAT, "Longest local search.", _MS,
+       (600, 600), (_B(1, 3600), _B(1, 3600)), Safer.NONE, Confirm.NONE, _UI, _IF),
+    _p("search.required_overlap_pct", Unit.PCT, Kind.INT, "Overlap between neighbouring lanes.", _MS,
+       (30, 20), (_B(10, 80), _B(10, 80)), Safer.HIGHER, Confirm.NONE, _UI, _IF),
+    _p("escort.count", Unit.COUNT, Kind.INT, "Drones that escort a target.", _MS,
+       (None, 1), _NB, Safer.NONE, Confirm.NONE, _UI, _IF),
+    _p("escort.standoff_cm", Unit.CM, Kind.INT, "Distance an escort keeps from the target.", _MS,
+       (None, 2000), _NB, *_LS, _UI, _PL),
+    _p("escort.altitude_cm", Unit.CM, Kind.INT, "Height of an escort.", _MS,
+       (None, 1500), _NB, *_LS, _UI, _PL),
+    _p("escort.handoff_margin_pct", Unit.PCT, Kind.INT, "Battery points above the return threshold at a handoff.", _MS,
+       (None, 10), (None, _B(5, 30)), *_LS, _UI, _IF),
+    _p("escort.lost_from_view_s", Unit.S, Kind.FLOAT, "Seconds out of view before an escort counts the target lost.", _MS,
+       (None, 10), (None, _B(3, 60)), Safer.NONE, Confirm.NONE, _UI, _IF),
+    _p("link.ground_loss_margin_s", Unit.S, Kind.FLOAT, "Margin the ground adds before it declares a drone lost.", Scope.GROUND,
+       (2, 2), (_B(1, 10), _B(1, 10)), *_LS, _FE, _NS),
+    _p("link.ground_loss_timeout_s", Unit.S, Kind.FLOAT, "Time without contact before the ground declares a drone lost.",
+       Scope.GROUND, (DERIVED_LOSS_TIMEOUT, DERIVED_LOSS_TIMEOUT), _NB, Safer.NONE, Confirm.NONE, _RO, _NS),
+    _p("lost.flying_window_s", Unit.S, Kind.FLOAT, "Window in which a lost drone's area stays closed.", _MS,
+       (20, DERIVED_LOST_WINDOW_FIELD), _NB, Safer.NONE, Confirm.NONE, _RO, _PL),
+)
+
+# Rows 146 to 162: airspace, position, return, stranded and test-adapter rows.
+ROWS_146_162: tuple[ParamSpec, ...] = (
+    _p("airspace.close_band_ceiling_cm", Unit.CM, Kind.INT, "Top of the close band.", _MS,
+       (None, 1500), (None, _B(1000, 12000)), Safer.NONE, Confirm.NONE, _FE, _PL),
+    _p("airspace.sweep_band_floor_cm", Unit.CM, Kind.INT, "Bottom of the sweep band.", _MS,
+       (None, 2000), (None, _B(1500, 12000)), *_LS, _FE, _PL),
+    _p("airspace.sweep_band_ceiling_cm", Unit.CM, Kind.INT, "Top of the sweep band.", _MS,
+       (None, 2500), (None, _B(2000, 12000)), Safer.NONE, Confirm.NONE, _FE, _PL),
+    _p("airspace.obstacle_top_cm", Unit.CM, Kind.INT, "Highest known obstacle per area; required, no default.", _MS,
+       (None, UNSET), (None, _B(0, 12000)), *_LS, _UI, _PL),
+    _p("airspace.obstacle_margin_cm", Unit.CM, Kind.INT, "Height kept above the obstacle top.", _MS,
+       (None, 500), (None, _B(200, 2000)), *_LS, _FE, _PL),
+    _p("position.gps_sigma_k", Unit.RATIO, Kind.FLOAT, "Multiplier on the GPS one-sigma accuracy.", _ND,
+       (None, 2), (None, _B(2, 5)), *_LS, _FE, _NS),
+    _p("return.progress_min_cm", Unit.CM, Kind.INT, "Gain toward home the progress monitor requires.", _ND,
+       (20, 200), (_B(10, 200), _B(100, 2000)), Safer.LOWER, Confirm.LESS_SAFE, _FE, _NS),
+    _p("return.progress_timeout_s", Unit.S, Kind.FLOAT, "Progress monitor window.", _ND,
+       (20, 20), (_B(5, 60), _B(5, 60)), Safer.LOWER, Confirm.LESS_SAFE, _FE, _NS),
+    _p("separation.landing_interval_s", Unit.S, Kind.FLOAT, "Spacing of the landing order in a shared landing area.", _MS,
+       (10, 30), (_B(5, 120), _B(10, 300)), *_LS, _FE, _PL),
+    _p("find.ambiguity_margin", Unit.RATIO, Kind.FLOAT, "Score gap below which a sighting is ambiguous.", _MS,
+       (0.05, 0.05), (_B(0, 0.3), _B(0, 0.3)), Safer.HIGHER, Confirm.NONE, _UI, _IF),
+    _p("escort.handoff_frames", Unit.COUNT, Kind.INT, "Frames the relief must see the same target.", _MS,
+       (None, 5), (None, _B(3, 30)), *_LS, _FE, _PL),
+    _p("stranded.lost_idle_s", Unit.S, Kind.FLOAT, "Idle-controller countdown for a lost drone.", Scope.GROUND,
+       (30, 30), (_B(5, 300), _B(5, 300)), Safer.LOWER, Confirm.LESS_SAFE, _FE, _NS),
+    _p("stranded.action", Unit.ENUM, Kind.ENUM, "What the stranded countdown does when it ends.", Scope.GROUND,
+       ("land", "land"), _NB, Safer.NONE, Confirm.NONE, _FE, _NS, choices=("land", "return")),
+    _p("task.end_action", Unit.ENUM, Kind.ENUM, "What a drone does after its last task and the retask window.", _MS,
+       ("land", "land"), _NB, Safer.NONE, Confirm.NONE, _FE, _PL, choices=("land", "hover", "return")),
+    _p("return.field_method", Unit.ENUM, Kind.ENUM, "How a MAVLink edge flies the returns it starts.", _ND,
+       (None, "autopilot_rtl"), _NB, Safer.NONE, Confirm.NONE, _RO, _NS, choices=("autopilot_rtl", "edge_guided")),
+    _p("tello.refusals_per_flight", Unit.COUNT, Kind.INT, "Cap on refused lane steps per flight. " + FACT_NOTE, _ND,
+       (2, None), (_B(0, 6), None), Safer.NONE, Confirm.NONE, _FACT, _NS, env="FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT"),
+    _p("envelope.fence_margin_cm", Unit.CM, Kind.INT, "Runtime fence margin, grown by each refused step. " + FACT_NOTE, _ND,
+       (DERIVED_REFUSED_STEPS, None), _NB, Safer.NONE, Confirm.NONE, _FACT, _IF),
+)
+
+ROWS_87_162: tuple[ParamSpec, ...] = ROWS_87_110 + ROWS_111_128 + ROWS_129_145 + ROWS_146_162
+
+#: The whole registry: rows 1 to 162 minus the removed 53 and 85, row 71 holding two ids, so 160 rows.
+TABLE: tuple[ParamSpec, ...] = ROWS_1_86 + ROWS_87_162
