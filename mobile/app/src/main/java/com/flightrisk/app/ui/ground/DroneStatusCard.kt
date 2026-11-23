@@ -61,7 +61,13 @@ fun DroneStatusCard(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(card.displayId, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1)
+                Text(
+                    card.displayId,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    modifier = if (card.isDemo) Modifier.semantics { contentDescription = card.titleDescription } else Modifier,
+                )
                 Chip(card.linkChipText, linkColor(card), Modifier.testTag("ground.card.${card.id}.link"))
                 card.controlChip?.let { Chip(it, if (card.isStateStale) GroundColors.ChipGrey else GroundColors.ChipOrange) }
             }
@@ -102,14 +108,14 @@ fun DroneStatusCard(
                 colors = ButtonDefaults.buttonColors(containerColor = GroundColors.ChipBlue, contentColor = Color.White),
                 modifier = Modifier
                     .testTag("ground.card.${card.id}.land")
-                    .semantics { contentDescription = "${card.landTitle} ${card.displayId}" },
+                    .semantics { contentDescription = card.landDescription },
             ) { Text(card.landTitle) }
             if (card.canResume) {
                 OutlinedButton(
                     onClick = onResume,
                     modifier = Modifier
                         .testTag("ground.card.${card.id}.resume")
-                        .semantics { contentDescription = "Resume the search of ${card.id}" },
+                        .semantics { contentDescription = card.resumeDescription },
                 ) { Text("Resume search") }
             }
         }

@@ -2,10 +2,12 @@
   "_meta": {
     "description": "The 'match_alert' and 'match_alert_reminder' events. A phone shows them; the operator answers on the laptop (match_alert_response is not in the phone's allow-list). 'match_alert_resolved' tells every client that the operator answered one.",
     "file": "match_alert.json",
-    "generated_at_commit": "118efe71ebaef531c5c04dbdb2e33d9574537a6f",
+    "generated_at_commit": "3751fba8de9a73a5f4467fd626f8b667bd35e686",
     "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
     "sources": [
       "MatchAlertLatch.pending_alert",
+      "flightrisk.dashboard.alerts._gemma_worker",
+      "flightrisk.dashboard.alerts.resolve_reasoning",
       "flightrisk.dashboard.app._emit_edge_alert",
       "flightrisk.dashboard.recovery.handle_alert_response"
     ],
@@ -31,6 +33,25 @@
         "type": "edge"
       }
     },
+    "edge_match_awaiting_reasoning": {
+      "direction": "server_to_client",
+      "event": "match_alert",
+      "notes": "An edge match while the ground's reasoning is on: gemma_confidence is 'pending' and reasoning says which provider is checking it. The verdict arrives later as reasoning_result with the same alert_id, and may raise the level through alert_upgrade.",
+      "payload": {
+        "alert_id": "00000000000040008000000000000032",
+        "alert_level": "possible_match",
+        "face_score": 0.0,
+        "gemma_confidence": "pending",
+        "gemma_match": null,
+        "reasoning": "Awaiting Claude reasoning...",
+        "reid_score": 0.86,
+        "score": 0.86,
+        "snapshot": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAAIAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCCiiiuk5z/2Q==",
+        "time": "12:34:56",
+        "track_id": "8_7",
+        "type": "edge"
+      }
+    },
     "reminder_on_connect": {
       "direction": "server_to_client",
       "event": "match_alert_reminder",
@@ -42,6 +63,27 @@
         "gemma_confidence": null,
         "gemma_match": null,
         "reasoning": null,
+        "reid_score": 0.86,
+        "renotify": true,
+        "renotify_count": 0,
+        "score": 0.86,
+        "snapshot": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAAIAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCCiiiuk5z/2Q==",
+        "time": "12:34:56",
+        "track_id": "8_7",
+        "type": "edge"
+      }
+    },
+    "reminder_with_verdict": {
+      "direction": "server_to_client",
+      "event": "match_alert_reminder",
+      "notes": "The reminder for the same alert after its verdict: the ground's stored copy carries gemma_match, gemma_confidence, the rationale and the raised alert_level, so a phone that connects late still sees the verdict.",
+      "payload": {
+        "alert_id": "00000000000040008000000000000032",
+        "alert_level": "confirmed_match",
+        "face_score": 0.0,
+        "gemma_confidence": "high",
+        "gemma_match": true,
+        "reasoning": "Same red jacket, blue jeans and grey backpack as the reference photo.",
         "reid_score": 0.86,
         "renotify": true,
         "renotify_count": 0,

@@ -3,9 +3,10 @@ import XCTest
 
 /// R-8: every received payload decodes from its fixture; missing optional fields decode as nil.
 final class DecodeFixturesTests: XCTestCase {
-    func testThereAreTwentyFourFixtureFiles() throws {
+    func testThereAreTwentySevenFixtureFiles() throws {
+        // 24, plus reasoning_result.json, alert_upgrade.json and demo_scenario.json.
         let names = try Fixtures.fileNames()
-        XCTAssertEqual(names.count, 24, "fixture files: \(names)")
+        XCTAssertEqual(names.count, 27, "fixture files: \(names)")
     }
 
     /// Every case of every file with a server event this build handles decodes into the matching

@@ -26,13 +26,14 @@ object Redact {
         "(?i)(\"?(?:api_key|apikey|token|password|secret|authorization)\"?\\s*[:=]\\s*\"?)([^\"\\s,}&]+)",
     )
 
-    // Line breaks and other control characters would let a server forge log lines.
-    private val CONTROL = Regex("[\\u0000-\\u001f\\u007f]")
+    // Line breaks and other control characters would let a server forge log lines: the C0 and C1
+    // controls, DEL, and the Unicode line and paragraph separators (U+2028, U+2029).
+    private val CONTROL = Regex("[\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]")
 
     /**
      * Returns [text] with every non-empty value in [secrets] replaced by
      * [PLACEHOLDER], with Bearer values and credential fields removed, with
-     * control characters replaced by spaces, and then cut to at most
+     * control characters (C0, DEL, C1, U+2028 and U+2029) replaced by spaces, and then cut to at most
      * [maxLength] characters (the last of which is [ELLIPSIS] when cut).
      */
     fun text(text: String?, secrets: Iterable<String?> = emptyList(), maxLength: Int = MAX_LENGTH): String {

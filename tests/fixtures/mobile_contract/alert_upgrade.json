@@ -1,0 +1,26 @@
+{
+  "_meta": {
+    "description": "The 'alert_upgrade' event: a reasoning verdict raised a match alert's level. A level only ever goes up.",
+    "file": "alert_upgrade.json",
+    "generated_at_commit": "3d79bc28f2f9ee66a84cbdb29b42cfff9c224974",
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "flightrisk.dashboard.alerts._gemma_worker",
+      "flightrisk.dashboard.alerts.raise_alert_level"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "confirmed_match": {
+      "direction": "server_to_client",
+      "event": "alert_upgrade",
+      "notes": "Sent after reasoning_result case 'match' (same alert_id): the verdict raised the alert from possible_match to confirmed_match. Apply it only when new_level ranks above the level shown; a level never goes down. reasoning repeats the verdict's rationale.",
+      "payload": {
+        "alert_id": "00000000000040008000000000000032",
+        "new_level": "confirmed_match",
+        "reasoning": "Same red jacket, blue jeans and grey backpack as the reference photo.",
+        "track_id": "8_7"
+      }
+    }
+  }
+}

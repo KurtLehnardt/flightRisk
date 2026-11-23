@@ -198,10 +198,17 @@ the message table.
   gets the same reply and never loads a model twice.
 - **Status.** An edge that supports profiles names its active profile in
   every `detections` message (`detection_profile`) and, when it flies, in its
-  telemetry (`detection_profile`, `detection_profile_fallback`,
-  `detection_profile_fallback_reason`, `detection_profile_requested`,
-  `detection_profile_switchable`, and `detector_ok`). These are additional fields, which every
-  ground version accepts on an edge link.
+  telemetry (one `detection_profile` object, and `detector_ok`). The object holds `name`,
+  `fallback`, `switchable` and, when they apply, `fallback_reason` and `requested`. These are
+  additional fields, which every ground version accepts on an edge link.
+  Before this grouping an edge sent five flat fields: `detection_profile` (the name),
+  `detection_profile_fallback`, `detection_profile_fallback_reason`,
+  `detection_profile_requested` and `detection_profile_switchable`. The ground still reads
+  both shapes for one release so that laptops on different versions keep working, and the flat
+  shape will then be removed (`_read_telemetry_profile` in
+  `flightrisk/dashboard/detection_profiles.py`). A ground from before the grouping does not
+  understand the object, so it shows a grouped edge as not supporting profiles until it is
+  upgraded; the new ground is the one to upgrade first.
 
 ### Compatibility
 

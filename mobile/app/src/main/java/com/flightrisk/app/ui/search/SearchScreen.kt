@@ -1,5 +1,6 @@
 package com.flightrisk.app.ui.search
 
+import com.flightrisk.app.demo.DemoText
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -147,10 +148,15 @@ data class SearchScreenState(
     val reasoningNotice: String? = null,
     val hasTarget: Boolean = true,
     val hasCamera: Boolean = true,
+    /** Demo mode: the preview shows a drawn scene and the camera is never opened. */
+    val demoMode: Boolean = false,
 ) {
-    /** Whether a search can start from this state. */
+    /**
+     * Whether a search can start from this state. The demo search draws its own scene and
+     * uses the drawn placeholder target, so it needs neither a camera nor a photo.
+     */
     val readiness: SearchReadiness
-        get() = searchReadiness(hasTarget, hasCamera, frameSourceMode)
+        get() = if (demoMode) SearchReadiness.READY else searchReadiness(hasTarget, hasCamera, frameSourceMode)
 }
 
 // -----------------------------------------------------------------------
@@ -242,7 +248,7 @@ fun SearchScreen(
                 )
             }
             FrameSourceMode.CAMERA -> {
-                if (state.isSearching && state.hasCamera) {
+                if (state.isSearching && state.hasCamera && !state.demoMode) {
                     LiveCameraPreview(modifier = Modifier.fillMaxSize())
                 } else {
                     CameraPreviewPlaceholder(
@@ -293,6 +299,18 @@ fun SearchScreen(
 
             // Ground station link: "Sending detections to <host>" while images of people go out.
             GroundLinkIndicatorBanner()
+
+            if (state.demoMode && state.isSearching) {
+                Text(
+                    text = DemoText.SEARCH_NOTE,
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier
+                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
 
             // The full "no target" card is hidden while a search runs, so keep a compact reminder.
             if (state.isSearching && readiness == SearchReadiness.NO_TARGET) {

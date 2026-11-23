@@ -31,7 +31,10 @@ class NackReasonsTest {
     @Test
     fun everyReasonInTheFixturesIsKnown() {
         val reasons = mutableSetOf<String>()
-        for (file in Fixtures.EXPECTED_FILES - setOf("nack_reasons.json", "fleet_plan.json", "fleet_event.json", "unknown_keys.json")) {
+        // demo_scenario.json replays a whole mission: after LAND ALL its uncovered segments carry the
+        // coordinator's free-text reason ("LAND ALL issued"), like the plan and retask entries.
+        val freeText = setOf("nack_reasons.json", "fleet_plan.json", "fleet_event.json", "unknown_keys.json", "demo_scenario.json")
+        for (file in Fixtures.EXPECTED_FILES - freeText) {
             for (case in Fixtures.cases(file).values) collectReasons(case["payload"], reasons)
         }
         assertTrue(reasons.isNotEmpty())
