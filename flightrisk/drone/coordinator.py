@@ -96,7 +96,6 @@ from flightrisk.drone.obstacle_sensor import (
     CUT_SENSOR_DOWN,
     MAX_CUTS_LISTED,
     MAX_OFFSETS_LISTED,
-    OBSTACLE_SIDESTEP_CM,
     PERSON_CUE_AGE_KEY,
     PERSON_CUE_DOWN_KEY,
     REFLIGHT_CUT_REASONS,
@@ -170,11 +169,13 @@ MAX_OFFSET_REFLIGHTS_PER_DRONE = 4
 Kept apart from ``MAX_REFLIGHTS_PER_DRONE``, so poles a drone got past can
 never use up the re-flights of the lanes it had to cut."""
 
-SIDESTEP_MARGIN_CM = OBSTACLE_SIDESTEP_CM
+SIDESTEP_MARGIN_CM = 50
 """Extra distance the re-task separation check keeps from the path of a drone that may sidestep, beyond the gap.
 
-An edge may sidestep an obstacle by up to ``FLIGHTRISK_OBSTACLE_SIDESTEP_CM``
-(50 cm by default) inside its own zone (``lane_avoid``). Zones are kept
+An edge that has the sidestep switched on (it is off by default) may sidestep
+an obstacle by up to ``FLIGHTRISK_OBSTACLE_SIDESTEP_CM`` inside its own zone
+(``lane_avoid``). This margin is 50 cm, the usual sidestep, and is independent
+of the edge default of 0. Zones are kept
 ``gap_cm`` apart, but a re-task or a re-flight can give a drone a path that
 runs ``gap_cm`` from another drone's path outside the zones, and a sidestep of
 that other drone then brings the two closer by the sidestep. The margin is
