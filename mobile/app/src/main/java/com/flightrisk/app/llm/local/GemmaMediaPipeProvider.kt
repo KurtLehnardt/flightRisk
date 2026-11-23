@@ -154,6 +154,12 @@ class GemmaMediaPipeProvider(
                 Log.e(TAG, "Model load failed", e)
                 _state.value = ModelState.Error("Load failed: ${e.message}")
                 throw e
+            } catch (e: LinkageError) {
+                // The native MediaPipe library could not be loaded (UnsatisfiedLinkError and
+                // similar are Errors, not Exceptions). Report it as a failed load, not a crash.
+                Log.e(TAG, "MediaPipe native library could not be loaded", e)
+                _state.value = ModelState.Error("Load failed: the on-device runtime is not available on this device")
+                throw IllegalStateException("The on-device runtime is not available", e)
             }
         }
     }
@@ -201,6 +207,9 @@ class GemmaMediaPipeProvider(
             } catch (e: Exception) {
                 Log.e(TAG, "Inference failed", e)
                 throw e
+            } catch (e: LinkageError) {
+                Log.e(TAG, "MediaPipe native library could not be loaded", e)
+                throw IllegalStateException("The on-device runtime is not available", e)
             }
         }
     }
