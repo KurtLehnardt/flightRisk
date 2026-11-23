@@ -13,6 +13,11 @@ venv/
 # Environment
 .env
 
+# Android release signing: never commit an upload keystore or its passwords
+keystore.properties
+*.jks
+*.keystore
+
 # macOS
 .DS_Store
 
