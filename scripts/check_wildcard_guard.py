@@ -31,8 +31,8 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from flightrisk.drone import udp_endpoints  # noqa: E402
-from flightrisk.drone.tello_bound import (  # noqa: E402
+from flightrisk.drone import udp_endpoints
+from flightrisk.drone.tello_bound import (
     TelloBinding,
     TelloBindingError,
     check_no_wildcard_holder,
