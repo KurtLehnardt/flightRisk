@@ -179,6 +179,8 @@ data class ConnectionCardState(
     val message: String? = null,
     val testing: Boolean = false,
     val testResult: String? = null,
+    /** True while demo mode is on: these settings are kept but not used. */
+    val demo: Boolean = false,
 ) {
     val isConfigured: Boolean get() = savedAddress != null && keyState == KeyState.SAVED
 }
@@ -211,6 +213,10 @@ data class GroundUiState(
     val videoOffAtGround: Boolean = false,
     /** Match alerts the ground reported, newest first. Read only: the operator answers on the laptop. */
     val alerts: GroundAlertsUi = GroundAlertsUi.EMPTY,
+    /** True while demo mode is on: the screen shows a recorded mission, not a ground station. */
+    val demo: Boolean = false,
+    /** Why demo mode could not start, or null. */
+    val demoProblem: String? = null,
 )
 
 /** The visible result of one detection profile selection on the profiles card. */

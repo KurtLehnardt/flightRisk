@@ -1,6 +1,9 @@
 package com.flightrisk.app.ui.ground
 
 import android.content.Context
+import com.flightrisk.app.demo.DemoGroundPort
+import com.flightrisk.app.demo.DemoScenario
+import com.flightrisk.app.demo.DemoText
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.flightrisk.app.ground.AndroidGroundLog
@@ -14,6 +17,8 @@ import com.flightrisk.app.ground.GroundClock
 import com.flightrisk.app.ground.GroundConsoleClient
 import com.flightrisk.app.ground.GroundEndpoint
 import com.flightrisk.app.ground.GroundEvent
+import com.flightrisk.app.ground.GroundLog
+import com.flightrisk.app.ground.SocketIoPort
 import com.flightrisk.app.ground.GroundSnapshot
 import com.flightrisk.app.ground.HealthProbeResult
 import com.flightrisk.app.ground.NotSentReason
@@ -22,6 +27,7 @@ import com.flightrisk.app.ground.SecretName
 import com.flightrisk.app.config.AppSecrets
 import com.flightrisk.app.ground.SecretStore
 import com.flightrisk.app.ground.SendResult
+import com.flightrisk.contract.AlertUpgrade
 import com.flightrisk.contract.ClientCommand
 import com.flightrisk.contract.CommandAck
 import com.flightrisk.contract.ConnectionState
@@ -41,6 +47,7 @@ import com.flightrisk.contract.MatchAlertResolved
 import com.flightrisk.contract.ManualDroneStatus
 import com.flightrisk.contract.ManualReply
 import com.flightrisk.contract.ManualStatus
+import com.flightrisk.contract.ReasoningResult
 import com.flightrisk.contract.ServerEvent
 import com.flightrisk.contract.ServerMessage
 import kotlinx.coroutines.CoroutineDispatcher
@@ -84,6 +91,13 @@ import kotlinx.coroutines.withContext
  * Threading: everything runs on [mainDispatcher] (Android's main thread in
  * the app); the client is main-thread safe, and the secure storage is read
  * and written only through [SecretStore.load] and [SecretStore.save].
+ *
+ * Demo mode ([enterDemo], [exitDemo]) replaces the ground with [DemoGroundPort], which plays a recorded
+ * mission inside the app. While it is on, no real client is created ([clientFactory] is never called),
+ * no health probe runs ([probe] is never called), and every command is answered by the demo port on the
+ * phone. Turning it on while a real client exists needs the user's confirmation and closes that client
+ * first; turning it on and off clears every drone, alert, frame and command result, so demo data never
+ * mixes with a real ground's.
  */
 class GroundConsoleViewModel(
     private val secrets: SecretStore,
@@ -97,6 +111,12 @@ class GroundConsoleViewModel(
     private val startTicker: Boolean = true,
     private val clientDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val cleanupScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    /** Loads the demo mission, or null when this build has none. Called off the main thread's work, once per demo start. */
+    private val demoScenario: (suspend () -> DemoScenario?)? = null,
+    /** The demo ground's in-process transport. Tests wrap it; it never touches the network. */
+    private val demoPortFactory: (DemoScenario, CoroutineScope) -> SocketIoPort = { s, cs -> DemoGroundPort(s, cs) },
+    /** The clock of the demo client and its replay. */
+    private val demoClock: GroundClock = GroundClock.SYSTEM,
 ) : ViewModel() {
 
     private val scope = CoroutineScope(SupervisorJob() + mainDispatcher)
@@ -114,6 +134,15 @@ class GroundConsoleViewModel(
     private var link: GroundLink = GroundLink.NotConfigured
     private var keyState = KeyState.UNKNOWN
     private var inBackground = true
+
+    // Demo mode. While [demoOn] is true, nothing may start a real client.
+    private var demo = false
+    private var demoStarting = false
+    private var demoProblem: String? = null
+
+    /** Bumped by every demo start and stop, so a mission that finishes loading late starts nothing. */
+    private var demoToken = 0
+    private val demoOn: Boolean get() = demo || demoStarting
 
     /** Bumped by everything that closes or replaces the client, so a slow key read cannot start a stale one. */
     private var epoch = 0
@@ -210,6 +239,11 @@ class GroundConsoleViewModel(
         // Nothing on the screen can change in the background, so the one second ticker stops.
         tickerJob?.cancel()
         tickerJob = null
+        if (demoOn) {
+            // The demo runs in memory only; it keeps its place while the app is away.
+            publish()
+            return
+        }
         epoch++
         if (client != null) {
             closeClient()
@@ -244,7 +278,7 @@ class GroundConsoleViewModel(
                 settingsLoaded = true
                 addressSetting = normalized
                 scope.launch { withContext(ioDispatcher) { settings.address = normalized } }
-                if (changed) forgetGroundState()
+                if (changed && !demoOn) forgetGroundState()
                 message = "Address saved."
                 restart()
             }
@@ -292,9 +326,11 @@ class GroundConsoleViewModel(
             }
             keyState = KeyState.NONE
             message = "Key removed."
-            epoch++
-            closeClient()
-            link = idleLink()
+            if (!demoOn) {
+                epoch++
+                closeClient()
+                link = idleLink()
+            }
             publish()
         }
     }
@@ -304,8 +340,10 @@ class GroundConsoleViewModel(
         settingsLoaded = true
         enabledSetting = enabled
         scope.launch { withContext(ioDispatcher) { settings.enabled = enabled } }
-        epoch++
-        if (!enabled && client != null) closeClient()
+        if (!demoOn) {
+            epoch++
+            if (!enabled && client != null) closeClient()
+        }
         link = if (client == null) idleLink() else link
         publish()
         if (enabled) scope.launch { connectIfWanted() }
@@ -314,6 +352,12 @@ class GroundConsoleViewModel(
     /** "Test connection": the REST health probe with the saved address and key. The result never contains the key. */
     fun testConnection() {
         if (testing) return
+        if (demoOn) {
+            // The probe would reach the real ground; demo mode sends nothing off the phone.
+            testResult = DemoText.TEST_IN_DEMO
+            publish()
+            return
+        }
         scope.launch {
             testing = true
             testResult = null
@@ -335,6 +379,129 @@ class GroundConsoleViewModel(
                 connectIfWanted()
             }
         }
+    }
+
+    // ---------------------------------------------------------------- demo mode
+
+    /** What turning demo mode on would do now. */
+    sealed interface DemoRequest {
+        /** Nothing is connected: demo mode can start at once. */
+        data object Ready : DemoRequest
+
+        /** A real ground link exists; starting the demo closes it, so ask the user first. */
+        data class NeedsDisconnect(val host: String) : DemoRequest
+
+        data object AlreadyOn : DemoRequest
+
+        /** This build has no demo mission. */
+        data object Unavailable : DemoRequest
+    }
+
+    /** True while demo mode is on (or starting). */
+    val isDemo: Boolean get() = demoOn
+
+    fun demoRequest(): DemoRequest {
+        val c = client
+        return when {
+            demoOn -> DemoRequest.AlreadyOn
+            demoScenario == null -> DemoRequest.Unavailable
+            c != null -> DemoRequest.NeedsDisconnect(c.endpoint.hostHeader)
+            else -> DemoRequest.Ready
+        }
+    }
+
+    /**
+     * Turns demo mode on. When a real ground link exists, nothing happens unless [disconnectConfirmed] is
+     * true (the user agreed in a dialog); then the real link is closed first. Everything the screen showed
+     * is cleared, and the demo ground starts. [isDemo] and [GroundUiState.demo] tell whether it started;
+     * [GroundUiState.demoProblem] says why not when the mission could not be loaded.
+     */
+    fun enterDemo(disconnectConfirmed: Boolean = false): Job = scope.launch { startDemo(disconnectConfirmed) }
+
+    private suspend fun startDemo(disconnectConfirmed: Boolean): Boolean {
+        if (demoOn) return demo
+        val loader = demoScenario
+        if (loader == null) {
+            demoProblem = DemoText.UNAVAILABLE
+            publish()
+            return false
+        }
+        if (client != null && !disconnectConfirmed) return false
+        demoStarting = true
+        val token = ++demoToken
+        epoch++
+        // Close the real link before anything else, so no real event can arrive once the demo shows.
+        clearAllGroundState()
+        link = GroundLink.Connecting(1)
+        publish()
+        val scenario = try {
+            loader()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        if (token != demoToken || !demoStarting) return false // Left (or restarted) while the mission loaded.
+        demoStarting = false
+        if (scenario == null) {
+            demoProblem = DemoText.UNAVAILABLE
+            link = idleLink()
+            publish()
+            scope.launch { connectIfWanted() }
+            return false
+        }
+        demoProblem = null
+        demo = true
+        attachClient { cs ->
+            GroundConsoleClient(
+                DemoGroundPort.ENDPOINT, null, cs,
+                port = demoPortFactory(scenario, cs),
+                emitPolicy = EMIT_POLICY,
+                clock = demoClock,
+                restClientFactory = { _, _ -> throw IllegalStateException("demo mode makes no REST requests") },
+                logSink = GroundLog.NONE,
+            )
+        }
+        return true
+    }
+
+    /**
+     * Turns demo mode off: the demo ground is closed and every drone, alert, frame, banner and command
+     * result it produced is cleared. The real ground link then connects again if it is set up and on.
+     */
+    fun exitDemo() {
+        if (!demoOn) return
+        demoToken++
+        demo = false
+        demoStarting = false
+        demoProblem = null
+        epoch++
+        clearAllGroundState()
+        link = idleLink()
+        publish()
+        if (!inBackground) {
+            scope.launch {
+                settingsJob?.join()
+                refreshKeyState()
+                connectIfWanted()
+            }
+        }
+    }
+
+    /** Closes the client and forgets everything any ground (real or demo) reported. */
+    private fun clearAllGroundState() {
+        forgetGroundState()
+        if (client != null) closeClient()
+        retainedBoard = null
+        retainedSnapshot = null
+        landAllFeedback = null
+        toasts = emptyList()
+        banners = emptyList()
+        testResult = null
+        fleetFresh = false
+        freshInThisClient = false
+        noRecentUpdate = false
+        lastFleetStatusAt = 0L
     }
 
     // ---------------------------------------------------------------- commands
@@ -755,6 +922,8 @@ class GroundConsoleViewModel(
             is FleetPlan -> planIsCurrent = true
             is MatchAlert -> alertsLog.onAlert(event)
             is MatchAlertResolved -> alertsLog.onResolved(event)
+            is ReasoningResult -> alertsLog.onReasoningResult(event)
+            is AlertUpgrade -> alertsLog.onAlertUpgrade(event)
             is DetectionProfiles -> onProfilesFromGround()
             is ManualReply -> applyManualReply(event, at)
             is LandAllAck -> applyLandAllAck(event, at)
@@ -959,6 +1128,7 @@ class GroundConsoleViewModel(
 
     /** Connects when an address and a key are saved and the link is on. Never starts a connection otherwise. */
     private suspend fun connectIfWanted() {
+        if (demoOn) return
         if (client != null || !enabledSetting || inBackground) return
         val endpoint = (addressSetting?.let { GroundEndpoint.parseDetailed(it) } as? EndpointParseResult.Ok)?.endpoint
         if (endpoint == null) {
@@ -969,7 +1139,7 @@ class GroundConsoleViewModel(
         val myEpoch = epoch
         // The key goes from the secure storage straight into the client and is not kept here.
         val raw = secrets.load(SecretName.DASHBOARD_API_KEY)
-        if (epoch != myEpoch || client != null || !enabledSetting || inBackground) return
+        if (epoch != myEpoch || client != null || !enabledSetting || inBackground || demoOn) return
         if (raw == null) {
             refreshKeyState()
             return
@@ -987,11 +1157,16 @@ class GroundConsoleViewModel(
     }
 
     private fun startClient(endpoint: GroundEndpoint, key: DashboardApiKey) {
+        if (demoOn) return
+        attachClient { cs -> clientFactory(endpoint, key, cs) }
+    }
+
+    private fun attachClient(build: (CoroutineScope) -> GroundConsoleClient) {
         // The client does its socket IO, parsing and decoding on its own scope (off the main thread);
         // only this view model's collectors below run on the main thread.
         val cs = CoroutineScope(SupervisorJob() + clientDispatcher)
         val collectors = CoroutineScope(SupervisorJob() + mainDispatcher)
-        val c = clientFactory(endpoint, key, cs)
+        val c = build(cs)
         client = c
         clientScope = cs
         collectorScope = collectors
@@ -1050,6 +1225,11 @@ class GroundConsoleViewModel(
     }
 
     private fun restart() {
+        if (demoOn) {
+            // The new settings take effect when demo mode ends.
+            publish()
+            return
+        }
         epoch++
         if (client != null) closeClient()
         link = idleLink()
@@ -1175,6 +1355,7 @@ class GroundConsoleViewModel(
                 message = message,
                 testing = testing,
                 testResult = testResult,
+                demo = demoOn,
             ),
             board = board,
             snapshot = snapshot,
@@ -1183,6 +1364,8 @@ class GroundConsoleViewModel(
             videoTiles = VideoTileLogic.makeTiles(receivedFrames, now, snapshot.streamVideo, stale),
             videoOffAtGround = snapshot.streamVideo == false && !stale,
             alerts = alertsLog.ui(stale),
+            demo = demoOn,
+            demoProblem = demoProblem,
         )
     }
 
@@ -1324,13 +1507,28 @@ class GroundConsoleViewModel(
         private fun defaultClient(endpoint: GroundEndpoint, key: DashboardApiKey, scope: CoroutineScope) =
             GroundConsoleClient(endpoint, key, scope, emitPolicy = EMIT_POLICY, logSink = AndroidGroundLog())
 
+        /** Reads the packaged demo mission off the main thread; null when it is missing or not usable. */
+        suspend fun loadDemoScenario(context: Context): DemoScenario? = withContext(Dispatchers.IO) {
+            try {
+                context.assets.open(DemoScenario.ASSET_PATH).use { input ->
+                    DemoScenario.parse(input.readBytes().decodeToString())
+                }
+            } catch (_: java.io.IOException) {
+                null
+            }
+        }
+
         /** Builds the one app-wide instance (owned by the activity's ViewModel store). */
         fun factory(context: Context): ViewModelProvider.Factory {
             val app = context.applicationContext
             return object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    GroundConsoleViewModel(AppSecrets.store(app), SharedPrefsGroundSettings(app)) as T
+                    GroundConsoleViewModel(
+                        AppSecrets.store(app),
+                        SharedPrefsGroundSettings(app),
+                        demoScenario = { loadDemoScenario(app) },
+                    ) as T
             }
         }
     }

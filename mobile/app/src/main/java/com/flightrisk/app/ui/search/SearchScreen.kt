@@ -1,5 +1,6 @@
 package com.flightrisk.app.ui.search
 
+import com.flightrisk.app.demo.DemoText
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -139,6 +140,8 @@ data class SearchScreenState(
     val selectedPattern: PatternType = PatternType.EXPANDING_SQUARE,
     val cloudReasoningActive: Boolean = false,
     val reasoningNotice: String? = null,
+    /** Demo mode: the preview shows a drawn scene and the camera is never opened. */
+    val demoMode: Boolean = false,
 )
 
 // -----------------------------------------------------------------------
@@ -226,7 +229,7 @@ fun SearchScreen(
                 )
             }
             FrameSourceMode.CAMERA -> {
-                if (state.isSearching) {
+                if (state.isSearching && !state.demoMode) {
                     LiveCameraPreview(modifier = Modifier.fillMaxSize())
                 } else {
                     CameraPreviewPlaceholder(
@@ -278,6 +281,18 @@ fun SearchScreen(
 
             // Ground station link: "Sending detections to <host>" while images of people go out.
             GroundLinkIndicatorBanner()
+
+            if (state.demoMode && state.isSearching) {
+                Text(
+                    text = DemoText.SEARCH_NOTE,
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier
+                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
 
             if (state.isSearching) {
                 HudOverlay(

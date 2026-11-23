@@ -196,6 +196,25 @@ Include in the app description or "About this app" section, after the owner and 
 
 The earlier recommended text ("No biometric data is collected, transmitted, or stored") is withdrawn because it conflicts with the cloud path.
 
+### App review notes
+
+A reviewer has no drones and no ground station, so the Android app has a built-in demo mode. Paste this into the Play Console "App access" instructions (and adapt it for App Store Connect once the iOS app has the same mode):
+
+> To see the app without drones or a ground station, use demo mode. After the privacy notice, tap "Try demo" on the first screen. No photo, account, drone or network is needed. You can also turn demo mode on or off at any time under Settings > Demo mode.
+>
+> While demo mode is on, a yellow "DEMO – no real drones" banner shows at the top of every screen. The Ground tab replays a recorded one-minute search by two drones: the fleet status, the search plan, the drones flying their lanes, an obstacle that cuts one lane short, a possible person match that an AI check later rates as a strong match, and the landing. Tap a match alert to see the AI check's details. LAND ALL, Land and Resume search work as they would with a real ground station, but each command is answered on the phone and nothing is sent anywhere. The Search tab shows a drawn scene and a drawn placeholder target instead of the camera and a photo.
+>
+> Turning demo mode off in Settings clears everything the demo showed.
+
+What the code guarantees (checked by unit tests in `mobile/app/src/test/java/com/flightrisk/app/demo/`):
+
+- Demo mode opens no network connection. The demo ground (`DemoGroundPort`) is an in-process stand-in for the dashboard's Socket.IO link; the demo package contains no network code, and a test that makes every real client and health probe fail shows that no command, setting change or reconnect in demo mode reaches them.
+- Demo mode does not start while a real ground link is up without the user's confirmation, and confirming closes that link first. It does not start at all while a search runs or a Tello drone is connected on the Search tab.
+- Leaving demo mode clears every drone, alert, video tile, banner and command result it produced, and restores the user's own target photo. Demo data never appears next to real alerts.
+- The camera is not opened in demo mode, and the camera pipeline, the phone-as-edge link and cloud reasoning do not run.
+- The demo mission is `tests/fixtures/mobile_contract/demo_scenario.json`, produced by the real ground code (`scripts/export_mobile_contract_fixtures.py`) and copied to `mobile/app/src/main/assets/demo/demo_scenario.json`. Its only picture is the contract fixtures' 8 by 8 grey JPEG. The placeholder target and the search scene are drawn in code from a few solid colours; the repository contains no photo of a person.
+- Demo mode is not saved: after the app restarts it is off, and the onboarding screens show again if they were never finished.
+
 ---
 
 ## Both Stores -- Common Requirements
@@ -252,6 +271,7 @@ Off by default, and not available on iOS. When the user turns on "Send detection
 - [ ] Face detection declaration submitted (Google Play)
 - [ ] Age rating set to 17+ on both platforms
 - [ ] App Review Notes prepared (iOS)
+- [ ] Android demo mode instructions (see "App review notes" above) pasted into the Play Console "App access" section
 - [ ] Cloud LLM opt-in disclosure implemented in-app
 - [ ] App Review notes for the local network permission and the ATS exception pasted into App Store Connect
 - [ ] Owner confirmation of the App Privacy questionnaire answers for the ground link and the cloud opt-in

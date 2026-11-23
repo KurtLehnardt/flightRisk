@@ -1,5 +1,6 @@
 package com.flightrisk.app.ui.ground
 
+import com.flightrisk.app.demo.DemoText
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -222,7 +223,11 @@ private fun GroundTopBar(state: GroundUiState, actions: GroundActions, maxText: 
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Chip(state.link.pillText, linkPillColor(state.link), Modifier.testTag("ground.pill"))
+                if (state.demo) {
+                    Chip(DemoText.GROUND_PILL, GroundColors.ChipOrange, Modifier.testTag("ground.pill"))
+                } else {
+                    Chip(state.link.pillText, linkPillColor(state.link), Modifier.testTag("ground.pill"))
+                }
                 if (state.appearanceOnly) {
                     Text("APPEARANCE ONLY", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                 }
@@ -241,12 +246,17 @@ private fun GroundTopBar(state: GroundUiState, actions: GroundActions, maxText: 
             }
             // The messages scroll inside a limited area; the buttons below them never scroll away.
             val feedback = state.landAll
-            if (state.link != GroundLink.Connected || feedback != null) {
+            if (state.demo || state.demoProblem != null || state.link != GroundLink.Connected || feedback != null) {
                 Column(
                     modifier = Modifier.heightIn(max = maxText).verticalScroll(rememberScrollState()).testTag("ground.topText"),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    if (state.link != GroundLink.Connected) ConnectionText(state.link)
+                    if (state.demo) {
+                        Text(DemoText.GROUND_LINK, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("ground.demoNote"))
+                    } else if (state.link != GroundLink.Connected) {
+                        ConnectionText(state.link)
+                    }
+                    state.demoProblem?.let { WarningText(it, Modifier.fillMaxWidth().testTag("ground.demoProblem")) }
                     if (feedback != null) {
                         val text = state.landAllText ?: feedback.text
                         if (feedback.isWarning) {
@@ -260,7 +270,7 @@ private fun GroundTopBar(state: GroundUiState, actions: GroundActions, maxText: 
                     }
                 }
             }
-            val retryLabel = when (state.link) {
+            val retryLabel = if (state.demo) null else when (state.link) {
                 GroundLink.WrongKey -> "Retry"
                 is GroundLink.Reconnecting, is GroundLink.Connecting -> "Retry now"
                 else -> null

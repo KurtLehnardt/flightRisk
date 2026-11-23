@@ -157,6 +157,8 @@ fun FlightRiskNavHost(
     onEmergencyStop: () -> Unit = {},
     selectedSearchPattern: PatternType = PatternType.EXPANDING_SQUARE,
     onSearchPatternChanged: (PatternType) -> Unit = {},
+    demoActive: Boolean = false,
+    onDemoToggle: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val navController = rememberNavController()
@@ -264,6 +266,8 @@ fun FlightRiskNavHost(
                     searchActive = searchState.isSearching,
                     droneState = droneState,
                     frameSourceMode = frameSourceMode,
+                    demoActive = demoActive,
+                    onDemoToggle = onDemoToggle,
                 )
             }
         }

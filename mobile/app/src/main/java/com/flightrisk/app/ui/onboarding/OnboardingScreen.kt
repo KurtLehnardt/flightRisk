@@ -25,6 +25,9 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.platform.testTag
+import com.flightrisk.app.demo.DemoText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -68,11 +71,15 @@ const val PREFS_NAME = "flightrisk_prefs"
  *
  * @param onComplete Callback when onboarding is complete. Receives the
  *   selected target bitmap.
+ * @param onTryDemo Starts demo mode from the first screen, without a photo
+ *   or a ground station. Onboarding is not marked complete, so it shows
+ *   again when demo mode ends. Null hides the choice.
  */
 @Composable
 fun OnboardingScreen(
     onComplete: (Bitmap) -> Unit,
     modifier: Modifier = Modifier,
+    onTryDemo: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     var currentStep by remember { mutableIntStateOf(1) }
@@ -93,6 +100,7 @@ fun OnboardingScreen(
                         val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:911"))
                         context.startActivity(intent)
                     },
+                    onTryDemo = onTryDemo,
                 )
                 2 -> MissingChildStep(
                     onContinue = { currentStep = 3 },
@@ -127,6 +135,7 @@ private fun EmergencyCalloutStep(
     onContinue: () -> Unit,
     onCall911: () -> Unit,
     modifier: Modifier = Modifier,
+    onTryDemo: (() -> Unit)? = null,
 ) {
     Column(
         modifier = modifier
@@ -184,6 +193,25 @@ private fun EmergencyCalloutStep(
             Text(
                 text = "Continue to FlightRisk",
                 style = MaterialTheme.typography.titleMedium,
+            )
+        }
+
+        if (onTryDemo != null) {
+            Spacer(modifier = Modifier.height(16.dp))
+            TextButton(
+                onClick = onTryDemo,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .sizeIn(minHeight = 48.dp)
+                    .testTag("onboarding.tryDemo"),
+            ) {
+                Text(text = DemoText.TRY_DEMO, style = MaterialTheme.typography.titleMedium)
+            }
+            Text(
+                text = DemoText.TRY_DEMO_DETAIL,
+                style = MaterialTheme.typography.bodySmall,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }

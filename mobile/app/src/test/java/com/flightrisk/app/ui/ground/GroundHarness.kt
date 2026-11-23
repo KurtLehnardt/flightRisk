@@ -51,8 +51,22 @@ class GroundHarness(
     broken: Boolean = false,
     ticker: Boolean = false,
     var probeResult: HealthProbeResult = HealthProbeResult.Ok("1.0", com.flightrisk.app.ground.StatusSummary(true, "edge", 2)),
+    /** Gives the ViewModel the demo mission from the contract fixtures. */
+    demo: Boolean = false,
+    /** Makes every real client and every health probe fail the test: demo mode must never reach them. */
+    private val forbidRealNetwork: Boolean = false,
+    demoScenario: (suspend () -> com.flightrisk.app.demo.DemoScenario?)? = if (demo) ({ DemoFixtures.scenario }) else null,
 ) {
     val port = FakePort()
+
+    /** The demo ground's clock: the replay moves only when the test advances it. */
+    val demoClock = FakeClock()
+
+    /** The demo ports the ViewModel created, newest last. */
+    val demoPorts = java.util.concurrent.CopyOnWriteArrayList<com.flightrisk.app.demo.DemoGroundPort>()
+
+    /** How often the ViewModel asked for a real client or a real health probe. */
+    val realNetworkCalls = java.util.concurrent.atomic.AtomicInteger(0)
     val clientClock = FakeClock()
     val vmClock = FakeClock()
     val storage = TestStorage(if (key != null) mapOf(SecretName.DASHBOARD_API_KEY.storageKey to key) else emptyMap(), broken)
@@ -85,6 +99,10 @@ class GroundHarness(
         secrets = secrets,
         settings = settings,
         clientFactory = { endpoint, k, scope ->
+            if (forbidRealNetwork) {
+                realNetworkCalls.incrementAndGet()
+                throw AssertionError("a real ground client was created for $endpoint")
+            }
             lastClientScope = scope
             GroundConsoleClient(
                 endpoint, k, scope, port = port, config = GroundClientConfig(), emitPolicy = GroundConsoleViewModel.EMIT_POLICY,
@@ -92,6 +110,10 @@ class GroundHarness(
             )
         },
         probe = { endpoint, _ ->
+            if (forbidRealNetwork) {
+                realNetworkCalls.incrementAndGet()
+                throw AssertionError("a real health probe was sent to $endpoint")
+            }
             probedWith += endpoint.hostHeader
             probeResult
         },
@@ -100,6 +122,11 @@ class GroundHarness(
         ioDispatcher = Dispatchers.IO,
         startTicker = ticker,
         cleanupScope = cleanup,
+        demoScenario = demoScenario,
+        demoPortFactory = { scenario, scope ->
+            com.flightrisk.app.demo.DemoGroundPort(scenario, scope, demoClock).also { demoPorts += it }
+        },
+        demoClock = demoClock,
     )
 
     init {
@@ -184,9 +211,11 @@ fun harnessTest(
     enabled: Boolean = true,
     broken: Boolean = false,
     ticker: Boolean = false,
+    demo: Boolean = false,
+    forbidRealNetwork: Boolean = false,
     block: suspend GroundHarness.() -> Unit,
 ) = runBlocking {
-    val h = GroundHarness(address, key, enabled, broken, ticker)
+    val h = GroundHarness(address, key, enabled, broken, ticker, demo = demo, forbidRealNetwork = forbidRealNetwork)
     try {
         h.block()
         // The key must never be in anything the screen can show.
@@ -198,4 +227,12 @@ fun harnessTest(
 
 fun assertNoKey(text: String) {
     if (text.contains(TEST_KEY)) throw AssertionError("the API key is in: ${text.take(300)}")
+}
+
+/** The demo mission of the contract fixtures, parsed once. */
+object DemoFixtures {
+    val text: String by lazy { java.io.File(ContractFixtures.dir, "demo_scenario.json").readText() }
+    val scenario: com.flightrisk.app.demo.DemoScenario by lazy {
+        com.flightrisk.app.demo.DemoScenario.parse(text) ?: throw AssertionError("demo_scenario.json is not a usable scenario")
+    }
 }

@@ -36,6 +36,27 @@ object GroundText {
     /** A drone id for display. */
     fun shortId(id: String): String = shorten(id, MAX_ID_TEXT)
 
+    // Bidirectional overrides and isolates could make a model's reason read differently from what it says.
+    private val BIDI_CONTROLS = Regex("[\\u061C\\u200E\\u200F\\u202A-\\u202E\\u2066-\\u2069]")
+
+    // An Anthropic API key, should a ground ever put one in an error text.
+    private val CLAUDE_KEY = Regex("sk-ant-[A-Za-z0-9_-]+")
+    private val SPACES = Regex("\\s+")
+
+    /**
+     * The reason an AI check gave, made safe to show as plain text: cut to [max] characters, control and
+     * bidirectional override characters replaced, credentials and API keys removed, runs of white space
+     * folded. Null when nothing is left.
+     */
+    fun rationale(text: String?, max: Int = MAX_SERVER_TEXT): String? {
+        if (text.isNullOrBlank()) return null
+        var out = text.take(max * 4)
+        out = CLAUDE_KEY.replace(out, Redact.PLACEHOLDER)
+        out = BIDI_CONTROLS.replace(out, " ")
+        out = SPACES.replace(Redact.text(out, maxLength = max * 2), " ").trim()
+        return Redact.truncate(out, max).ifEmpty { null }
+    }
+
     const val LAND_ALL_NO_ANSWER =
         "LAND ALL: the ground never answered. Land each drone by hand (per-drone Land, or the drone's own controls)."
     const val EARLIER_LAND_ALL_NO_ANSWER = "An earlier LAND ALL got no answer from the ground. Do not assume it landed the drones."
