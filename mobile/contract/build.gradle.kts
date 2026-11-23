@@ -27,7 +27,7 @@ kotlin {
 
 dependencies {
     // Only the JSON element API is used (no compiler plugin is needed).
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
 
     testImplementation("junit:junit:4.13.2")
 }

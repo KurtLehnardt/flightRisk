@@ -1,0 +1,7 @@
+{
+  "uniqueId": "androidx.camera:camera-core",
+  "licenses": [
+    "Apache-2.0",
+    "libyuv-BSD-3-Clause"
+  ]
+}
