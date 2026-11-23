@@ -812,6 +812,8 @@ class FleetSupervisor:
             # drone's lanes; they would wait for the operator.
             retask_excluded=self._held_for_manual,
             sidestep_margin_cm=fleet_sidestep_margin_cm() if sidestep_margin_cm is None else int(sidestep_margin_cm),
+            # A lost drone a person flies by hand is never sent land again.
+            manually_controlled=self._flown_by_hand,
         )
         self._lock = threading.Lock()
         self._busy = threading.Lock()  # one plan() or start() at a time
@@ -841,6 +843,11 @@ class FleetSupervisor:
 
     def _held_for_manual(self, drone_id: str) -> bool:
         return self.manual is not None and self.manual.paused(drone_id)
+
+    def _flown_by_hand(self, drone_id: str) -> bool:
+        """True while this dashboard's manual control has *drone_id* (a person flies it by hand)."""
+        manual = getattr(self, "manual", None)
+        return manual is not None and manual.controlled == drone_id
 
     def _paused_drones(self) -> list[str]:
         """Drones whose search is paused for manual control."""
