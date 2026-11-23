@@ -1,0 +1,25 @@
+YOLOX (inference-only model code)
+Copyright (c) 2021-2022 Megvii Inc. All rights reserved.
+
+This directory contains code from YOLOX by Megvii Inc.,
+https://github.com/Megvii-BaseDetection/YOLOX, taken at commit
+6ddff4824372906469a7fae2dc3206c7aa4bbaee and licensed under the Apache License,
+Version 2.0 (see LICENSE in this directory). Upstream ships no NOTICE file; this
+one records the attribution and the changes, as section 4 of the licence asks.
+
+Files and changes:
+
+  network_blocks.py  yolox/models/network_blocks.py, unchanged.
+  darknet.py         yolox/models/darknet.py, unchanged.
+  yolo_pafpn.py      yolox/models/yolo_pafpn.py, unchanged.
+  yolo_head.py       yolox/models/yolo_head.py, modified by the FlightRisk
+                     authors in 2026: training code (losses, SimOTA assignment,
+                     l1 targets, visualisation) removed, meshgrid inlined from
+                     yolox/utils/compat.py. Inference is unchanged.
+  yolox.py           yolox/models/yolox.py, modified by the FlightRisk authors
+                     in 2026: training branch and visualize() removed.
+  __init__.py        new; builds YOLOX-S as exps/default/yolox_s.py does.
+
+The weights these files load (yolox_s.pth, release 0.1.1rc0) are not in this
+repository. scripts/mobile_models/make_models.py downloads them from the
+official release and checks their SHA-256.
