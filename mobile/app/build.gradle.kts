@@ -423,6 +423,7 @@ val checkLicenceTexts = tasks.register("checkLicenceTexts") {
         @Suppress("UNCHECKED_CAST")
         val libraries = root["libraries"] as List<Map<String, Any?>>
         val problems = mutableListOf<String>()
+        if (libraries.isEmpty()) problems += "the generated library list is empty"
         for (library in libraries) {
             val id = library["uniqueId"].toString()
             @Suppress("UNCHECKED_CAST")
