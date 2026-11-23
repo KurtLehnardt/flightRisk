@@ -33,6 +33,7 @@ class AsyncBridge:
         self._cmd_timeout = cmd_timeout
         self.loop: asyncio.AbstractEventLoop | None = None
         self.loop_thread: threading.Thread | None = None
+        self._stop_lock = threading.Lock()
 
     @property
     def is_running(self) -> bool:
@@ -57,15 +58,36 @@ class AsyncBridge:
         self.loop_thread.start()
 
     def stop_loop(self) -> None:
-        """Stop the background event loop and join its thread."""
-        if self.loop and self.loop.is_running():
-            self.loop.call_soon_threadsafe(self.loop.stop)
-        if self.loop_thread and self.loop_thread.is_alive():
-            self.loop_thread.join(timeout=5.0)
-        if self.loop and not self.loop.is_closed():
-            self.loop.close()
-        self.loop = None
-        self.loop_thread = None
+        """Stop the background event loop and join its thread.
+
+        Idempotent, safe under concurrent calls, and never raises. A lock
+        serializes callers so the loop is closed exactly once: closing a
+        selector event loop from two threads at once makes the second
+        ``_close_self_pipe`` hit an already closed socket and raise
+        ``ValueError: Invalid file descriptor: -1``. The loop is only closed
+        once its thread has really stopped, because closing a running loop
+        raises ``RuntimeError``.
+        """
+        with self._stop_lock:
+            loop = self.loop
+            thread = self.loop_thread
+            try:
+                if loop is not None and loop.is_running():
+                    try:
+                        loop.call_soon_threadsafe(loop.stop)
+                    except RuntimeError:
+                        pass  # the loop closed between the check and the call
+                if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+                    thread.join(timeout=5.0)
+                if loop is not None and not loop.is_closed() and not loop.is_running():
+                    loop.close()
+                elif loop is not None and loop.is_running():
+                    logger.warning("[%s] Event loop still running after stop; not closing it", self._name)
+            except Exception:
+                logger.exception("[%s] Error while stopping the event loop", self._name)
+            finally:
+                self.loop = None
+                self.loop_thread = None
 
     def run(self, coro, timeout: float | None = None):
         """Submit *coro* to the event loop and block for the result.
