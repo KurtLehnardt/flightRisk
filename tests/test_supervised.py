@@ -20,7 +20,7 @@ import flightrisk.drone.mavsdk_link as link_mod
 
 ROOT = Path(__file__).resolve().parent.parent
 
-pytestmark = pytest.mark.skipif(sys.platform.startswith("win"), reason="POSIX supervisor")
+posix_only = pytest.mark.skipif(sys.platform.startswith("win"), reason="POSIX supervisor")
 
 
 def _alive(pid: int) -> bool:
@@ -35,6 +35,7 @@ def _alive(pid: int) -> bool:
     return bool(state) and not state.startswith("Z")
 
 
+@posix_only
 def test_child_dies_when_the_parent_is_killed(tmp_path):
     pid_file = tmp_path / "child.pid"
     child = f"import os, time; open({str(pid_file)!r}, 'w').write(str(os.getpid())); time.sleep(120)"
@@ -68,6 +69,7 @@ def test_child_dies_when_the_parent_is_killed(tmp_path):
                 pass
 
 
+@posix_only
 def test_terminate_stops_the_child(tmp_path):
     from flightrisk.drone.supervised import spawn_tied_to_parent
 
@@ -88,6 +90,7 @@ def test_terminate_stops_the_child(tmp_path):
     assert not _alive(child_pid)
 
 
+@posix_only
 def test_the_link_runs_its_server_under_the_supervisor_for_real_mavsdk(monkeypatch):
     started = []
 
