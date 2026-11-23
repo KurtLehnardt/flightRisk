@@ -219,6 +219,13 @@ data class MatchAlert(
     val reasoning: String?,
     val renotify: Boolean?,
     val renotifyCount: Int?,
+    /** The AI check's match flag (`gemma_match`): null until a check reported. */
+    val gemmaMatch: Boolean? = null,
+    /**
+     * The AI check's confidence (`gemma_confidence`): `pending` while a check runs, the verdict once it
+     * finished. A reminder sent after the check carries the verdict, so a phone that reconnects sees it.
+     */
+    val gemmaConfidence: ReasoningConfidence? = null,
 ) : ServerEvent {
     companion object {
         fun fromJson(o: JsonObject, isReminder: Boolean = false): MatchAlert = MatchAlert(
@@ -235,6 +242,8 @@ data class MatchAlert(
             reasoning = o.str("reasoning"),
             renotify = o.bool("renotify"),
             renotifyCount = o.int("renotify_count"),
+            gemmaMatch = o.bool("gemma_match"),
+            gemmaConfidence = o.str("gemma_confidence")?.let(ReasoningConfidence::of),
         )
     }
 }

@@ -1,8 +1,13 @@
 package com.flightrisk.app.ui.ground
 
 import com.flightrisk.contract.AlertLevel
+import com.flightrisk.contract.AlertUpgrade
+import com.flightrisk.contract.AlertVerdicts
 import com.flightrisk.contract.MatchAlert
 import com.flightrisk.contract.MatchAlertResolved
+import com.flightrisk.contract.ReasoningConfidence
+import com.flightrisk.contract.ReasoningResult
+import com.flightrisk.contract.VerdictKind
 
 /**
  * Match alerts the ground reports, read only. The phone shows what the ground found and what the
@@ -10,7 +15,9 @@ import com.flightrisk.contract.MatchAlertResolved
  * phone can send (docs/mobile-contract.md), so there is nothing here that sends, confirms or dismisses.
  *
  * The ground sends `match_alert` when it finds a match, `match_alert_reminder` while the alert waits
- * for the operator, and `match_alert_resolved` once the operator confirmed or dismissed it.
+ * for the operator, and `match_alert_resolved` once the operator confirmed or dismissed it. When the
+ * ground runs an AI check of the match, `reasoning_result` carries its verdict and `alert_upgrade`
+ * raises the alert's level. A level shown here never goes down.
  */
 enum class AlertStatus {
     /** Reported in this connection and not answered as far as the phone has heard. */
@@ -46,6 +53,28 @@ data class GroundAlertRow(
     /** True for a `match_alert_reminder`: the alert still waited for the operator when the ground sent it. */
     val isReminder: Boolean,
     val reminderText: String?,
+    /** What the ground's AI check concluded, or null when the ground reported no check for this alert. */
+    val verdict: VerdictKind? = null,
+    /**
+     * "AI check: likely the same person (high confidence)", a neutral note for an error, a skipped check
+     * or a confidence word the app does not know ("AI check: unclear"), or null.
+     */
+    val verdictText: String? = null,
+    /** True for a note (running, error, skipped, not run, unclear) rather than a conclusion: drawn in a muted colour, never as an error. */
+    val verdictIsNote: Boolean = false,
+    /** The model's reason, short and cleaned, for the row. Never shown for an error or a skipped check. */
+    val rationaleText: String? = null,
+    /** The model's reason at full display length (at most [GroundText.MAX_SERVER_TEXT]) for the expanded detail. */
+    val detailRationaleText: String? = null,
+    /** "Confidence: high" for the expanded detail, or null. */
+    val confidenceText: String? = null,
+    /** "Raised to Strong match by the AI check.", or null when the check did not raise the level. */
+    val levelRaisedText: String? = null,
+    /**
+     * The full key of the alert in the log (the ground's whole `alert_id`, never the shortened [id]), so
+     * two alerts whose ids start alike keep their own expanded state on the screen.
+     */
+    val stateKey: String = id,
 ) {
     val accessibilitySummary: String
         get() = buildList {
@@ -54,9 +83,15 @@ data class GroundAlertRow(
             add("at $timeText")
             add(scoreText)
             reasonText?.let(::add)
+            verdictText?.let(::add)
+            rationaleText?.let(::add)
+            levelRaisedText?.let(::add)
             add(statusText)
             reminderText?.let(::add)
         }.joinToString(", ")
+
+    /** True when the row has more to show when expanded. */
+    val hasDetail: Boolean get() = verdictText != null
 }
 
 /** What the alert card draws. */
@@ -68,7 +103,34 @@ data class GroundAlertsUi(val rows: List<GroundAlertRow>, val notLiveNote: Strin
 
 /** The alerts the ground reported, newest last, at most [MAX_ALERTS]. Not thread safe: use it from one thread. */
 class GroundAlertsLog {
-    private class Entry(var alert: MatchAlert, var answer: MatchAlertResolved.Action?, var answered: Boolean, var session: Int)
+    private class Entry(var alert: MatchAlert, var answer: MatchAlertResolved.Action?, var answered: Boolean, var session: Int) {
+        /** The highest level the ground reported for this alert. */
+        var level: AlertLevel? = alert.alertLevel
+
+        /** The level of the first report, so the row can say the AI check raised it. */
+        val firstLevel: AlertLevel? = alert.alertLevel
+        var raisedByCheck = false
+        var verdictMatch: Boolean? = null
+        var verdictConfidence: ReasoningConfidence? = null
+
+        /** Already cleaned and cut to [GroundText.MAX_SERVER_TEXT]. */
+        var verdictReasoning: String? = null
+
+        val verdict: VerdictKind? get() = AlertVerdicts.kindOf(verdictMatch, verdictConfidence)
+
+        fun setVerdict(match: Boolean?, received: ReasoningConfidence?, reasoning: String?) {
+            // An unknown word is kept only cut short; it is never shown, but it must not pile up either.
+            val confidence = (received as? ReasoningConfidence.Unknown)?.let {
+                ReasoningConfidence.of(it.value.take(ReasoningConfidence.MAX_RAW_CHARS))
+            } ?: received
+            val next = AlertVerdicts.kindOf(match, confidence) ?: return
+            // A final verdict is never replaced by "running": a late reminder may still carry the pending copy.
+            if (next == VerdictKind.PENDING && AlertVerdicts.isFinal(verdict)) return
+            verdictMatch = match
+            verdictConfidence = confidence
+            verdictReasoning = if (AlertVerdicts.showsRationale(next)) GroundText.rationale(reasoning) else null
+        }
+    }
 
     private val entries = LinkedHashMap<String, Entry>()
     private var session = 0
@@ -95,10 +157,47 @@ class GroundAlertsLog {
         if (existing != null) {
             existing.alert = alert
             existing.session = session
+            // A repeat (a reminder after a reconnect) never lowers the level the phone already shows.
+            val raised = AlertVerdicts.raise(existing.level, received.alertLevel)
+            if (raised != existing.level) existing.level = raised
+            existing.setVerdict(received.gemmaMatch, received.gemmaConfidence, received.reasoning)
+            existing.raisedByCheck = existing.raisedByCheck ||
+                (AlertVerdicts.rank(existing.level) > AlertVerdicts.rank(existing.firstLevel) && AlertVerdicts.isFinal(existing.verdict))
             return
         }
-        entries[key] = Entry(alert, null, false, session)
+        val entry = Entry(alert, null, false, session)
+        entry.setVerdict(received.gemmaMatch, received.gemmaConfidence, received.reasoning)
+        entries[key] = entry
         while (entries.size > MAX_ALERTS) entries.remove(entries.keys.first())
+    }
+
+    /**
+     * Records `reasoning_result`. Only the verdict of an alert this phone already shows is kept: a result
+     * without an `alert_id`, with an id longer than [MAX_ID_CHARS], or of another `type` (the laptop's
+     * description check) changes nothing.
+     */
+    fun onReasoningResult(result: ReasoningResult) {
+        if (!result.isAlertVerdict) return
+        val id = result.alertId?.takeIf { it.length <= MAX_ID_CHARS } ?: return
+        val entry = entries[id] ?: return
+        entry.setVerdict(result.match, result.confidence, result.reasoning)
+    }
+
+    /**
+     * Records `alert_upgrade`. The level is raised only when the new level ranks above the one shown
+     * ([AlertVerdicts.raise]); an upgrade can never lower it. An upgrade for an alert the phone never saw
+     * is ignored.
+     */
+    fun onAlertUpgrade(upgrade: AlertUpgrade) {
+        val id = upgrade.alertId?.takeIf { it.isNotEmpty() && it.length <= MAX_ID_CHARS } ?: return
+        val entry = entries[id] ?: return
+        val raised = AlertVerdicts.raise(entry.level, upgrade.newLevel)
+        if (raised == entry.level) return
+        entry.level = raised
+        entry.raisedByCheck = true
+        if (entry.verdictReasoning == null && entry.verdict == null) {
+            entry.verdictReasoning = GroundText.rationale(upgrade.reasoning)
+        }
     }
 
     /**
@@ -120,6 +219,9 @@ class GroundAlertsLog {
         anonymous = 0
     }
 
+    /** The confidence word kept for the alert [key], for tests. */
+    internal fun storedConfidence(key: String): ReasoningConfidence? = entries[key]?.verdictConfidence
+
     val size: Int get() = entries.size
 
     /** Newest first. [stateStale] adds the "Not live" note. */
@@ -133,7 +235,10 @@ class GroundAlertsLog {
         val a = e.alert
         val track = a.trackId?.takeIf { it.isNotEmpty() }?.let { "Track " + GroundText.shortId(it) }
         val time = a.time?.takeIf { it.isNotEmpty() }?.let { GroundText.shorten(it, 40) } ?: "--"
-        val reason = a.reasoning?.takeIf { it.isNotEmpty() }?.let { GroundText.shorten(it) }
+        val verdict = e.verdict
+        // With an AI check the verdict lines replace the alert's own text ("Awaiting … reasoning…").
+        val reason = if (verdict != null) null else a.reasoning?.takeIf { it.isNotEmpty() }?.let { GroundText.shorten(it) }
+        val rationale = if (AlertVerdicts.showsRationale(verdict)) e.verdictReasoning else null
         val status = when {
             e.answered -> when (e.answer) {
                 MatchAlertResolved.Action.CONFIRM -> AlertStatus.CONFIRMED
@@ -145,7 +250,7 @@ class GroundAlertsLog {
         }
         return GroundAlertRow(
             id = GroundText.shortId(key),
-            levelText = level(a.alertLevel),
+            levelText = level(e.level),
             trackText = track,
             timeText = time,
             scoreText = "Score ${percent(a.score)} (ReID ${percent(a.reidScore)}, face ${percent(a.faceScore)})",
@@ -154,11 +259,61 @@ class GroundAlertsLog {
             statusText = statusText(status),
             isReminder = a.isReminder || a.renotify == true,
             reminderText = if (a.isReminder || a.renotify == true) reminderTag(time) else null,
+            verdict = verdict,
+            verdictText = verdictText(verdict, e.verdictConfidence),
+            verdictIsNote = verdict != null && !AlertVerdicts.showsRationale(verdict),
+            rationaleText = rationale?.let { GroundText.shorten(it, MAX_ROW_RATIONALE) },
+            detailRationaleText = rationale,
+            confidenceText = if (AlertVerdicts.showsRationale(verdict)) {
+                e.verdictConfidence?.let { c -> GroundText.rationale(c.raw, 40)?.let { "Confidence: $it" } }
+            } else {
+                null
+            },
+            levelRaisedText = if (e.raisedByCheck && e.level != null) "Raised to ${level(e.level)} by the AI check." else null,
+            stateKey = key,
         )
     }
 
     companion object {
         const val MAX_ALERTS = 100
+
+        /** The longest model reason a collapsed row shows; the expanded detail shows up to [GroundText.MAX_SERVER_TEXT]. */
+        const val MAX_ROW_RATIONALE = 140
+
+        const val VERDICT_PENDING = "AI check running…"
+        const val VERDICT_MATCH = "AI check: likely the same person"
+        const val VERDICT_NO_MATCH = "AI check: likely not the same person"
+        const val VERDICT_UNCERTAIN = "AI check: uncertain"
+        const val VERDICT_ERROR = "AI check could not run for this alert. The scores above are unchanged."
+        const val VERDICT_SKIPPED = "AI check skipped: the alert was answered first."
+        const val VERDICT_NOT_RUN = "AI check not run for this alert."
+
+        /** A confidence word this app does not know: a neutral note, never the word and never a verdict. */
+        const val VERDICT_UNCLEAR = "AI check: unclear"
+
+        /**
+         * The verdict line of a row, or null without a verdict. Errors, skipped checks and unknown
+         * confidence words read as neutral notes; the ground's own words are never shown here.
+         */
+        fun verdictText(kind: VerdictKind?, confidence: ReasoningConfidence?): String? {
+            val suffix = when (confidence) {
+                ReasoningConfidence.High -> " (high confidence)"
+                ReasoningConfidence.Medium -> " (medium confidence)"
+                ReasoningConfidence.Low -> " (low confidence)"
+                else -> ""
+            }
+            return when (kind) {
+                null -> null
+                VerdictKind.PENDING -> VERDICT_PENDING
+                VerdictKind.MATCH -> VERDICT_MATCH + suffix
+                VerdictKind.NO_MATCH -> VERDICT_NO_MATCH + suffix
+                VerdictKind.UNCERTAIN -> VERDICT_UNCERTAIN + suffix
+                VerdictKind.ERROR -> VERDICT_ERROR
+                VerdictKind.SKIPPED -> VERDICT_SKIPPED
+                VerdictKind.NOT_RUN -> VERDICT_NOT_RUN
+                VerdictKind.OTHER -> VERDICT_UNCLEAR
+            }
+        }
 
         /** An alert id longer than this is not used as a key (the iOS app ignores such an answer too). */
         const val MAX_ID_CHARS = 128
