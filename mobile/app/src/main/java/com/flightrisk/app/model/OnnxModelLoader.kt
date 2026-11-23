@@ -1,31 +1,59 @@
 package com.flightrisk.app.model
 
-import ai.onnxruntime.OnnxTensor
-import ai.onnxruntime.OrtEnvironment
-import ai.onnxruntime.OrtSession
 import android.content.Context
-import java.io.Closeable
+import com.flightrisk.app.vision.OnnxFloatModel
+import java.io.File
+import java.io.FileInputStream
+import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
 
 /**
- * Shared utility for loading and running ONNX models on Android.
+ * Opens the app's ONNX models.
  *
- * Loads model bytes from the app's assets directory, creates an
- * [OrtSession], and provides a helper for running inference.
- * Call [close] when done to release native resources.
+ * The models `scripts/mobile_models/make_models.py install` copies into the
+ * assets are large (the embedder is about 90 MB), so they are not read into
+ * the Java heap: `.onnx` assets are stored uncompressed in the APK
+ * (`androidResources.noCompress` in `app/build.gradle.kts`) and memory-mapped.
  */
-class OnnxModelLoader(
-    context: Context,
-    assetFileName: String,
-) : Closeable {
+object OnnxModelLoader {
 
-    val environment: OrtEnvironment
-    val session: OrtSession
+    /** Opens the asset [assetFileName]. Throws [IOException] when it is missing, [IllegalStateException] when the runtime fails. */
+    fun fromAsset(context: Context, assetFileName: String): OnnxFloatModel {
+        val buffer = mapAsset(context, assetFileName)
+        return guarded { OnnxFloatModel.open(buffer) }
+    }
 
-    init {
-        val modelBytes = context.assets.open(assetFileName).use { it.readBytes() }
+    /** Opens a model file, for example one the user imported. */
+    fun fromFile(file: File): OnnxFloatModel = guarded { OnnxFloatModel.open(file.absolutePath) }
+
+    /** True when the asset exists. */
+    fun hasAsset(context: Context, assetFileName: String): Boolean =
         try {
-            environment = OrtEnvironment.getEnvironment()
-            session = environment.createSession(modelBytes)
+            context.assets.open(assetFileName).close()
+            true
+        } catch (e: IOException) {
+            false
+        }
+
+    private fun mapAsset(context: Context, name: String): ByteBuffer =
+        try {
+            context.assets.openFd(name).use { fd ->
+                FileInputStream(fd.fileDescriptor).channel.use { channel ->
+                    channel.map(FileChannel.MapMode.READ_ONLY, fd.startOffset, fd.declaredLength)
+                }
+            }
+        } catch (e: IOException) {
+            // A compressed asset cannot be mapped (openFd fails); copy it into native memory instead.
+            context.assets.open(name).use { input ->
+                val bytes = input.readBytes()
+                ByteBuffer.allocateDirect(bytes.size).put(bytes).also { it.flip() }
+            }
+        }
+
+    private fun <T> guarded(block: () -> T): T =
+        try {
+            block()
         } catch (e: LinkageError) {
             // UnsatisfiedLinkError (the native library did not load) or
             // ExceptionInInitializerError (its static initialiser failed) are Errors, so
@@ -33,28 +61,4 @@ class OnnxModelLoader(
             // failure so the caller degrades to "models not loaded".
             throw IllegalStateException("The ONNX Runtime native library did not load (${e.javaClass.simpleName})", e)
         }
-    }
-
-    /**
-     * Run inference with a single named input tensor.
-     *
-     * @param inputName The name of the input node (e.g. "images").
-     * @param input The [OnnxTensor] to feed.
-     * @return The [OrtSession.Result] containing output tensors.
-     */
-    fun runInference(inputName: String, input: OnnxTensor): OrtSession.Result {
-        return session.run(mapOf(inputName to input))
-    }
-
-    /**
-     * Run inference with the session's first input name inferred automatically.
-     */
-    fun runInference(input: OnnxTensor): OrtSession.Result {
-        val inputName = session.inputNames.first()
-        return runInference(inputName, input)
-    }
-
-    override fun close() {
-        session.close()
-    }
 }

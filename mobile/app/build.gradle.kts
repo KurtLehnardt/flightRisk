@@ -68,6 +68,33 @@ val releaseKeyPassword = signingValue("keyPassword", "FLIGHTRISK_UPLOAD_KEY_PASS
 val hasReleaseSigning = listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword)
     .all { it != null }
 
+// ---------------------------------------------------------------------------
+// On-device models
+// ---------------------------------------------------------------------------
+// The models are never committed. Before a release build,
+// scripts/mobile_models/make_models.py install copies YOLOX-S, the open_clip
+// ViT-B-16 embedder, mobile-models.json and model-notices.md into
+// src/main/assets (the default) or into the folder given with
+// -Pflightrisk.modelAssetsDir=/path (outside the source tree, for example a
+// scratch copy), which is then added to the main assets. A release build fails
+// when neither holds an installed mobile-models.json naming both models, unless
+// -Pflightrisk.allowReleaseWithoutModels=true is given (a build that cannot
+// detect or match anyone). See docs/mobile-models.md.
+fun optionalProperty(name: String): String? = providers.gradleProperty(name).orNull?.trim()?.takeIf { it.isNotEmpty() }
+
+val modelAssetsDir: File? = optionalProperty("flightrisk.modelAssetsDir")?.let { file(it) }
+val allowReleaseWithoutModels = optionalProperty("flightrisk.allowReleaseWithoutModels") == "true"
+val requiredModels = listOf("yolox_s.onnx", "clip_vit_b16_laion2b.onnx")
+
+// Unit tests: the golden fixtures (default: the repository's build/mobile_models/golden),
+// a folder of installed models to run in the parity tests (-Pflightrisk.modelTestDir=...),
+// and a detector to run through the import checks (-Pflightrisk.byoTestModel=...). With
+// either of the last two, the desktop ONNX Runtime replaces the Android one in unit tests.
+val goldenDir: String = optionalProperty("flightrisk.goldenDir") ?: rootProject.file("../build/mobile_models/golden").path
+val modelTestDir: String? = optionalProperty("flightrisk.modelTestDir")
+val byoTestModel: String? = optionalProperty("flightrisk.byoTestModel")
+val runModelsInUnitTests = modelTestDir != null || byoTestModel != null
+
 android {
     namespace = "com.flightrisk.app"
     // Google Play requires new apps and updates to target API level 36
@@ -127,6 +154,24 @@ android {
 
     sourceSets {
         getByName("androidTest").assets.srcDir("$projectDir/schemas")
+        // Models installed outside the source tree (see "On-device models" below).
+        modelAssetsDir?.let { getByName("main").assets.srcDir(it) }
+    }
+
+    // The models are large (the embedder is about 90 MB). Stored uncompressed, they are
+    // memory-mapped from the APK instead of being read into the Java heap (OnnxModelLoader).
+    androidResources {
+        noCompress += "onnx"
+    }
+
+    testOptions {
+        unitTests.all { test ->
+            // Golden fixtures of `make_models.py verify` (gitignored; the tests that need them
+            // are skipped when they are missing) and, optionally, installed models to run.
+            test.systemProperty("flightrisk.goldenDir", goldenDir)
+            modelTestDir?.let { test.systemProperty("flightrisk.modelTestDir", it) }
+            byoTestModel?.let { test.systemProperty("flightrisk.byoTestModel", it) }
+        }
     }
 }
 
@@ -244,9 +289,33 @@ fun registerLicenceGuard(
     }
 }
 
+val checkReleaseModels = tasks.register("checkReleaseModels") {
+    group = "verification"
+    description = "Fails a release build that carries no installed models (make_models.py install)."
+    val folders = listOfNotNull(file("src/main/assets"), modelAssetsDir)
+    doLast {
+        if (allowReleaseWithoutModels) {
+            logger.warn("WARNING: building a release without checking for the on-device models (flightrisk.allowReleaseWithoutModels).")
+            return@doLast
+        }
+        val ok = folders.any { dir ->
+            val manifest = File(dir, "mobile-models.json")
+            manifest.isFile && requiredModels.all { name -> File(dir, name).isFile && manifest.readText().contains("\"$name\"") }
+        }
+        if (!ok) {
+            throw GradleException(
+                "No installed on-device models in ${folders.joinToString()}: a release build without them cannot " +
+                    "detect or match anyone. Run scripts/mobile_models/make_models.py install (docs/mobile-models.md), " +
+                    "or point -Pflightrisk.modelAssetsDir at the folder it installed into.",
+            )
+        }
+    }
+}
+
 androidComponents {
     onVariants(selector().withBuildType("release")) { variant ->
         val name = variant.name.replaceFirstChar { it.uppercase() }
+        tasks.matching { it.name == "merge${name}Assets" }.configureEach { dependsOn(checkReleaseModels) }
         val guardBundle = registerLicenceGuard(
             "licenceGuard${name}Bundle", "bundle", variant.artifacts.get(SingleArtifact.BUNDLE),
         )
@@ -307,11 +376,6 @@ dependencies {
     // libonnxruntime.so and libonnxruntime4j_jni.so are 16 KB aligned.
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.23.2")
 
-    // LiteRT, the successor of TensorFlow Lite (for the OSNet ReID and InsightFace
-    // R18 models). It keeps the org.tensorflow.lite API, and its JNI library is
-    // 16 KB aligned; org.tensorflow:tensorflow-lite 2.16.1 is not.
-    implementation("com.google.ai.edge.litert:litert:1.4.2")
-
     // MediaPipe LLM Inference (on-device Gemma / local LLM). 0.10.22 is already
     // 16 KB aligned.
     implementation("com.google.mediapipe:tasks-genai:0.10.22")
@@ -339,6 +403,9 @@ dependencies {
     // A desktop SQLite engine (already in the Gradle cache as a Room compiler
     // dependency) to run the Room migration SQL in FlightRiskMigrationTest.
     testImplementation("org.xerial:sqlite-jdbc:3.41.2.2")
+    // The desktop ONNX Runtime (same Java API) runs the installed models in the parity
+    // tests; it is only added when they are asked for (see "On-device models" above).
+    if (runModelsInUnitTests) testRuntimeOnly("com.microsoft.onnxruntime:onnxruntime:1.23.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     // AndroidJUnitRunner (the testInstrumentationRunner above) and the
     // androidx.test.filters size annotations used by PipelineE2ETest. It was
@@ -352,4 +419,12 @@ dependencies {
     // Debug
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+// The Android ONNX Runtime cannot load its native library on a desktop JVM; the
+// desktop one above replaces it in unit tests that run models.
+if (runModelsInUnitTests) {
+    configurations.matching { it.name.endsWith("UnitTestRuntimeClasspath") }.configureEach {
+        exclude(group = "com.microsoft.onnxruntime", module = "onnxruntime-android")
+    }
 }
