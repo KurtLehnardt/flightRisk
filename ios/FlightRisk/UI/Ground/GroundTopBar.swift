@@ -134,6 +134,7 @@ private struct LinkPill: View {
     private var color: Color {
         switch status {
         case .connected: return FlightRiskTheme.matchGreen
+        case .demo: return .purple
         case .connecting, .reconnecting, .wrongKey, .keychainLocked: return FlightRiskTheme.alertOrange
         default: return .gray
         }

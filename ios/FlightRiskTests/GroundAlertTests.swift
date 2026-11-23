@@ -298,3 +298,127 @@ final class GroundAlertViewModelTests: XCTestCase {
         XCTAssertFalse(dumped.contains(GroundHarness.testKey))
     }
 }
+
+/// The reasoning verdict on the alert rows (#185) and the demo mode, through the real view model.
+@MainActor
+final class GroundVerdictAndDemoViewModelTests: XCTestCase {
+    private var harness: GroundHarness!
+    private var vm: GroundViewModel { harness.viewModel }
+    private let alertId = "00000000000040008000000000000001"
+
+    override func setUp() async throws {
+        try await super.setUp()
+        harness = GroundHarness()
+    }
+
+    override func tearDown() async throws {
+        if vm.isDemoActive { vm.stopDemo() }
+        await harness.tearDown()
+        harness = nil
+        try await super.tearDown()
+    }
+
+    private var rows: [GroundAlertRow] {
+        GroundAlertsState(alerts: vm.matchAlerts, isStale: false, answers: vm.alertAnswers, verdicts: vm.alertVerdicts).rows
+    }
+
+    func testTheVerdictAndTheUpgradeReachTheAlertRowAndNothingIsSent() async throws {
+        let t = await harness.connect()
+        await harness.push(t, "match_alert", try ContractFixtures.payloadJSON("match_alert.json", "edge_match")) { self.vm.matchAlerts.count == 1 }
+        let sentBefore = t.sent.count
+        await harness.push(t, "reasoning_result", #"{"track_id":"8_7","alert_id":"\#(alertId)","type":"analyze","result":{"match":true,"confidence":"high","reasoning":"Same jacket and build."}}"#) {
+            self.vm.alertVerdicts.verdict(for: self.alertId) != nil
+        }
+        await harness.push(t, "alert_upgrade", #"{"track_id":"8_7","alert_id":"\#(alertId)","new_level":"confirmed_match","reasoning":"Same jacket and build."}"#) {
+            self.rows.first?.levelText == "Strong match"
+        }
+        var row = try XCTUnwrap(rows.first)
+        XCTAssertEqual(row.verdict?.headline, "AI check: match (high confidence)")
+        XCTAssertEqual(row.verdict?.rowRationale, "Same jacket and build.")
+        XCTAssertNil(row.reasonText, "the verdict replaces the alert's own reasoning text")
+        XCTAssertTrue(row.accessibilitySummary.contains("AI check: match (high confidence)"))
+        // A reminder that carries the older level does not lower the row.
+        await harness.push(t, "match_alert_reminder", try ContractFixtures.payloadJSON("match_alert.json", "reminder_on_connect")) { self.vm.matchAlerts.first?.renotify == true }
+        row = try XCTUnwrap(rows.first)
+        XCTAssertEqual(row.levelText, "Strong match")
+        XCTAssertEqual(row.verdict?.headline, "AI check: match (high confidence)")
+        await harness.settle()
+        XCTAssertEqual(t.sent.count, sentBefore, "a verdict from the ground sends nothing")
+    }
+
+    func testAnErrorVerdictIsANeutralNoteAndAVerdictIsForgottenWithTheGround() async throws {
+        let t = await harness.connect()
+        await harness.push(t, "match_alert", try ContractFixtures.payloadJSON("match_alert.json", "edge_match")) { self.vm.matchAlerts.count == 1 }
+        await harness.push(t, "reasoning_result", #"{"alert_id":"\#(alertId)","type":"analyze","result":{"match":false,"confidence":"error","reasoning":"Traceback"}}"#) {
+            self.vm.alertVerdicts.verdict(for: self.alertId) != nil
+        }
+        let row = try XCTUnwrap(rows.first)
+        XCTAssertEqual(row.verdict?.isNeutral, true)
+        XCTAssertEqual(row.verdict?.headline, AlertVerdictText.errorNote)
+        XCTAssertEqual(row.levelText, "Possible match")
+        XCTAssertNil(vm.saveAddress("ws://192.168.1.77:5555"), "a different ground")
+        XCTAssertEqual(vm.alertVerdicts.count, 0)
+    }
+
+    func testTheDemoClosesTheLiveLinkAndAnswersCommandsOnThePhone() async throws {
+        let t = await harness.connect()
+        await harness.push(t, "match_alert", try ContractFixtures.payloadJSON("match_alert.json", "edge_match")) { self.vm.matchAlerts.count == 1 }
+        XCTAssertEqual(vm.demoStartStep, .confirmDisconnectFirst)
+        let transportsBefore = harness.recorder.transports.count
+        vm.startDemo()
+        XCTAssertTrue(vm.isDemoActive)
+        XCTAssertEqual(vm.linkStatus, .demo)
+        XCTAssertEqual(vm.linkStatus.pillText, "DEMO")
+        XCTAssertFalse(vm.isEnabled, "the live link is switched off, not only closed")
+        XCTAssertFalse(vm.matchAlerts.contains { $0.alertId == alertId }, "the live ground's alert is gone")
+        XCTAssertEqual(vm.droneCards.map(\.id), ["drone-1", "drone-2"], "the demo ground's drones")
+        // The closing link may still send its leave frame (41); no event frame may follow.
+        let eventsBefore = t.sentEventNames
+
+        await vm.landAll()
+        XCTAssertEqual(vm.landAllFeedback?.phase, .handedOver)
+        harness.clock.advance(1)
+        await harness.waitUntil("the demo's land_all_ack") { self.vm.landAllFeedback?.phase == .succeeded }
+        await vm.landDrone("drone-1")
+        harness.clock.advance(2)
+        await harness.waitUntil("the demo's manual_result") { self.vm.landFeedback["drone-1"]?.phase == .succeeded }
+
+        // The live link cannot come back while the demo runs.
+        vm.setEnabled(true)
+        vm.retryConnection()
+        vm.appWillEnterForeground()
+        let probe = await vm.testConnection()
+        XCTAssertEqual(probe, GroundUIText.demoBlocksLink)
+        await harness.settle()
+        XCTAssertFalse(vm.isEnabled)
+        XCTAssertEqual(vm.linkStatus, .demo)
+        XCTAssertEqual(harness.recorder.transports.count, transportsBefore, "no new connection")
+        XCTAssertEqual(t.sentEventNames, eventsBefore, "no demo command reached the live socket")
+        XCTAssertTrue(harness.http.headers.isEmpty, "no health probe")
+    }
+
+    func testTheDemoScenarioReachesTheAlertRowsAndLeavingClearsEverything() async throws {
+        XCTAssertEqual(vm.demoStartStep, .startNow, "no live link: no confirmation")
+        vm.startDemo()
+        harness.clock.advance(DemoGround.Moment.verdict + 1)
+        await harness.waitUntil("the demo's verdict") { self.vm.alertVerdicts.verdict(for: DemoGround.alertId)?.confidence == "high" }
+        let row = try XCTUnwrap(rows.first)
+        XCTAssertEqual(row.levelText, "Strong match")
+        XCTAssertEqual(row.verdict?.headline, "AI check: match (high confidence)")
+        XCTAssertFalse(vm.banners.isEmpty, "the obstacle cut is shown")
+        vm.stopDemo()
+        XCTAssertFalse(vm.isDemoActive)
+        XCTAssertNotEqual(vm.linkStatus, .demo)
+        XCTAssertTrue(vm.matchAlerts.isEmpty)
+        XCTAssertEqual(vm.alertVerdicts.count, 0)
+        XCTAssertTrue(vm.droneCards.isEmpty)
+        XCTAssertTrue(vm.banners.isEmpty)
+        XCTAssertNil(vm.fleetPlan)
+        XCTAssertNil(vm.landAllFeedback)
+        // A stopped demo delivers nothing more.
+        harness.clock.advance(30)
+        await harness.settle()
+        await harness.settle()
+        XCTAssertTrue(vm.droneCards.isEmpty)
+    }
+}

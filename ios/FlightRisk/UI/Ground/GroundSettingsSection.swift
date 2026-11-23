@@ -1,3 +1,4 @@
+import GroundProtocol
 import SwiftUI
 
 /// The ground station connection settings, shown inside Settings.
@@ -68,7 +69,12 @@ struct GroundSettingsSection: View {
                 get: { viewModel.isEnabled },
                 set: { viewModel.setEnabled($0) }
             ))
-            .disabled(!viewModel.isConfigured && !viewModel.isEnabled)
+            .disabled((!viewModel.isConfigured && !viewModel.isEnabled) || viewModel.isDemoActive)
+            if viewModel.isDemoActive {
+                Text(GroundUIText.demoBlocksLink)
+                    .font(.footnote)
+                    .foregroundStyle(FlightRiskTheme.alertOrange)
+            }
 
             Text(viewModel.linkStatus.text)
                 .font(.footnote)
@@ -87,7 +93,7 @@ struct GroundSettingsSection: View {
                     if isTesting { ProgressView().controlSize(.small) }
                 }
             }
-            .disabled(isTesting || !viewModel.isConfigured)
+            .disabled(isTesting || !viewModel.isConfigured || viewModel.isDemoActive)
             if let result = testResult {
                 Text(result).font(.footnote).foregroundStyle(.secondary)
             }
@@ -99,5 +105,78 @@ struct GroundSettingsSection: View {
         .onAppear {
             if addressInput.isEmpty { addressInput = viewModel.savedAddress ?? "" }
         }
+    }
+}
+
+// MARK: - Demo mode
+
+/// Texts of the demo mode, shared by Settings, onboarding and the banner.
+enum DemoUIText {
+    /// The banner shown on every tab while the demo runs.
+    static let banner = "DEMO \u{2013} no real drones"
+    static let tryDemo = "Try the demo (no drones, no photo)"
+    static let confirmTitle = "Disconnect the ground station?"
+    static let confirmMessage =
+        "The demo cannot run beside a live ground station. The link closes now and stays off until you switch it on again in Settings. "
+        + "While the demo runs, LAND ALL on this phone lands only the simulated drones: use the ground laptop for real drones."
+    static let confirmButton = "Disconnect and start the demo"
+    static let footer =
+        "The demo plays a scenario on this phone: two simulated drones search their lanes, one stops at an obstacle, "
+        + "a match alert gets an AI verdict, and the drones land. It needs no camera, photo or ground station, and nothing is sent to any network. "
+        + "Every command is answered by the simulated ground. Turning the demo off clears everything it showed."
+}
+
+/// Asks before a demo starts beside a live link, then starts it. Used by Settings and onboarding.
+/// `start` runs only after the user confirmed.
+struct DemoStartConfirmation: ViewModifier {
+    @Binding var isPresented: Bool
+    let start: () -> Void
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(DemoUIText.confirmTitle, isPresented: $isPresented, titleVisibility: .visible) {
+            Button(DemoUIText.confirmButton, role: .destructive, action: start)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(DemoUIText.confirmMessage)
+        }
+    }
+
+    /// Starts the demo at once when no live link is open or switched on; otherwise asks first.
+    static func request(_ viewModel: GroundViewModel, confirm: () -> Void) {
+        switch viewModel.demoStartStep {
+        case .startNow: viewModel.startDemo()
+        case .confirmDisconnectFirst: confirm()
+        }
+    }
+}
+
+/// The demo switch in Settings.
+struct DemoSettingsSection: View {
+    let viewModel: GroundViewModel
+    @State private var confirmingStart = false
+
+    var body: some View {
+        Section {
+            Toggle("Demo mode", isOn: Binding(
+                get: { viewModel.isDemoActive },
+                set: { on in
+                    if on {
+                        DemoStartConfirmation.request(viewModel, confirm: { confirmingStart = true })
+                    } else {
+                        viewModel.stopDemo()
+                    }
+                }
+            ))
+            .accessibilityHint("Shows a simulated ground station with simulated drones. Nothing is sent to any network.")
+            .accessibilityIdentifier("settings.demoMode")
+            if viewModel.isDemoActive {
+                Button("Play the demo again") { viewModel.restartDemo() }
+            }
+        } header: {
+            Text("Demo")
+        } footer: {
+            Text(DemoUIText.footer)
+        }
+        .modifier(DemoStartConfirmation(isPresented: $confirmingStart) { viewModel.startDemo() })
     }
 }

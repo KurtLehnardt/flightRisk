@@ -20,6 +20,8 @@ struct OnboardingView: View {
     @State private var qualityReport: QualityReport?
 
     var onPhotoSelected: ((CGImage, QualityReport?) -> Void)?
+    /// "Try the demo" on the first screen: simulated drones, no photo, no ground station.
+    var onTryDemo: (() -> Void)?
 
     var body: some View {
         ZStack {
@@ -127,6 +129,17 @@ struct OnboardingView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .accessibilityLabel("I understand the privacy notice")
+
+                if let onTryDemo {
+                    Button(action: onTryDemo) {
+                        Text(DemoUIText.tryDemo)
+                            .font(.headline)
+                            .frame(maxWidth: .infinity, minHeight: 48)
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityHint("Shows the app with simulated drones. Nothing is sent to any network.")
+                    .accessibilityIdentifier("onboarding.tryDemo")
+                }
             }
             .padding(24)
         }
