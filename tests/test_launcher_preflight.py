@@ -10,7 +10,14 @@ from dataclasses import replace
 import pytest
 
 from flightrisk.launcher.commands import EdgeToken
-from flightrisk.launcher.netinfo import Adapter
+from flightrisk.launcher.netinfo import (
+    Adapter,
+    DefaultRoute,
+    default_route_interface,
+    parse_get_netroute,
+    parse_ip_route_default,
+    parse_route_get_default,
+)
 from flightrisk.launcher.preflight import (
     FAIL,
     INFO,
@@ -127,6 +134,7 @@ def _env(**overrides) -> PreflightEnv:
         "tello_probe": lambda d: TelloProbe(True, battery=80, temp="55C", detail=d.tello_host),
         "environ": {},
         "is_windows": False,
+        "default_route": lambda: None,
     }
     base.update(overrides)
     return PreflightEnv(**base)
@@ -279,6 +287,7 @@ def _single(**drone):
 
 
 def _one_adapter(**overrides):
+    overrides.setdefault("default_route", lambda: DefaultRoute("en7", 15))
     return _env(adapters=lambda: [Adapter("lo0", "127.0.0.1", 1), Adapter("en0", "192.168.10.2", 14)], **overrides)
 
 
@@ -369,3 +378,85 @@ def test_two_tellos_each_without_a_local_ip_fail_with_the_sensing_reason_too():
     ), ground_host="10.42.0.1")
     rows = _by_name(run_preflight(settings, EdgeToken(TOKEN, "x"), _one_adapter()))
     assert rows["Adapter for drone-1"].status == FAIL and rows["Adapter for drone-2"].status == FAIL
+
+
+# ---------------------------------------------------------------------------
+# When the row may name an adapter (review of #200, finding 7)
+# ---------------------------------------------------------------------------
+
+NAMED = "en0 192.168.10.2 is the one adapter in its network"
+
+
+def _row(settings, env):
+    return _by_name(run_preflight(settings, EdgeToken(None, None), env))["Adapter for drone-1"]
+
+
+def test_one_tello_and_one_safe_adapter_names_it():
+    assert NAMED in _row(_single(), _one_adapter()).detail
+
+
+def test_two_tellos_never_name_one_adapter_and_say_each_needs_its_own():
+    settings = LauncherSettings(drones=(
+        DroneSettings(drone_id="drone-1", tello_host="192.168.10.1"),
+        DroneSettings(drone_id="drone-2", tello_host="192.168.10.1", local_ip="192.168.10.50"),
+    ))
+    env = _one_adapter()
+    row = _row(settings, env)
+    assert row.status == FAIL and "is the one adapter" not in row.detail and "en0" not in row.detail
+    assert "each real Tello on this computer its own Wi-Fi adapter" in row.detail
+    assert "docs/two-tellos-one-pc.md" in row.detail
+
+
+def test_two_tellos_without_local_ips_warn_with_sensing_off_and_do_not_name_an_adapter():
+    settings = LauncherSettings(drones=(
+        DroneSettings(drone_id="drone-1"), DroneSettings(drone_id="drone-2"),
+    ))
+    env = _env(adapters=lambda: [Adapter("en0", "192.168.10.2", 14)],
+               default_route=lambda: DefaultRoute("en7", 15), environ={"FLIGHTRISK_OBSTACLE_SENSING": "off"})
+    row = _row(settings, env)
+    assert row.status == WARN and "sensing is off" in row.detail and "capture stamps" in row.detail
+    assert "en0" not in row.detail and "its own Wi-Fi adapter" in row.detail and "docs/two-tellos-one-pc.md" in row.detail
+
+
+def test_an_adapter_that_is_another_drones_local_ip_is_not_named():
+    settings = LauncherSettings(drones=(
+        DroneSettings(drone_id="drone-1"),
+        DroneSettings(drone_id="drone-2", source="mavlink", local_ip="192.168.10.2"),
+    ))
+    row = _row(settings, _one_adapter())
+    assert NAMED not in row.detail and "en0" not in row.detail
+    assert "set the local IP of the Wi-Fi adapter joined to drone-1" in row.detail
+
+
+@pytest.mark.parametrize("route", [DefaultRoute("en0", None), DefaultRoute(None, 14), DefaultRoute("en0", 14)])
+def test_the_default_route_adapter_is_not_named(route):
+    row = _row(_single(), _one_adapter(default_route=lambda: route))
+    assert row.status == FAIL and "en0" not in row.detail
+    assert "not the internet" in row.detail
+
+
+def test_an_unknown_default_route_fails_closed():
+    assert "en0" not in _row(_single(), _one_adapter(default_route=lambda: None)).detail
+
+    def boom():
+        raise OSError("no route tool")
+
+    assert "en0" not in _row(_single(), _one_adapter(default_route=boom)).detail
+
+
+def test_default_route_parsers_and_reader():
+    assert parse_route_get_default("   route to: default\n  interface: en0\n").name == "en0"
+    assert parse_route_get_default("route: not in table") is None
+    assert parse_ip_route_default("default via 10.0.0.1 dev wlan0 proto dhcp metric 600\n").name == "wlan0"
+    assert parse_ip_route_default("") is None
+    route = parse_get_netroute('[{"InterfaceIndex":9,"InterfaceAlias":"Wi-Fi 2","RouteMetric":50},'
+                               '{"InterfaceIndex":4,"InterfaceAlias":"Ethernet","RouteMetric":5}]')
+    assert route == DefaultRoute("Ethernet", 4)
+    assert parse_get_netroute("not json") is None and parse_get_netroute("") is None
+    assert default_route_interface(lambda argv: "", platform="linux") is None
+
+    def failing(argv):
+        raise OSError("missing")
+
+    assert default_route_interface(failing, platform="darwin") is None
+    assert default_route_interface(lambda argv: "default via 1.1.1.1 dev nonexist0", platform="linux").name == "nonexist0"

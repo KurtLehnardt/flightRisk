@@ -20,7 +20,7 @@ import time
 import pytest
 
 from flightrisk.launcher.commands import EdgeToken, Redactor
-from flightrisk.launcher.netinfo import Adapter
+from flightrisk.launcher.netinfo import Adapter, DefaultRoute
 from flightrisk.launcher.preflight import PreflightEnv, TelloProbe
 from flightrisk.launcher.processes import ProcessManager
 from flightrisk.launcher.server import STATIC_DIR, LauncherApp, make_server
@@ -43,6 +43,7 @@ def _preflight_env(probe=None) -> PreflightEnv:
         port_free=lambda host, port: True,
         tcp_reachable=lambda host, port: True,
         adapters=lambda: [Adapter("lo0", "127.0.0.1", 1), Adapter("en0", "192.168.10.2", 14)],
+        default_route=lambda: DefaultRoute("en7", 15),
         weights=lambda: [
             {"name": "default", "label": "Default", "weights": "yolo11n.pt", "required": False, "found": "yolo11n.pt", "fallback": None},
             {"name": "top_down", "label": "Top", "weights": "models/heridal_yolo11s.pt", "required": True, "found": None, "fallback": "level"},
