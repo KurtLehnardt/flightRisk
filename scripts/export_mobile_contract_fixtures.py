@@ -1002,6 +1002,450 @@ def build_frame_and_alert() -> dict[str, dict]:
 
 
 # ---------------------------------------------------------------------------
+# reasoning_result and alert_upgrade: the reasoning verdict on an edge alert
+# ---------------------------------------------------------------------------
+
+#: The replies of the scripted reasoning model, in the three-line format the real agent asks for. They are
+#: parsed by the real ``FlightRiskAgent._parse_match_response``. They describe clothing only.
+VERDICT_REPLIES: dict[str, str] = {
+    "match": "MATCH: yes\nCONFIDENCE: high\nREASONING: Same red jacket, blue jeans and grey backpack as the reference photo.",
+    "no_match": "MATCH: no\nCONFIDENCE: high\nREASONING: The jacket is green, not red, and there is no backpack.",
+    "uncertain": "MATCH: yes\nCONFIDENCE: low\nREASONING: The jacket colour is similar, but the crop is too small to compare anything else.",
+    "description": "MATCH: no\nCONFIDENCE: medium\nREASONING: The person wears a white shirt, not a red jacket.",
+}
+
+#: The typed description of the description check (the target as a parent would describe them, clothing only).
+VERDICT_DESCRIPTION = "Red jacket, blue jeans, grey backpack."
+
+#: The text of a model call that failed inside the agent (the agent turns it into an "error" verdict).
+VERDICT_AGENT_FAILURE = "Claude declined this request (policy)"
+
+
+def _scripted_agent(reply: str | BaseException) -> Any:
+    """A real ``FlightRiskAgent`` whose model call returns *reply* (or raises it); no Ollama, no network.
+
+    ``analyze_match`` and ``match_description`` are the real methods: they build the real prompt and parse the
+    reply with the real parser. Only ``_ask``, the one backend call, is scripted.
+    """
+    from flightrisk.reasoning.agent import FlightRiskAgent
+
+    class ScriptedAgent(FlightRiskAgent):
+        provider = "claude"
+        label = "Claude"
+
+        def __init__(self) -> None:  # Skips the Ollama client on purpose.
+            self.model = "scripted"
+            self._available = True
+            self.last_usage = {}
+
+        def _ask(self, prompt: str, images_b64: list[str]) -> str:
+            if isinstance(reply, BaseException):
+                raise reply
+            return reply
+
+    return ScriptedAgent()
+
+
+def _failing_agent() -> Any:
+    """An agent whose ``analyze_match`` itself raises, so the reasoning worker's own error path answers."""
+    agent = _scripted_agent(VERDICT_REPLIES["match"])
+
+    def analyze_match(reference: Any, candidate: Any) -> dict:
+        raise RuntimeError("scripted analyze failure")
+
+    agent.analyze_match = analyze_match
+    return agent
+
+
+def _drain_reasoning_queue() -> None:
+    import queue
+
+    from flightrisk.dashboard.state import gemma_queue
+
+    while True:
+        try:
+            gemma_queue.get_nowait()
+        except queue.Empty:
+            return
+        gemma_queue.task_done()
+
+
+def _run_reasoning_worker(sio: FakeSocketIO) -> None:
+    """Run the real reasoning worker until every queued job is done, then stop it."""
+    import threading
+
+    from flightrisk.dashboard import alerts as alerts_module
+    from flightrisk.dashboard.state import app_state, gemma_queue
+
+    app_state.running = True
+    worker = threading.Thread(target=alerts_module._gemma_worker, args=(sio,), name="fixture-reasoning", daemon=True)
+    worker.start()
+    try:
+        gemma_queue.join()
+    finally:
+        app_state.running = False
+        worker.join(timeout=10)
+    if worker.is_alive():
+        raise RuntimeError("the reasoning worker did not stop")
+
+
+@contextlib.contextmanager
+def _reasoning_alert_path(app_module) -> Iterator[Callable[..., tuple[FakeSocketIO, Any]]]:
+    """The real edge alert path with reasoning on; yields ``fire(agent, drone_id, before_worker=None)``.
+
+    Each ``fire`` uses a fresh alert latch (patched into the dashboard and the reasoning worker), an empty
+    reasoning queue and rate-limit table, a reference photo file in the scrubbed HOME, the given scripted
+    agent, and one edge detection message whose crop is ``TINY_JPEG``. It runs ``_edge_process_and_emit``
+    (which emits ``match_alert`` and queues the ``analyze`` job), then ``before_worker(latch)`` if given, then
+    the real worker. It returns the recording Socket.IO stand-in and the latch.
+    """
+    from flightrisk.dashboard import alert_latch as alert_latch_module
+    from flightrisk.dashboard import alerts as alerts_module
+    from flightrisk.dashboard.state import app_state, gemma_last_call
+    from flightrisk.edge import Detection, DetectionMessage
+    from flightrisk.vision.scorer import MatchScorer
+
+    scorer = MatchScorer()
+    reference = Path(os.environ["HOME"]) / "reference.jpg"
+    reference.write_bytes(TINY_JPEG)
+
+    class Station:
+        def __init__(self, results):
+            self.results = results
+
+        def process_message(self, msg):
+            return self.results
+
+    def fire(agent: Any, drone_id: str = "drone-1", before_worker: Callable[[Any], None] | None = None):
+        latch = alert_latch_module.MatchAlertLatch()
+        sio = FakeSocketIO()
+        message = DetectionMessage(
+            timestamp=1000.0, frame_id=42, thumbnail_jpeg=None, frame_width=960, frame_height=720,
+            drone_id=drone_id,
+            detections=[Detection(bbox=(400, 300, 460, 420), confidence=0.81, crop_jpeg=TINY_JPEG)],
+        )
+        results = [{"bbox": (400, 300, 460, 420), "reid_score": 0.86, "face_score": 0.0,
+                    "score_result": scorer.score(reid_score=0.86, face_score=0.0)}]
+        _drain_reasoning_queue()
+        gemma_last_call.clear()
+        with mock.patch.object(app_module, "alert_latch", latch), \
+                mock.patch.object(alerts_module, "alert_latch", latch):
+            app_state.ground_station = Station(results)
+            app_state.scorer = scorer
+            app_state.db = None
+            app_state.session_id = None
+            app_state.logger = None
+            app_state.match_history = []
+            app_state.stream_video = False
+            app_state.reasoning = agent
+            app_state.target_photo_path = str(reference)
+            app_module._edge_process_and_emit(sio, message)
+            if before_worker is not None:
+                before_worker(latch)
+            _run_reasoning_worker(sio)
+        gemma_last_call.clear()
+        return sio, latch
+
+    try:
+        yield fire
+    finally:
+        _drain_reasoning_queue()
+        gemma_last_call.clear()
+        app_state.running = False
+
+
+def _verdict_case(sio: FakeSocketIO, notes: str) -> dict:
+    return case("reasoning_result", SERVER_TO_CLIENT, sio.last("reasoning_result"), notes)
+
+
+def build_alert_verdicts() -> dict[str, Any]:
+    """The reasoning verdict on an edge alert, from the real alert path, reasoning worker and agent parser.
+
+    Returns the extra ``match_alert.json`` cases (under the key ``match_alert_cases``) and the
+    ``reasoning_result.json`` and ``alert_upgrade.json`` documents.
+    """
+    from flightrisk.dashboard import alert_latch as alert_latch_module
+    from flightrisk.dashboard import alerts as alerts_module
+    from flightrisk.dashboard.state import app_state, gemma_queue
+
+    alerts: dict[str, dict] = {}
+    verdicts: dict[str, dict] = {}
+    upgrades: dict[str, dict] = {}
+    with clean_app_state() as app_module, \
+            mock.patch.object(app_module.time, "strftime", lambda fmt, *a: "12:34:56"), \
+            _reasoning_alert_path(app_module) as fire:
+        # A match: the alert waits for the verdict, the verdict raises it to confirmed_match.
+        sio, latch = fire(_scripted_agent(VERDICT_REPLIES["match"]))
+        alert = sio.last("match_alert")
+        alerts["edge_match_awaiting_reasoning"] = case(
+            "match_alert", SERVER_TO_CLIENT, alert,
+            "An edge match while the ground's reasoning is on: gemma_confidence is 'pending' and reasoning says which "
+            "provider is checking it. The verdict arrives later as reasoning_result with the same alert_id, and may "
+            "raise the level through alert_upgrade.",
+        )
+        verdicts["match"] = _verdict_case(
+            sio,
+            "The verdict for match_alert.json case edge_match_awaiting_reasoning (same alert_id): result.match true, "
+            "confidence high. Show the verdict, the confidence and the rationale (result.reasoning, truncated and "
+            "escaped) on that alert. type is 'analyze'.",
+        )
+        upgrades["confirmed_match"] = case(
+            "alert_upgrade", SERVER_TO_CLIENT, sio.last("alert_upgrade"),
+            "Sent after reasoning_result case 'match' (same alert_id): the verdict raised the alert from "
+            "possible_match to confirmed_match. Apply it only when new_level ranks above the level shown; a level "
+            "never goes down. reasoning repeats the verdict's rationale.",
+        )
+        alerts["reminder_with_verdict"] = case(
+            "match_alert_reminder", SERVER_TO_CLIENT, latch.pending_alert(),
+            "The reminder for the same alert after its verdict: the ground's stored copy carries gemma_match, "
+            "gemma_confidence, the rationale and the raised alert_level, so a phone that connects late still sees "
+            "the verdict.",
+        )
+
+        sio, _ = fire(_scripted_agent(VERDICT_REPLIES["no_match"]))
+        verdicts["no_match"] = _verdict_case(
+            sio,
+            "The model says the person does not match (match false, confidence high). The alert keeps its level; "
+            "no alert_upgrade follows.",
+        )
+        sio, _ = fire(_scripted_agent(VERDICT_REPLIES["uncertain"]))
+        verdicts["uncertain"] = _verdict_case(
+            sio,
+            "An uncertain verdict (match true, confidence low). Only high and medium matches raise a level, so no "
+            "alert_upgrade follows.",
+        )
+        sio, _ = fire(_failing_agent())
+        verdicts["error"] = _verdict_case(
+            sio,
+            "The reasoning call failed in the worker: confidence 'error', match false, empty reasoning. Show a "
+            "neutral note ('AI check unavailable'), never an alarm, and no rationale.",
+        )
+        sio, _ = fire(_scripted_agent(RuntimeError(VERDICT_AGENT_FAILURE)))
+        verdicts["error_with_detail"] = _verdict_case(
+            sio,
+            "The model call failed inside the agent, which reports confidence 'error' with the failure text as "
+            "reasoning. A phone shows the same neutral note as for 'error' and never shows this text.",
+        )
+        sio, _ = fire(_scripted_agent(VERDICT_REPLIES["match"]),
+                      before_worker=lambda latch: latch.dismiss(latch.alert_id))
+        verdicts["skipped"] = _verdict_case(
+            sio,
+            "The operator answered the alert before its check ran, so the model was never called: confidence "
+            "'skipped'. Show a neutral note ('AI check skipped'), not the reasoning text.",
+        )
+
+        # A description check: no alert, no alert_id; phones ignore it.
+        sio = FakeSocketIO()
+        app_state.reasoning = _scripted_agent(VERDICT_REPLIES["description"])
+        crop = alerts_module.decode_edge_crop(TINY_JPEG)
+        with mock.patch.object(alerts_module, "alert_latch", alert_latch_module.MatchAlertLatch()):
+            gemma_queue.put_nowait(("describe", "8_7", crop, VERDICT_DESCRIPTION))
+            _run_reasoning_worker(sio)
+        verdicts["description_check"] = _verdict_case(
+            sio,
+            "A check of a detection against the typed description, not tied to an alert: type 'description' and no "
+            "alert_id. Phones ignore a reasoning_result without alert_id or whose type is not 'analyze'.",
+        )
+    return {
+        "match_alert_cases": alerts,
+        "reasoning_result.json": document(
+            "The 'reasoning_result' event: the ground's reasoning verdict (Claude or Gemma) on a match alert, keyed by "
+            "alert_id. Sent to every Socket.IO client, phones included. It carries no image and no key.",
+            ["flightrisk.dashboard.alerts.resolve_reasoning", "flightrisk.dashboard.alerts._gemma_worker",
+             "flightrisk.reasoning.agent.FlightRiskAgent.analyze_match",
+             "flightrisk.reasoning.agent.FlightRiskAgent.match_description"],
+            verdicts,
+        ),
+        "alert_upgrade.json": document(
+            "The 'alert_upgrade' event: a reasoning verdict raised a match alert's level. A level only ever goes up.",
+            ["flightrisk.dashboard.alerts._gemma_worker", "flightrisk.dashboard.alerts.raise_alert_level"],
+            upgrades,
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# demo_scenario: a timed mission a phone replays in demo mode
+# ---------------------------------------------------------------------------
+
+#: How often the demo mission sends a fleet_status (the dashboard's monitor sends one every 0.5 s; the demo
+#: sends fewer so the scenario stays small, and a phone keeps each one well inside its 30 s freshness limit).
+DEMO_STATUS_EVERY_MS = 4000
+
+
+def build_demo_scenario(files: Mapping[str, dict]) -> dict:
+    """A short two-drone mission, every payload from the real fleet supervisor and alert path.
+
+    The phone app replays ``steps`` on its own clock in demo mode; nothing here is typed by hand except the
+    telemetry inputs (positions along the planned lanes) and the scripted reasoning reply.
+    """
+    from flightrisk.dashboard import recovery as recovery_module
+    from flightrisk.edge import Detection, DetectionMessage
+
+    steps: list[dict] = []
+
+    def add(at_ms: int, event: str, payload: Any) -> None:
+        steps.append({"at_ms": at_ms, "event": event, "payload": copy.deepcopy(payload)})
+
+    def payload_of(file_name: str, case_name: str) -> Any:
+        return copy.deepcopy(files[file_name]["cases"][case_name]["payload"])
+
+    supervisor, _transport, sio, clock = _supervisor()
+    sensing = {"obstacle_sensing": "stepped", "obstacle_sensor_ok": True, "obstacle_state": "clear",
+               "obstacle_latency_ms": 220}
+
+    def emitted(since: int, at_ms: int) -> None:
+        for event, payload in sio.events[since:]:
+            add(at_ms, event, payload)
+
+    def status_now(since: int, at_ms: int) -> None:
+        """What the ground sent since *since*, then the monitor's fleet_status unless one was just sent."""
+        emitted(since, at_ms)
+        if not any(event == "fleet_status" for event, _ in sio.events[since:]):
+            add(at_ms, "fleet_status", supervisor.status_payload())
+
+    def telemetry(drone_id: str, lane: int | None, x_cm: float, y_cm: float, *, flying: bool = True,
+                  height_cm: float = 100, **extra: Any) -> dict:
+        return _telemetry(
+            drone_id, is_flying=flying, height_cm=height_cm if flying else 0, lane_index=lane,
+            lanes_total=3 if lane is not None else None, rel_x_cm=float(x_cm), rel_y_cm=float(y_cm),
+            control_mode="autonomous", drone_link_ok=True, drone_link_age_s=0.2, drone_link_detail=None, **extra,
+        )
+
+    # On the ground, connected: the status a phone gets on connect, then the fleet.
+    add(0, "status", payload_of("status.json", "fleet_two_drones"))
+    _report_all(supervisor)
+    add(0, "fleet_status", supervisor.status_payload())
+    manual_status = supervisor.manual.status()
+
+    # Plan, then start.
+    clock.now += 2.0
+    since = len(sio.events)
+    supervisor.plan()
+    emitted(since, 2000)
+    _ack_lanes(supervisor)
+    clock.now += 2.0
+    since = len(sio.events)
+    result = supervisor.start()
+    if not result.ok:
+        raise RuntimeError(f"the demo mission did not start: {result.refusals}")
+    emitted(since, 4000)
+
+    # The drones fly their lanes. drone-1 meets an obstacle on lane 0 at 100 cm, sidesteps and flies on.
+    cut = {"obstacle_seq": 1, "obstacle_cuts": [0, 100], "obstacle_cuts_total": 1, "obstacle_cut_reasons": "obstacle"}
+    track = [
+        # (drone-1 lane, x, y, extra), (drone-2 lane, x, y)
+        ((0, 0, 0, sensing), (0, 0, 0)),
+        ((0, 0, 50, sensing), (0, 0, 100)),
+        ((0, 0, 100, dict(sensing, obstacle_state="blocked", **cut)), (0, 0, 200)),
+        ((1, 40, 100, dict(sensing, **cut)), (0, 0, 300)),
+        ((1, 75, 100, dict(sensing, **cut)), (0, 0, 400)),
+        ((2, 75, 70, dict(sensing, **cut)), (1, 40, 400)),
+        ((2, 75, 40, dict(sensing, **cut)), (1, 75, 400)),
+        ((2, 75, 20, dict(sensing, **cut)), (2, 75, 350)),
+        ((2, 75, 10, dict(sensing, **cut)), (2, 75, 300)),
+        ((2, 75, 10, dict(sensing, **cut)), (2, 75, 300)),
+    ]
+    at_ms = 6000
+    tick_ms: list[int] = []
+    for (lane_1, x_1, y_1, extra_1), (lane_2, x_2, y_2) in track:
+        clock.now += DEMO_STATUS_EVERY_MS / 1000.0
+        since = len(sio.events)
+        supervisor.handle_control(telemetry("drone-2", lane_2, x_2, y_2))
+        supervisor.handle_control(telemetry("drone-1", lane_1, x_1, y_1, **extra_1))
+        status_now(since, at_ms)
+        tick_ms.append(at_ms)
+        at_ms += DEMO_STATUS_EVERY_MS
+
+    # drone-2 sees a person on its way up lane 0; the shared map gets the detection.
+    since = len(sio.events)
+    supervisor.handle_detections(DetectionMessage(
+        timestamp=1000.0, frame_id=77, frame_width=960, frame_height=720, drone_id="drone-2",
+        rel_x_cm=0.0, rel_y_cm=380.0,
+        detections=[Detection(bbox=(400, 300, 460, 420), confidence=0.81, crop_jpeg=TINY_JPEG)],
+    ))
+    emitted(since, tick_ms[4] + 500)
+
+    # The same person scores as a possible match; the ground's reasoning confirms it six seconds later.
+    with clean_app_state() as app_module, \
+            mock.patch.object(app_module.time, "strftime", lambda fmt, *a: "10:00:21"), \
+            _reasoning_alert_path(app_module) as fire:
+        alert_sio, latch = fire(_scripted_agent(VERDICT_REPLIES["match"]), drone_id="drone-2")
+        alert = alert_sio.last("match_alert")
+        add(tick_ms[5] + 500, "match_alert", alert)
+        add(tick_ms[5] + 6500, "reasoning_result", alert_sio.last("reasoning_result"))
+        add(tick_ms[5] + 6600, "alert_upgrade", alert_sio.last("alert_upgrade"))
+        # The operator confirms on the laptop (the confirm recovery sequence is stubbed; nothing flies).
+        resolved = _resolve_alert(recovery_module, latch, alert_sio, alert["alert_id"], "confirm")
+        add(tick_ms[9] + 500, "match_alert_resolved", resolved)
+
+    # LAND ALL from the laptop, then the drones report that they landed.
+    at_ms = tick_ms[-1] + DEMO_STATUS_EVERY_MS
+    clock.now += DEMO_STATUS_EVERY_MS / 1000.0
+    since = len(sio.events)
+    supervisor.land_all()
+    emitted(since, at_ms)
+    for _ in range(3):
+        at_ms += DEMO_STATUS_EVERY_MS
+        clock.now += DEMO_STATUS_EVERY_MS / 1000.0
+        since = len(sio.events)
+        supervisor.handle_control(telemetry("drone-2", None, 75, 300, flying=False))
+        supervisor.handle_control(telemetry("drone-1", None, 75, 10, flying=False, **dict(sensing, **cut)))
+        status_now(since, at_ms)
+    landed = supervisor.status_payload()
+    steps.sort(key=lambda step: step["at_ms"])  # stable: events at the same time keep their order
+
+    scenario = {
+        "steps": steps,
+        "state": {
+            "detection_profiles": payload_of("detection_profiles.json", "standby_controls_disabled"),
+            "ceiling_settings": payload_of("ceiling_settings.json", "on_ground_in_sync"),
+            "reasoning_provider": payload_of("reasoning_provider.json", "cloud_allowed"),
+            "manual_status": manual_status,
+        },
+        "replies": {
+            "land_all": [
+                {"event": "land_all_ack", "payload": payload_of("land_all_ack.json", "fleet_reached_all")},
+                {"event": "fleet_event", "payload": payload_of("fleet_event.json", "land_all")},
+            ],
+            "drone_command": [
+                {"event": "manual_ack", "payload": payload_of("manual_ack.json", "land_ok")},
+                {"event": "manual_result", "payload": payload_of("manual_result.json", "land_acked")},
+            ],
+            "manual_resume_search": [
+                {"event": "manual_ack", "payload": payload_of("manual_ack.json", "resume_search_ok")},
+                {"event": "manual_result", "payload": payload_of("manual_result.json", "resume_search_acked")},
+            ],
+        },
+        "landed_fleet_status": landed,
+    }
+    return document(
+        "A timed two-drone mission for the phones' demo mode: the fleet on the ground, the plan, the start, the "
+        "drones flying their lanes, an obstacle cut, a detection, a person-match alert that later gets a reasoning "
+        "verdict and an upgrade, the operator's confirm on the laptop, LAND ALL and the landing. Every payload "
+        "comes from the real ground code or from another fixture file.",
+        ["FleetSupervisor.plan", "FleetSupervisor.start", "FleetSupervisor.handle_control",
+         "FleetSupervisor.status_payload", "FleetSupervisor.handle_detections", "FleetSupervisor.land_all",
+         "flightrisk.dashboard.app._edge_process_and_emit", "flightrisk.dashboard.alerts._gemma_worker",
+         "flightrisk.dashboard.recovery.handle_alert_response"],
+        {
+            "scenario": case(
+                None, "reference", scenario,
+                "Demo mode only. A phone replays steps in order on its own clock (at_ms from the start of the demo), "
+                "each as if the ground had sent that Socket.IO event. It answers get_detection_profiles, "
+                "get_ceiling_settings, get_reasoning_provider and get_manual_status from state, and "
+                "get_fleet_status with the latest fleet_status and fleet_plan it replayed. It answers land_all, "
+                "drone_command and manual_resume_search locally with the events in replies (drone_command and "
+                "manual_resume_search with drone_id replaced by the commanded drone). After the last step, or "
+                "after a demo LAND ALL, landed_fleet_status is the fleet at rest. In demo mode a phone never opens "
+                "a network connection and never sends a command anywhere.",
+            ),
+        },
+        duration_ms=steps[-1]["at_ms"],
+    )
+
+
+# ---------------------------------------------------------------------------
 # detection_profiles, ceiling_settings, reasoning_provider
 # ---------------------------------------------------------------------------
 
@@ -1704,6 +2148,8 @@ UNKNOWN_KEY_SOURCES = {
     "detection_profiles": ("detection_profiles.json", "refused"),
     "ceiling_settings": ("ceiling_settings.json", "edge_refused"),
     "reasoning_provider": ("reasoning_provider.json", "local_gemma_cloud_blocked"),
+    "reasoning_result": ("reasoning_result.json", "match"),
+    "alert_upgrade": ("alert_upgrade.json", "confirmed_match"),
     "manual_status": ("manual_status.json", "held_orphan_countdown"),
     "manual_ack": ("manual_ack.json", "land_ok"),
     "manual_result": ("manual_result.json", "land_acked"),
@@ -1862,6 +2308,15 @@ def build_all() -> dict[str, dict]:
         files["nack_reasons.json"] = build_nack_reasons()
         files["client_emits.json"] = build_client_emits()
         files["match_score_vectors.json"] = build_match_score_vectors()
+        # Built last, so the seeded alert ids of the files above stay what they were.
+        verdicts = build_alert_verdicts()
+        files["match_alert.json"]["cases"].update(verdicts.pop("match_alert_cases"))
+        files["match_alert.json"]["_meta"]["sources"] = sorted(
+            set(files["match_alert.json"]["_meta"]["sources"])
+            | {"flightrisk.dashboard.alerts._gemma_worker", "flightrisk.dashboard.alerts.resolve_reasoning"}
+        )
+        files.update(verdicts)
+        files["demo_scenario.json"] = build_demo_scenario(files)
     files["unknown_keys.json"] = build_unknown_keys(files)
     return files
 

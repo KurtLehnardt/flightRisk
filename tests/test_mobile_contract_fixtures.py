@@ -17,6 +17,7 @@ Nothing here contacts a drone, an edge or a running ground station.
 """
 from __future__ import annotations
 
+import itertools
 import json
 import re
 import subprocess
@@ -31,6 +32,7 @@ ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "tests" / "fixtures" / "mobile_contract"
 SCRIPT = ROOT / "scripts" / "export_mobile_contract_fixtures.py"
 DOC = ROOT / "docs" / "mobile-contract.md"
+DEMO_ASSET = ROOT / "mobile" / "app" / "src" / "main" / "assets" / "demo" / "demo_scenario.json"
 UI_JS = ROOT / "flightrisk" / "dashboard" / "static" / "ui" / "ui.js"
 
 #: The file and case names the apps reference. Renaming one breaks both apps, so it must break here too.
@@ -54,7 +56,15 @@ REQUIRED_CASES = {
     "fleet_plan.json": {"two_drones", "map_plan_lost_zone_uncovered"},
     "fleet_detection.json": {"new_detection"},
     "frame.json": {"edge_video_with_match", "edge_detections_only"},
-    "match_alert.json": {"edge_match", "reminder_on_connect", "resolved_dismiss", "resolved_confirm"},
+    "match_alert.json": {
+        "edge_match", "reminder_on_connect", "resolved_dismiss", "resolved_confirm", "edge_match_awaiting_reasoning",
+        "reminder_with_verdict",
+    },
+    "reasoning_result.json": {
+        "match", "no_match", "uncertain", "error", "error_with_detail", "skipped", "description_check",
+    },
+    "alert_upgrade.json": {"confirmed_match"},
+    "demo_scenario.json": {"scenario"},
     "detection_profiles.json": {"pending", "fallback", "refused", "unsupported", "standby_controls_disabled", "no_board"},
     "ceiling_settings.json": {
         "on_ground_in_sync", "edge_pending", "edge_refused", "slot_above_limit", "locked_in_flight", "unavailable",
@@ -315,6 +325,94 @@ def test_unknown_key_variants_differ_only_by_the_unknown_key():
 
 
 # ---------------------------------------------------------------------------
+# The reasoning verdict and the demo scenario
+# ---------------------------------------------------------------------------
+
+LEVEL_RANK = {"no_match": 0, "weak_signal": 1, "possible_match": 2, "confirmed_match": 3}
+
+
+def test_verdict_events_carry_no_image_and_are_keyed_by_the_alert():
+    alerts = _load(FIXTURES / "match_alert.json")["cases"]
+    verdicts = _load(FIXTURES / "reasoning_result.json")["cases"]
+    upgrade = _load(FIXTURES / "alert_upgrade.json")["cases"]["confirmed_match"]["payload"]
+    awaiting = alerts["edge_match_awaiting_reasoning"]["payload"]
+    assert awaiting["gemma_confidence"] == "pending" and awaiting["reasoning"] == "Awaiting Claude reasoning..."
+    assert verdicts["match"]["payload"]["alert_id"] == awaiting["alert_id"] == upgrade["alert_id"]
+    assert LEVEL_RANK[upgrade["new_level"]] > LEVEL_RANK[awaiting["alert_level"]]
+    reminder = alerts["reminder_with_verdict"]["payload"]
+    assert reminder["alert_id"] == awaiting["alert_id"]
+    assert (reminder["gemma_confidence"], reminder["gemma_match"], reminder["alert_level"]) == ("high", True, "confirmed_match")
+    expected_confidence = {
+        "match": "high", "no_match": "high", "uncertain": "low", "error": "error", "error_with_detail": "error",
+        "skipped": "skipped", "description_check": "medium",
+    }
+    ids = set()
+    for name, entry in verdicts.items():
+        payload = entry["payload"]
+        assert entry["event"] == "reasoning_result"
+        assert set(payload["result"]) == {"match", "confidence", "reasoning"}, name
+        assert payload["result"]["confidence"] == expected_confidence[name], name
+        if name == "description_check":
+            assert payload["type"] == "description" and "alert_id" not in payload
+        else:
+            assert set(payload) == {"alert_id", "result", "track_id", "type"} and payload["type"] == "analyze", name
+            ids.add(payload["alert_id"])
+    assert len(ids) == 6, "each analyze case is its own alert"
+    assert verdicts["error"]["payload"]["result"]["reasoning"] == ""
+    assert set(upgrade) == {"alert_id", "new_level", "reasoning", "track_id"}
+    for doc in ("reasoning_result.json", "alert_upgrade.json"):
+        text = (FIXTURES / doc).read_text(encoding="utf-8")
+        assert "/9j/" not in text and "snapshot" not in text, doc
+
+
+def test_demo_scenario_is_a_timed_mission_of_contract_events():
+    from flightrisk.dashboard.app import socketio
+
+    doc = _load(FIXTURES / "demo_scenario.json")
+    scenario = doc["cases"]["scenario"]["payload"]
+    steps = scenario["steps"]
+    times = [step["at_ms"] for step in steps]
+    assert times == sorted(times) and times[0] == 0
+    assert doc["_meta"]["duration_ms"] == times[-1] and 40_000 <= times[-1] <= 90_000
+    assert len(steps) <= 40
+    events = [step["event"] for step in steps]
+    for needed in ("status", "fleet_status", "fleet_plan", "fleet_event", "fleet_detection", "match_alert",
+                   "reasoning_result", "alert_upgrade", "match_alert_resolved"):
+        assert needed in events, needed
+    kinds = [step["payload"].get("event") for step in steps if step["event"] == "fleet_event"]
+    assert kinds.index("start") < kinds.index("lane_blocked") < kinds.index("land_all")
+    alert = next(step for step in steps if step["event"] == "match_alert")
+    verdict = next(step for step in steps if step["event"] == "reasoning_result")
+    upgrade = next(step for step in steps if step["event"] == "alert_upgrade")
+    assert alert["payload"]["alert_id"] == verdict["payload"]["alert_id"] == upgrade["payload"]["alert_id"]
+    assert alert["at_ms"] < verdict["at_ms"] <= upgrade["at_ms"]
+    assert verdict["payload"]["result"]["match"] is True
+    # Drones fly between the start and LAND ALL, and are on the ground at the end.
+    flying = [step for step in steps if step["event"] == "fleet_status"
+              and all(d["is_flying"] for d in step["payload"]["drones"].values())]
+    assert len(flying) >= 5
+    assert all(not d["is_flying"] for d in scenario["landed_fleet_status"]["drones"].values())
+    assert all(not d["is_flying"] for d in steps[-1]["payload"]["drones"].values())
+    # Gaps stay inside the phones' 30 s fleet_status freshness limit.
+    status_times = [step["at_ms"] for step in steps if step["event"] == "fleet_status"]
+    assert max(b - a for a, b in itertools.pairwise(status_times)) < 30_000
+    assert set(scenario["state"]) == {"detection_profiles", "ceiling_settings", "reasoning_provider", "manual_status"}
+    assert set(scenario["replies"]) == {"land_all", "drone_command", "manual_resume_search"}
+    assert set(scenario["replies"]) <= set(ALLOWED)
+    handled = set(socketio.server.handlers["/"])
+    assert set(scenario["replies"]) <= handled
+
+
+def test_the_android_demo_asset_is_the_fixture():
+    """The Android app ships a copy of demo_scenario.json; it must be the fixture (copy it after a regenerate)."""
+    assert DEMO_ASSET.is_file(), f"missing {DEMO_ASSET}; copy tests/fixtures/mobile_contract/demo_scenario.json there"
+    assert _without_commit(_load(DEMO_ASSET)) == _without_commit(_load(FIXTURES / "demo_scenario.json")), (
+        "the Android demo asset differs from the fixture; run: cp tests/fixtures/mobile_contract/demo_scenario.json "
+        "mobile/app/src/main/assets/demo/demo_scenario.json"
+    )
+
+
+# ---------------------------------------------------------------------------
 # No secrets
 # ---------------------------------------------------------------------------
 
@@ -354,7 +452,7 @@ def test_spec_names_every_fixture_file_and_event():
     text = DOC.read_text(encoding="utf-8")
     for name in REQUIRED_CASES:
         assert f"tests/fixtures/mobile_contract/{name}" in text or f"`{name}`" in text, name
-    for event in ALLOWED | NEVER:
+    for event in ALLOWED | NEVER | {"reasoning_result", "alert_upgrade", "match_alert_resolved"}:
         assert f"`{event}`" in text, event
     for secret_name in ("FLIGHTRISK_DASHBOARD_API_KEY", "FLIGHTRISK_EDGE_TOKEN", "FLIGHTRISK_CLAUDE_API_KEY"):
         assert secret_name in text

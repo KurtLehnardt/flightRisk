@@ -1,0 +1,121 @@
+{
+  "_meta": {
+    "description": "The 'reasoning_result' event: the ground's reasoning verdict (Claude or Gemma) on a match alert, keyed by alert_id. Sent to every Socket.IO client, phones included. It carries no image and no key.",
+    "file": "reasoning_result.json",
+    "generated_at_commit": "3d79bc28f2f9ee66a84cbdb29b42cfff9c224974",
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "flightrisk.dashboard.alerts._gemma_worker",
+      "flightrisk.dashboard.alerts.resolve_reasoning",
+      "flightrisk.reasoning.agent.FlightRiskAgent.analyze_match",
+      "flightrisk.reasoning.agent.FlightRiskAgent.match_description"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "description_check": {
+      "direction": "server_to_client",
+      "event": "reasoning_result",
+      "notes": "A check of a detection against the typed description, not tied to an alert: type 'description' and no alert_id. Phones ignore a reasoning_result without alert_id or whose type is not 'analyze'.",
+      "payload": {
+        "result": {
+          "confidence": "medium",
+          "match": false,
+          "reasoning": "The person wears a white shirt, not a red jacket."
+        },
+        "track_id": "8_7",
+        "type": "description"
+      }
+    },
+    "error": {
+      "direction": "server_to_client",
+      "event": "reasoning_result",
+      "notes": "The reasoning call failed in the worker: confidence 'error', match false, empty reasoning. Show a neutral note ('AI check unavailable'), never an alarm, and no rationale.",
+      "payload": {
+        "alert_id": "00000000000040008000000000000035",
+        "result": {
+          "confidence": "error",
+          "match": false,
+          "reasoning": ""
+        },
+        "track_id": "8_7",
+        "type": "analyze"
+      }
+    },
+    "error_with_detail": {
+      "direction": "server_to_client",
+      "event": "reasoning_result",
+      "notes": "The model call failed inside the agent, which reports confidence 'error' with the failure text as reasoning. A phone shows the same neutral note as for 'error' and never shows this text.",
+      "payload": {
+        "alert_id": "00000000000040008000000000000036",
+        "result": {
+          "confidence": "error",
+          "match": false,
+          "reasoning": "Claude declined this request (policy)"
+        },
+        "track_id": "8_7",
+        "type": "analyze"
+      }
+    },
+    "match": {
+      "direction": "server_to_client",
+      "event": "reasoning_result",
+      "notes": "The verdict for match_alert.json case edge_match_awaiting_reasoning (same alert_id): result.match true, confidence high. Show the verdict, the confidence and the rationale (result.reasoning, truncated and escaped) on that alert. type is 'analyze'.",
+      "payload": {
+        "alert_id": "00000000000040008000000000000032",
+        "result": {
+          "confidence": "high",
+          "match": true,
+          "reasoning": "Same red jacket, blue jeans and grey backpack as the reference photo."
+        },
+        "track_id": "8_7",
+        "type": "analyze"
+      }
+    },
+    "no_match": {
+      "direction": "server_to_client",
+      "event": "reasoning_result",
+      "notes": "The model says the person does not match (match false, confidence high). The alert keeps its level; no alert_upgrade follows.",
+      "payload": {
+        "alert_id": "00000000000040008000000000000033",
+        "result": {
+          "confidence": "high",
+          "match": false,
+          "reasoning": "The jacket is green, not red, and there is no backpack."
+        },
+        "track_id": "8_7",
+        "type": "analyze"
+      }
+    },
+    "skipped": {
+      "direction": "server_to_client",
+      "event": "reasoning_result",
+      "notes": "The operator answered the alert before its check ran, so the model was never called: confidence 'skipped'. Show a neutral note ('AI check skipped'), not the reasoning text.",
+      "payload": {
+        "alert_id": "00000000000040008000000000000037",
+        "result": {
+          "confidence": "skipped",
+          "match": false,
+          "reasoning": "AI check skipped: alert was already answered."
+        },
+        "track_id": "8_7",
+        "type": "analyze"
+      }
+    },
+    "uncertain": {
+      "direction": "server_to_client",
+      "event": "reasoning_result",
+      "notes": "An uncertain verdict (match true, confidence low). Only high and medium matches raise a level, so no alert_upgrade follows.",
+      "payload": {
+        "alert_id": "00000000000040008000000000000034",
+        "result": {
+          "confidence": "low",
+          "match": true,
+          "reasoning": "The jacket colour is similar, but the crop is too small to compare anything else."
+        },
+        "track_id": "8_7",
+        "type": "analyze"
+      }
+    }
+  }
+}
