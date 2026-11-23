@@ -55,6 +55,7 @@ from flightrisk.drone.obstacle_sensor import (
     TELEMETRY_CUTS_TOTAL,
     TELEMETRY_FIELDS,
     TELEMETRY_LATENCY_MS,
+    TELEMETRY_MIN_SAFE_DEPTH,
     TELEMETRY_PERSON_CUE,
     TELEMETRY_SENSING,
     TELEMETRY_SENSOR_OK,
@@ -397,8 +398,8 @@ def test_every_step_is_gated_and_the_drone_turns_to_face_each_lane(rigs):
         TELEMETRY_CUTS_TOTAL: 0,
         TELEMETRY_CUT_REASONS: "",
     }
-    # Every field but the person cue, which only a sensor with one (the camera sensor) reports.
-    assert set(status) == set(TELEMETRY_FIELDS) - {TELEMETRY_PERSON_CUE}
+    # Every field but the person cue and the depth threshold, which only a sensor with them (the camera sensor) reports.
+    assert set(status) == set(TELEMETRY_FIELDS) - {TELEMETRY_PERSON_CUE, TELEMETRY_MIN_SAFE_DEPTH}
 
 
 def test_each_gate_judges_a_view_newer_than_the_last_move_or_turn(rigs):

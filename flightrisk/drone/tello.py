@@ -2064,6 +2064,59 @@ class TelloController:
         self._set_measured("height", height)
         return height
 
+    def query_temperature(self, timeout_s: float = 2.5, late_reply_s: float = 0.5) -> str | None:
+        """Ask the Tello ``temp?`` once and return its reply text, or None when there is none.
+
+        The read-only query of the takeoff preflight; ``flightrisk.drone.temp_preflight`` parses
+        the reply (for example ``53~56C``). It is sent and read the way the launcher's drone probe
+        sends ``battery?`` and ``temp?`` (``flightrisk.launcher.preflight._ask``): queued replies are
+        dropped first, and a bare ``ok``, the late acknowledgement of an earlier command and not the
+        value asked for, is skipped. Like the keepalive it holds ``_cmd_lock`` for the whole exchange,
+        so its reply is never read as another command's; it waits up to ``_KEEPALIVE_WAIT_S`` for the
+        channel. When no value comes within ``timeout_s`` it keeps the channel up to ``late_reply_s``
+        longer and drops a reply that arrives then, so the takeoff that follows cannot read a late
+        temperature as its own answer. Nothing is sent, and None is returned, when the channel stays
+        busy or a land is in progress or unconfirmed. Never retried; the drone link status is not
+        changed. Raises only when the send itself fails.
+        """
+        deadline = time.monotonic() + _KEEPALIVE_WAIT_S
+        while True:
+            with self._owner_lock:
+                if self._cmd_lock.acquire(blocking=False):
+                    break
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(_REPLY_POLL_S)
+        try:
+            tello = self.tello
+            responses = tello.get_own_udp_object()["responses"]
+            if not self._wait_command_gap_unless_landing():
+                return None
+            with self._wire_lock:
+                if self._lands_in_progress or self._land_unconfirmed:
+                    return None
+                del responses[:]
+                tello.send_command_without_return("temp?")
+            # A land that starts meanwhile ends the wait at once, so it gets the channel.
+            landing = lambda: bool(self._lands_in_progress)  # noqa: E731
+            end = time.monotonic() + timeout_s
+            while True:
+                left = end - time.monotonic()
+                if left <= 0 or landing():
+                    break
+                reply = self._await_reply(responses, left, stop_waiting=landing)
+                if reply is None:
+                    break
+                if reply.lower() != "ok":
+                    return reply
+            # No value in time: a reply that is only a little late is read and dropped here.
+            if not landing():
+                self._await_reply(responses, late_reply_s, stop_waiting=landing)
+            return None
+        finally:
+            with self._owner_lock:
+                self._cmd_lock.release()
+
     def _set_measured(self, field: str, value) -> None:
         """Store a value read from the drone in ``state.<field>`` and stamp when it was read.
 

@@ -94,6 +94,7 @@ from flightrisk.drone.obstacle_sensor import (
     TELEMETRY_CUTS_TOTAL,
     TELEMETRY_FIELDS,
     TELEMETRY_LATENCY_MS,
+    TELEMETRY_MIN_SAFE_DEPTH,
     TELEMETRY_PERSON_CUE,
     TELEMETRY_SENSING,
     TELEMETRY_SENSOR_OK,
@@ -101,6 +102,7 @@ from flightrisk.drone.obstacle_sensor import (
     TELEMETRY_STATE,
 )
 from flightrisk.drone.plan_paths import closest_approach
+from flightrisk.drone.temp_preflight import TELEMETRY_TEMP, temp_status
 from flightrisk.drone.search import split_parallel_track_zones
 
 logger = logging.getLogger(__name__)
@@ -900,6 +902,14 @@ class FleetCoordinator:
                         uncovered = self._obstacle_uncovered_locked()
                     entry["uncovered_cm"] = sum(u["distance_cm"] for u in uncovered if u["drone_id"] == drone_id)
                     entry["reflights"] = self._reflight_counts_locked(drone_id)
+                    # The camera sensor's depth threshold, only from an edge that reports one.
+                    depth = _number(telemetry.get(TELEMETRY_MIN_SAFE_DEPTH))
+                    if depth is not None and depth > 0:
+                        entry[TELEMETRY_MIN_SAFE_DEPTH] = depth
+                # The temperature check before the drone's last takeoff, only from an edge that made one.
+                temp = temp_status(telemetry.get(TELEMETRY_TEMP))
+                if temp is not None:
+                    entry[TELEMETRY_TEMP] = temp
                 rel_x = _number(telemetry.get("rel_x_cm"))
                 rel_y = _number(telemetry.get("rel_y_cm"))
                 if rel_x is not None and rel_y is not None:

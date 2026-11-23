@@ -541,6 +541,10 @@ class FlightSequenceMixin:
         sensor, an autonomous takeoff is also refused (``drone_unreachable``,
         detail ``TAKEOFF_SENSE_DETAIL ...``) unless one probe look right
         before it sees a fresh, valid view (``_takeoff_sense_refusal``).
+        After the battery check, a Tello is asked its temperature, and one
+        at or above the refusal level is refused (``drone_unreachable`` with
+        the operator text; ``_takeoff_temp_refusal``); a reading that could
+        not be taken only warns.
         """
         link = self._drone_link()
         if link is not None and not link.ok:
@@ -581,6 +585,10 @@ class FlightSequenceMixin:
                 min_takeoff_battery=self.envelope.min_takeoff_battery,
             )
             return "battery"
+        too_hot = self._takeoff_temp_refusal()
+        if too_hot is not None:
+            self._unreachable_detail = too_hot
+            return "drone_unreachable"
         if self.envelope.link_lost():
             # The ground went silent while the start was pending; the
             # watchdog would land the drone straight away, so do not lift.

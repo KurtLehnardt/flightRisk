@@ -211,6 +211,10 @@ TELEMETRY_PERSON_CUE = "obstacle_person_cue"
 #: Keys of ``TELEMETRY_PERSON_CUE``.
 PERSON_CUE_DOWN_KEY = "person_cue_down"
 PERSON_CUE_AGE_KEY = "detection_age_s"
+#: The depth threshold the camera sensor was started with
+#: (``FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH``), for a sensor that has one, so the
+#: dashboard shows the value in force on each drone.
+TELEMETRY_MIN_SAFE_DEPTH = "obstacle_min_safe_depth"
 TELEMETRY_FIELDS = (
     TELEMETRY_SENSING,
     TELEMETRY_SENSOR_OK,
@@ -221,6 +225,7 @@ TELEMETRY_FIELDS = (
     TELEMETRY_CUTS_TOTAL,
     TELEMETRY_CUT_REASONS,
     TELEMETRY_PERSON_CUE,
+    TELEMETRY_MIN_SAFE_DEPTH,
 )
 #: The executor keeps and reports this many of the latest cuts.
 MAX_CUTS_LISTED = 8

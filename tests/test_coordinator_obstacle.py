@@ -621,6 +621,7 @@ def full_obstacle_fields(pairs=MAX_CUTS_LISTED):
         "obstacle_latency_ms": 212.5, "obstacle_seq": 11, "obstacle_cuts": cuts,
         "obstacle_cuts_total": 11, "obstacle_cut_reasons": ",".join([CUT_SENSOR_STALE] * pairs),
         "obstacle_person_cue": {"person_cue_down": True, "detection_age_s": 4.25},
+        "obstacle_min_safe_depth": 0.77,
     }
 
 

@@ -603,6 +603,28 @@ $env:FLIGHTRISK_EDGE_FRAME_STRIDE = "2"
 python -m flightrisk.edge_device --source tello --drone-id drone-1 ...
 ```
 
+## Takeoff temperature check
+
+A Tello has no fan. Powered on and not flying, it heats up until it switches itself off; in flight the propellers cool it. Before every takeoff (`start_at`, the dashboard's takeoff and the operator's manual takeoff) a Tello edge therefore asks the drone `temp?`, a read-only SDK query sent and read like the launcher probe's `battery?` and `temp?`. The reply is the main board's lowest and highest temperature in degrees Celsius, for example `53~56C`, and the highest value is judged:
+
+| Reading (highest value) | What the edge does |
+|---|---|
+| below the warn level | logs `edge_temp_preflight` (INFO) and takes off |
+| at or above `FLIGHTRISK_TELLO_TEMP_WARN_C` (default 90) | logs `edge_temp_preflight` (WARNING) and takes off; the drone card shows `HOT` |
+| at or above `FLIGHTRISK_TELLO_TEMP_REFUSE_C` (default 95) | refuses the takeoff with nothing sent; the dashboard shows `Start refused: drone-1: Takeoff refused: drone-1 reports 96 to 98 C, ...` and the card `TOO HOT` |
+| no reply, a malformed reply, or a query that failed | logs `edge_temp_preflight` (WARNING, level `unknown`) and takes off: an unreadable temperature never refuses |
+
+Both levels are whole degrees from 40 to 120, read when the edge starts; the refusal level can be `off` (warn only) and may not be below the warn level, and anything else refuses to start the edge. The reading of the last check rides in the edge's telemetry as `temp_preflight` (`level`, `low_c`, `high_c`, `warn_c`, `refuse_c`, `detail`) and shows in the drone card's Temp item. A MAVLink drone and the fake drone are not asked.
+
+When a takeoff is refused: take the battery out, or set the drone on a fan, until `temp?` (the launcher's "Check drones" shows it) reads well under the warn level, then press Start again. Power the drones on shortly before a flight rather than early.
+
+Why these defaults. No Ryze or DJI document gives a shutdown temperature, so the defaults rest on the documented range and on reported shutdowns:
+
+- The Tello SDK 1.3 documents `temp?` as "get temperature (°C), x: 0-90" ([Tello SDK 1.3.0.0](https://dl-cdn.ryzerobotics.com/downloads/tello/20180910/Tello%20SDK%20Documentation%20EN_1.3.pdf); djitellopy's `query_temperature` repeats the 0-90 range). SDK 2.0 and 3.0 describe the state packet's `templ` and `temph` as the lowest and highest main board temperature, and SDK 3.0's Motor-On mode exists "to avoid shutdown caused by excessive temperatures", with no number ([SDK 2.0](https://dl-cdn.ryzerobotics.com/downloads/Tello/Tello%20SDK%202.0%20User%20Guide.pdf), [SDK 3.0](https://dl.djicdn.com/downloads/RoboMaster+TT/Tello_SDK_3.0_User_Guide_en.pdf)). The warn level is the top of that documented range, 90.
+- A logged Tello at rest reached 95 °C after ten minutes and switched itself off ([Martin's Modell Blog, 2020](http://modellflug-martinpi.blogspot.com/2020/02/kuhlen-kopter-bewahren.html)). Experiments with a Tello EDU report that it no longer takes off above about 100 °C and shuts down above about 105 °C ([dronemaster](https://pypi.org/project/dronemaster/)). The refusal level is the lowest of those reported shutdown points, 95.
+- That an idle Tello overheats and switches off within minutes is widely reported ([MathWorks](https://ch.mathworks.com/help/matlab/supportpkg/ryze-tello-shuts-down-when-idle.html), [dji-sdk/Tello-Python#30](https://github.com/dji-sdk/Tello-Python/issues/30), [TelloPilots](https://tellopilots.com/threads/overheating-at-rest.238/)).
+- Healthy drones read high at rest: 89 to 91 °C in a published state packet ([Idziak, 2021](https://pawelidziak.medium.com/2-state-video-control-the-tello-drone-node-js-typescript-javascript-933a9b2724a6)), and 91 to 93, 74 to 76 and 86 to 88 °C on our drone-1 and 53 to 56 °C on drone-2 while only powered on. A refusal at 70 °C would ground drone-1 at rest, so it is not the default; set `FLIGHTRISK_TELLO_TEMP_WARN_C=60` and `FLIGHTRISK_TELLO_TEMP_REFUSE_C=70` for that behaviour.
+
 ## Observability (optional)
 
 To watch both laptops in Grafana, start the stack on the Mac and export these before running the launchers (details, and the cable bind for the Windows laptop, in `observability/README.md`, "Two laptops on the Thunderbolt cable"):

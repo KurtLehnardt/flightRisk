@@ -156,6 +156,29 @@ ceiling, the margin and each drone's altitude slot from the window, then starts 
 | Language model | off adds `--no-llm` to the ground (the default) |
 | Ports | the ground's `--port` and `--edge-port`; the dashboard always binds 127.0.0.1 |
 | Observability export | `FLIGHTRISK_OTEL_ENABLED`, `OTEL_ENDPOINT` and `OTEL_RESOURCE_ATTRIBUTES` per process; an endpoint on port 4318 uses OTLP over HTTP, anything else OTLP over gRPC |
+| Obstacle sensing mode | the edges' `FLIGHTRISK_OBSTACLE_SENSING`: `required` (the default) or `off`. Choosing `off` asks first, and Start asks again for a mode that was not confirmed in this window (see "Obstacle sensing") |
+| Min safe depth | the edges' `FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH`, 0.05 to 0.9 (default 0.35; the outdoor field calibration needed 0.77). A value above the default is a warning: the depth cue then stops only for closer obstacles |
+
+### Obstacle sensing
+
+The two obstacle settings reach only the edges this launcher starts (a ground with every edge on another computer
+does not use them; each edge computer's own launcher does). An edge reads them once, when it starts, so a change
+**applies on the next Start**; the window says so, and while processes run it also shows the values the running edges
+were started with. The dashboard shows what each edge actually uses: the `SENSE` badge for the mode and a `DEPTH`
+badge (next to `PERSON CUE`) for the threshold.
+
+Precedence: `FLIGHTRISK_OBSTACLE_SENSING` or `FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH` in the launcher's own environment
+wins over the window, so a shell or script that sets them keeps working. The window shows the effective value and
+where it comes from, disables the control the environment overrides, and lists the variable among the inherited
+ones. An inherited value the edge would refuse (a mode other than `required` or `off`, a depth outside 0.05 to 0.9)
+is an error that blocks Start. An empty variable counts as unset.
+
+Weaker sensing is never started silently. When the effective mode is not `required` (from the window or from the
+environment) and an edge starts here, `POST /api/start` answers 409 with `needs_confirmation: "obstacle_sensing"`,
+the `mode` and a full-sentence warning, before any drone is probed or any process starts. The window shows that
+warning and, on the operator's yes, sends the start again with `confirm_sensing` set to exactly that mode; any other
+value is no confirmation. Loading a preset or reloading the window forgets the confirmation. The confirmed start is
+recorded in the window's event log.
 
 The ground also gets `--appearance-only`, `FLIGHTRISK_APPEARANCE_ONLY=1`, `FLIGHTRISK_SAVE_CAPTURES=0`
 and `FLIGHTRISK_FLEET_NET` (`ap` in layout A, so it refuses any bind address that is not a literal;

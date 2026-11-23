@@ -12,12 +12,21 @@ A ``LauncherSettings`` describes what this computer runs:
 ``validate`` returns every problem as an ``Issue``; an issue of level
 ``error`` blocks the start. Presets are stored in ``~/.flightrisk/launcher.json``
 (``FLIGHTRISK_LAUNCHER_FILE`` overrides the path) and never contain the edge token.
+
+The obstacle sensing mode and depth threshold (``obstacle_sensing``,
+``obstacle_min_safe_depth``) reach the edges this launcher starts as
+``FLIGHTRISK_OBSTACLE_SENSING`` and ``FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH``. The
+same variable in the launcher's own environment wins over the window's setting
+(``effective_obstacle`` says which applies and why), so a shell or script that
+sets it keeps working. An edge reads them once, at its start: a change applies
+on the next Start.
 """
 
 from __future__ import annotations
 
 import ipaddress
 import json
+import math
 import os
 import re
 import sys
@@ -27,6 +36,14 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from flightrisk.drone.obstacle_sensor import (
+    ENV_OBSTACLE_MIN_SAFE_DEPTH,
+    ENV_OBSTACLE_SENSING,
+    OBSTACLE_MIN_SAFE_DEPTH,
+    OBSTACLE_MIN_SAFE_DEPTH_RANGE,
+    SENSING_ENV_OFF,
+    SENSING_ENV_REQUIRED,
+)
 from flightrisk.drone.safety import (
     MAX_ALT_SLOT_CM,
     MIN_ALT_SLOT_CM,
@@ -52,6 +69,13 @@ DEFAULT_MARGIN_CM = 60
 DEFAULT_OTEL_ENDPOINT = "http://localhost:4317"
 #: The coordinator's altitude slots for zones in turn, so an edge starts at the slot it is planned at.
 DEFAULT_SLOTS_CM = (100, 130)
+#: The edge's ``FLIGHTRISK_OBSTACLE_SENSING`` values, ``required`` (the default) first.
+OBSTACLE_SENSING_MODES = (SENSING_ENV_REQUIRED, SENSING_ENV_OFF)
+#: Decimals kept of a min safe depth from the window; the edge reads a plain decimal number.
+_DEPTH_DECIMALS = 3
+#: A plain ASCII decimal, as the edge accepts it (``edge_device._ASCII_FLOAT_RE``): no ``5_0``,
+#: non-ASCII digits, ``nan`` or ``inf``.
+_ASCII_FLOAT_RE = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
 MIN_PORT = 1024
 MAX_PORT = 65535
 LAUNCHER_FILE_ENV = "FLIGHTRISK_LAUNCHER_FILE"
@@ -118,6 +142,10 @@ class LauncherSettings:
     llm: bool = False
     otel_enabled: bool = False
     otel_endpoint: str = DEFAULT_OTEL_ENDPOINT
+    #: ``FLIGHTRISK_OBSTACLE_SENSING`` of the edges started here: ``required`` or ``off``.
+    obstacle_sensing: str = SENSING_ENV_REQUIRED
+    #: ``FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH`` of the edges started here (``OBSTACLE_MIN_SAFE_DEPTH_RANGE``).
+    obstacle_min_safe_depth: float = OBSTACLE_MIN_SAFE_DEPTH
 
     # ---- derived views -------------------------------------------------
 
@@ -193,6 +221,8 @@ class LauncherSettings:
             llm=_bool(data, "llm", defaults.llm),
             otel_enabled=_bool(data, "otel_enabled", defaults.otel_enabled),
             otel_endpoint=_text(data, "otel_endpoint", defaults.otel_endpoint),
+            obstacle_sensing=_text(data, "obstacle_sensing", defaults.obstacle_sensing).lower(),
+            obstacle_min_safe_depth=_decimal(data, "obstacle_min_safe_depth", defaults.obstacle_min_safe_depth),
         )
 
 
@@ -232,6 +262,23 @@ def _int(data: Mapping[str, Any], key: str, default: int | None, *, optional: bo
         except ValueError:
             pass
     raise SettingsError(f"{key} must be a whole number, got {value!r}")
+
+
+def _decimal(data: Mapping[str, Any], key: str, default: float) -> float:
+    """A finite number (a JSON number or a plain decimal string), rounded to ``_DEPTH_DECIMALS`` places."""
+    value = data.get(key, default)
+    if value is None or (isinstance(value, str) and not value.strip()):
+        raise SettingsError(f"{key} is required")
+    if isinstance(value, bool):
+        raise SettingsError(f"{key} must be a number, got {value!r}")
+    if isinstance(value, str):
+        text = value.strip()
+        if not _ASCII_FLOAT_RE.fullmatch(text):
+            raise SettingsError(f"{key} must be a number, got {value!r}")
+        value = float(text)
+    if not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise SettingsError(f"{key} must be a number, got {value!r}")
+    return round(float(value), _DEPTH_DECIMALS)
 
 
 def _bool(data: Mapping[str, Any], key: str, default: bool) -> bool:
@@ -367,6 +414,8 @@ def validate(
         if not endpoint.startswith(("http://", "https://")):
             err("otel_endpoint", f"the observability endpoint must start with http:// or https://, got {endpoint!r}")
 
+    _validate_obstacle(settings, os.environ if environ is None else environ, err, warn)
+
     if settings.role == "ground" and settings.llm:
         env = os.environ if environ is None else environ
         provider = (env.get("FLIGHTRISK_REASONING_PROVIDER") or "").strip().lower()
@@ -376,6 +425,155 @@ def validate(
         else:
             warn("llm", "the language model is on: the ground station connects to the local Ollama server at start")
     return issues
+
+
+# ---------------------------------------------------------------------------
+# Obstacle sensing settings
+# ---------------------------------------------------------------------------
+
+SOURCE_WINDOW = "window"
+SOURCE_ENVIRONMENT = "environment"
+
+
+@dataclass(frozen=True)
+class EffectiveObstacle:
+    """The obstacle settings the edges started here will use, and where each comes from.
+
+    ``mode_source`` and ``depth_source`` are ``window`` (the launcher's setting) or ``environment``
+    (the variable in the launcher's environment, which wins). ``mode_raw`` and ``depth_raw`` are
+    the inherited text when it comes from the environment, so a value the edge would refuse can be
+    named. ``depth`` is None when that text is not a number.
+    """
+
+    mode: str
+    mode_source: str
+    depth: float | None
+    depth_source: str
+    mode_raw: str | None = None
+    depth_raw: str | None = None
+
+    @property
+    def downgraded(self) -> bool:
+        """True when the edges would fly with weaker obstacle protection than ``required``."""
+        return self.mode != SENSING_ENV_REQUIRED
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "mode_source": self.mode_source,
+            "mode_variable": ENV_OBSTACLE_SENSING,
+            "min_safe_depth": self.depth,
+            "min_safe_depth_source": self.depth_source,
+            "min_safe_depth_variable": ENV_OBSTACLE_MIN_SAFE_DEPTH,
+            "min_safe_depth_default": OBSTACLE_MIN_SAFE_DEPTH,
+            "min_safe_depth_range": list(OBSTACLE_MIN_SAFE_DEPTH_RANGE),
+            "downgraded": self.downgraded,
+            "applies": "on the next Start",
+        }
+
+
+def _inherited(environ: Mapping[str, str], name: str) -> str | None:
+    """The inherited value of *name*, or None when it is unset or empty (the edge reads empty as unset)."""
+    raw = environ.get(name)
+    if raw is None or not str(raw).strip():
+        return None
+    return str(raw).strip()
+
+
+def effective_obstacle(settings: LauncherSettings, environ: Mapping[str, str]) -> EffectiveObstacle:
+    """What the edges started here will use: an inherited variable wins over the window's setting."""
+    mode_raw = _inherited(environ, ENV_OBSTACLE_SENSING)
+    depth_raw = _inherited(environ, ENV_OBSTACLE_MIN_SAFE_DEPTH)
+    if mode_raw is not None:
+        mode, mode_source = mode_raw.lower(), SOURCE_ENVIRONMENT
+    else:
+        mode, mode_source = settings.obstacle_sensing, SOURCE_WINDOW
+    if depth_raw is not None:
+        depth_source = SOURCE_ENVIRONMENT
+        try:
+            depth: float | None = float(depth_raw) if _ASCII_FLOAT_RE.fullmatch(depth_raw) else None
+        except (ValueError, OverflowError):
+            depth = None
+        if depth is not None and not math.isfinite(depth):
+            depth = None
+    else:
+        depth, depth_source = settings.obstacle_min_safe_depth, SOURCE_WINDOW
+    return EffectiveObstacle(mode, mode_source, depth, depth_source, mode_raw, depth_raw)
+
+
+def obstacle_env(settings: LauncherSettings, environ: Mapping[str, str]) -> dict[str, str]:
+    """The obstacle variables the launcher sets for an edge: each one the environment does not set already."""
+    out: dict[str, str] = {}
+    if _inherited(environ, ENV_OBSTACLE_SENSING) is None:
+        out[ENV_OBSTACLE_SENSING] = settings.obstacle_sensing
+    if _inherited(environ, ENV_OBSTACLE_MIN_SAFE_DEPTH) is None:
+        out[ENV_OBSTACLE_MIN_SAFE_DEPTH] = format_depth(settings.obstacle_min_safe_depth)
+    return out
+
+
+def format_depth(value: float) -> str:
+    """A depth threshold as the plain decimal the edge reads (``0.77``, never ``7.7e-01``)."""
+    text = f"{float(value):.{_DEPTH_DECIMALS}f}".rstrip("0")
+    return text + "0" if text.endswith(".") else text
+
+
+def sensing_warning(effective: EffectiveObstacle, drone_ids: tuple[str, ...] = ()) -> str:
+    """The full-sentence warning an operator must confirm before edges start with weaker obstacle sensing."""
+    who = f"the edges this launcher starts ({', '.join(drone_ids)})" if drone_ids else "the edges this launcher starts"
+    if effective.mode == SENSING_ENV_OFF:
+        text = (
+            f"Obstacle sensing will be OFF for {who}. Their drones will fly every lane with no obstacle "
+            "protection: nothing stops them for a wall, a plant or a person in the lane. Use this only for "
+            "bring-up with a safety observer who can land every drone at once."
+        )
+    else:
+        text = (
+            f"Obstacle sensing will be {effective.mode!r} for {who}, not required. Their drones will fly with "
+            "weaker obstacle protection, or none."
+        )
+    if effective.mode_source == SOURCE_ENVIRONMENT:
+        text += (
+            f" This comes from {ENV_OBSTACLE_SENSING} in the launcher's environment, which wins over the window; "
+            "unset it and restart the launcher to change it."
+        )
+    return text + " It applies from this Start until the edges are stopped."
+
+
+def _validate_obstacle(settings: LauncherSettings, environ: Mapping[str, str], err: Callable, warn: Callable) -> None:
+    lo, hi = OBSTACLE_MIN_SAFE_DEPTH_RANGE
+    if settings.obstacle_sensing not in OBSTACLE_SENSING_MODES:
+        err("obstacle_sensing", f"obstacle sensing must be {' or '.join(OBSTACLE_SENSING_MODES)}, "
+            f"got {settings.obstacle_sensing!r}")
+    if not lo <= settings.obstacle_min_safe_depth <= hi:
+        err("obstacle_min_safe_depth", f"min safe depth must be from {lo:g} to {hi:g}, "
+            f"got {settings.obstacle_min_safe_depth:g}")
+    if not settings.local_drones():
+        return  # no edge starts here, so neither the window nor the environment reaches one
+    eff = effective_obstacle(settings, environ)
+    if eff.mode_source == SOURCE_ENVIRONMENT:
+        if eff.mode not in OBSTACLE_SENSING_MODES:
+            err("obstacle_sensing", f"{ENV_OBSTACLE_SENSING}={eff.mode_raw!r} in the launcher's environment is not "
+                f"{' or '.join(OBSTACLE_SENSING_MODES)}: the edges would refuse to start. Unset or fix it and restart "
+                "the launcher")
+        elif eff.mode != settings.obstacle_sensing:
+            warn("obstacle_sensing", f"{ENV_OBSTACLE_SENSING}={eff.mode} in the launcher's environment wins over the "
+                 f"window's {settings.obstacle_sensing}: the edges start with {eff.mode}")
+    if eff.depth_source == SOURCE_ENVIRONMENT:
+        if eff.depth is None or not lo <= eff.depth <= hi:
+            err("obstacle_min_safe_depth", f"{ENV_OBSTACLE_MIN_SAFE_DEPTH}={eff.depth_raw!r} in the launcher's "
+                f"environment must be a number from {lo:g} to {hi:g}: the edges would refuse to start. Unset or fix it "
+                "and restart the launcher")
+        elif eff.depth != settings.obstacle_min_safe_depth:
+            warn("obstacle_min_safe_depth", f"{ENV_OBSTACLE_MIN_SAFE_DEPTH}={eff.depth_raw} in the launcher's "
+                 f"environment wins over the window's {format_depth(settings.obstacle_min_safe_depth)}")
+    if eff.mode == SENSING_ENV_OFF:
+        warn("obstacle_sensing", "obstacle sensing is off: the edges started here fly their lanes with no obstacle "
+             "protection; Start asks you to confirm")
+    if eff.depth is not None and lo <= eff.depth <= hi and eff.depth > OBSTACLE_MIN_SAFE_DEPTH \
+            and eff.mode == SENSING_ENV_REQUIRED:
+        warn("obstacle_min_safe_depth", f"min safe depth {format_depth(eff.depth)} is above the default "
+             f"{OBSTACLE_MIN_SAFE_DEPTH:g}: the depth cue stops only for closer obstacles; use a value calibrated "
+             "for this site (docs/obstacle-sensing.md)")
 
 
 def local_tellos_without_adapter(settings: LauncherSettings, adapters: list[Adapter]) -> list[tuple[int, DroneSettings, list[Adapter]]]:

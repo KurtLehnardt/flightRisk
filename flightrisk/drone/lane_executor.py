@@ -140,12 +140,22 @@ from flightrisk.drone.obstacle_sensor import (
     TELEMETRY_PERSON_CUE,
     TELEMETRY_SENSING,
     TELEMETRY_SENSOR_OK,
+    TELEMETRY_MIN_SAFE_DEPTH,
     TELEMETRY_SEQ,
     TELEMETRY_STATE,
     NullSensor,
     ObstacleSensor,
 )
 from flightrisk.drone.safety import ROOM_LIMITS, SafetyEnvelope, is_finite_number
+from flightrisk.drone.temp_preflight import (
+    EVENT_TEMP_PREFLIGHT,
+    LEVEL_OK,
+    TELEMETRY_TEMP,
+    TEMP_QUERY_TIMEOUT_S,
+    TempCheck,
+    TempLimits,
+    judge_temperature,
+)
 from flightrisk.fleet_protocol import (
     MANUAL_DEADMAN_S,
     MAX_TEXT_LEN,
@@ -257,6 +267,7 @@ class LaneExecutor(
         obstacle_sense_timeout_s: float = OBSTACLE_SENSE_TIMEOUT_S,
         obstacle_retry_pause_s: float = OBSTACLE_RETRY_PAUSE_S,
         obstacle_takeoff_probe: bool = True,
+        temp_limits: TempLimits | None = None,
     ):
         """Bind the executor to *drone* inside *envelope*.
 
@@ -287,6 +298,11 @@ class LaneExecutor(
           valid (``lane_flight._takeoff_sense_refusal``). The edge always
           keeps it on; False is only for tests whose scripted sensor must
           answer the lane gates from its very first call.
+
+        *temp_limits* are the warn and refusal levels of the temperature
+        check before every takeoff (``temp_preflight``; the defaults when
+        None). Only a drone with ``query_temperature()`` (the Tello) is
+        checked: see ``_takeoff_temp_refusal``.
         """
         self.drone = drone
         self.envelope = envelope
@@ -414,6 +430,11 @@ class LaneExecutor(
         # Operator text of the last takeoff refused because the drone was
         # unreachable; written and read on the flight sequence thread.
         self._unreachable_detail: str | None = None
+        # The temperature check before a takeoff (``_takeoff_temp_refusal``):
+        # its levels, and the outcome of the last check (None before the
+        # first), which telemetry reports until the next one.
+        self._temp_limits = temp_limits if temp_limits is not None else TempLimits()
+        self._temp_check: TempCheck | None = None
 
         # Obstacle sensing (``lane_flight``, ``lane_steps``). The sensor and
         # its settings are fixed for the executor's life.
@@ -625,7 +646,11 @@ class LaneExecutor(
           sensor), ``{"person_cue_down": bool, "detection_age_s": number or
           null}``: whether the cue has been ``unknown`` for several gates in a
           row, and how old the view of the newest detection result is. Left
-          out for a sensor that reports no person cue.
+          out for a sensor that reports no person cue;
+        * ``obstacle_min_safe_depth``: for a sensor with a depth threshold
+          (the camera sensor), the threshold in force
+          (``FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH``), so the dashboard shows
+          the value this edge was started with. Left out otherwise.
 
         The cut fields are sticky for the plan: a re-task that continues the
         plan keeps them, another accepted plan clears them. A landing keeps
@@ -660,13 +685,17 @@ class LaneExecutor(
         status[TELEMETRY_CUTS] = flat
         status[TELEMETRY_CUTS_TOTAL] = len(cuts)
         status[TELEMETRY_CUT_REASONS] = reasons
-        person = self._person_cue_status()
+        sensor_status = self._sensor_status()
+        person = self._person_cue_status(sensor_status)
         if person is not None:
             status[TELEMETRY_PERSON_CUE] = person
+        depth = (sensor_status or {}).get("min_safe_depth")
+        if is_finite_number(depth) and depth > 0:
+            status[TELEMETRY_MIN_SAFE_DEPTH] = float(depth)
         return status
 
-    def _person_cue_status(self) -> dict[str, Any] | None:
-        """The sensor's person cue health for telemetry, or None when it reports none. Never raises."""
+    def _sensor_status(self) -> dict[str, Any] | None:
+        """The sensor's ``status()``, or None without a sensor or when it fails. Never raises."""
         sensor = self._obstacle_sensor
         if sensor is None:
             return None
@@ -674,6 +703,12 @@ class LaneExecutor(
             status = sensor.status()
         except Exception:  # noqa: BLE001 - telemetry must not fail for a sensor's status
             return None
+        return status if isinstance(status, dict) else None
+
+    def _person_cue_status(self, status: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        """The sensor's person cue health for telemetry, or None when it reports none. Never raises."""
+        if status is None:
+            status = self._sensor_status()
         if not isinstance(status, dict) or PERSON_CUE_DOWN_KEY not in status:
             return None
         age = status.get("person_detection_age_s")
@@ -759,6 +794,65 @@ class LaneExecutor(
         if callable(reader):
             return reader()
         return getattr(self.drone.state, "height", None)
+
+    # ------------------------------------------------------------------
+    # Temperature check before a takeoff (``temp_preflight``)
+    # ------------------------------------------------------------------
+
+    def temp_status(self) -> dict[str, Any]:
+        """The ``temp_preflight`` telemetry field of the last check, or nothing before the first.
+
+        ``lane_monitor.telemetry()`` merges it into every telemetry message,
+        so the drone card shows the reading taken before the last takeoff.
+        """
+        with self._lock:
+            check = self._temp_check
+        return {} if check is None else {TELEMETRY_TEMP: check.to_telemetry()}
+
+    def _takeoff_temp_refusal(self) -> str | None:
+        """Check the drone's temperature right before a takeoff: the refusal's operator text, or None to go on.
+
+        Only a drone with ``query_temperature()`` (``TelloController``) is
+        asked; for any other drone this returns None, checks nothing and
+        reports nothing. The read-only ``temp?`` reply is judged against the
+        levels (``temp_preflight.judge_temperature``): at or above the
+        refusal level the takeoff is refused with nothing sent; at or above
+        the warn level, and for a reading that is missing, malformed or
+        raised, the check is logged as a warning and the takeoff goes on. A
+        reading that could not be taken never refuses. Every check is logged
+        as ``edge_temp_preflight`` and kept for telemetry (``temp_status``).
+        Runs for every takeoff, the operator's ``manual_takeoff`` included.
+        Never raises.
+        """
+        query = getattr(self.drone, "query_temperature", None)
+        if not callable(query):
+            return None
+        failure = None
+        reply = None
+        try:
+            reply = query(timeout_s=TEMP_QUERY_TIMEOUT_S)
+            if reply is None:
+                failure = f"no reply to temp? within {TEMP_QUERY_TIMEOUT_S:g} s"
+        except Exception as exc:  # noqa: BLE001 - an unreadable temperature warns, never refuses
+            failure = f"temp? failed: {type(exc).__name__}: {exc}"
+        check = judge_temperature(reply, self._temp_limits, failure=failure)
+        with self._lock:
+            self._temp_check = check
+            kind = self._active_kind
+        text = check.operator_text(self.drone_id)
+        fields = {"drone_id": self.drone_id, "kind": kind, **check.log_fields()}
+        if check.level == LEVEL_OK:
+            self._log.info(EVENT_TEMP_PREFLIGHT, **fields)
+            return None
+        self._log.warning(EVENT_TEMP_PREFLIGHT, operator_text=text, **fields)
+        if not check.refused:
+            return None
+        self._log.warning(
+            "edge_takeoff_refused", drone_id=self.drone_id, reason="temperature", kind=kind,
+            high_c=check.reading.high_c if check.reading else None, refuse_c=self._temp_limits.refuse_c,
+            detail=text,
+        )
+        return text[:MAX_TEXT_LEN]
 
     # ------------------------------------------------------------------
     # Lifecycle
