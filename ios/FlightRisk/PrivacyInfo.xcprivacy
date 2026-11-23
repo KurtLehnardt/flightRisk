@@ -9,8 +9,10 @@
 	user has turned on "Allow cloud reasoning", saved a Claude API key and selected Cloud Claude, the
 	reference photo, the cropped image of each detected person and the typed description are sent to
 	Anthropic. The request carries the user's own API key, so the data is declared as linked to the
-	user. Face embeddings, appearance features, camera frames and location never leave the device and
-	are not declared.
+	user. Appearance embeddings, camera frames and location never leave the device and are not
+	declared. The app has no face detection or face recognition model and makes no face data. A
+	person detector the user imports (optional, off by default) stays in the app's own storage,
+	excluded from backups, and is never sent anywhere.
 
 	Required reason APIs:
 	- UserDefaults (CA92.1): the app's own settings, in the standard domain and in the app-only suite

@@ -1,4 +1,5 @@
 import Network
+import PersonVision
 import SwiftUI
 
 /// Main settings screen for FlightRisk iOS.
@@ -32,6 +33,7 @@ struct SettingsView: View {
     @State private var gemmaState: GemmaDownloadState = .idle
     @State private var showDeleteConfirmation: Bool = false
     @State private var algorithmsExpanded: Bool = false
+    @State private var showingModelNotices: Bool = false
 
     // MARK: - Derived State
 
@@ -48,6 +50,7 @@ struct SettingsView: View {
             GroundSettingsSection(viewModel: .live)
             DemoSettingsSection(viewModel: .live)
             matchingAlgorithmsSection
+            CustomDetectorSection()
             advancedSection
             aboutSection
         }
@@ -452,21 +455,8 @@ struct SettingsView: View {
         let enabled = config.signalConfig.isEnabled(name)
 
         switch name {
-        case "osnetReid":
-            let modelExists = Bundle.main.url(forResource: "OSNetReID", withExtension: "mlmodelc") != nil
-            if !modelExists { return .notInstalled }
-            return enabled ? .active : .inactive
-        case "insightFace":
-            let modelExists = Bundle.main.url(forResource: "InsightFaceR18", withExtension: "mlmodelc") != nil
-            if !modelExists { return .notInstalled }
-            return enabled ? .active : .inactive
-        case "face":
-            let detectorExists = Bundle.main.url(forResource: "SCRFDFaceDetector", withExtension: "mlmodelc") != nil
-            let arcfaceExists = Bundle.main.url(forResource: "ArcFaceMobile", withExtension: "mlmodelc") != nil
-            if !detectorExists || !arcfaceExists { return .notInstalled }
-            return enabled ? .active : .inactive
         case "reid":
-            let modelExists = Bundle.main.url(forResource: "CLIPVisual", withExtension: "mlmodelc") != nil
+            let modelExists = BundledModels.url(CLIPContract.modelName) != nil
             if !modelExists { return .notInstalled }
             return enabled ? .active : .inactive
         default:
@@ -497,15 +487,6 @@ struct SettingsView: View {
                 )
 
                 ThresholdSliderRow(
-                    label: "Face Threshold",
-                    value: config.vision.faceMatchThreshold,
-                    onChanged: { newValue in
-                        clearPreset()
-                        onThresholdChanged("face", newValue)
-                    }
-                )
-
-                ThresholdSliderRow(
                     label: "Scorer Threshold",
                     value: config.vision.scorerMatchThreshold,
                     onChanged: { newValue in
@@ -519,9 +500,8 @@ struct SettingsView: View {
                     Text("Debug Info")
                         .font(.caption.bold())
                     Text(String(
-                        format: "ReID: %.2f | Face: %.2f | Scorer: %.2f",
+                        format: "ReID: %.2f | Scorer: %.2f",
                         config.vision.reidThreshold,
-                        config.vision.faceMatchThreshold,
                         config.vision.scorerMatchThreshold
                     ))
                     .font(.caption2)
@@ -554,8 +534,14 @@ struct SettingsView: View {
             }
             // The only link to the policy once onboarding is over.
             Link("Privacy Policy", destination: PrivacyNotice.policyURL)
+            // The licences of the on-device models, in full (model-notices.md).
+            Button("Model licences") { showingModelNotices = true }
+                .accessibilityIdentifier("settings.modelLicences")
         } header: {
             Text("About")
+        }
+        .sheet(isPresented: $showingModelNotices) {
+            ModelNoticesView()
         }
     }
 

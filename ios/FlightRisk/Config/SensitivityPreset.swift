@@ -30,14 +30,6 @@ enum SensitivityPreset: String, CaseIterable, Identifiable {
         }
     }
 
-    var faceMatchThreshold: Float {
-        switch self {
-        case .moreAlerts: return 0.30
-        case .balanced: return 0.45
-        case .fewerAlerts: return 0.55
-        }
-    }
-
     var description: String {
         switch self {
         case .moreAlerts:

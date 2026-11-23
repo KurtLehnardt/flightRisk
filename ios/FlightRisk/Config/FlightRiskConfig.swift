@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonVision
 
 /// Centralized configuration for the FlightRisk iOS app.
 ///
@@ -20,15 +21,20 @@ final class FlightRiskConfig {
     // MARK: - Vision
 
     /// Detection, ReID, scoring, and tracking parameters.
-    /// Defaults match `flightrisk.config.VisionConfig` in Python exactly.
+    /// Defaults match `flightrisk.config.VisionConfig` in Python, except that the app has no
+    /// face settings: it ships no face detection or face recognition model, so it matches by
+    /// appearance only.
     struct VisionConfig {
         var detectorConfidence: Float = 0.4
         var reidThreshold: Float = 0.55
         var reidModel: String = "ViT-B-16"
-        var faceDetSize: (Int, Int) = (640, 640)
-        var faceMatchThreshold: Float = 0.45
+        /// Which person boxes are kept, by size and shape. Loose by default, for people who are
+        /// small in the frame (aerial search); see `PersonBoxFilter.aerial`.
+        var personBoxFilter: PersonBoxFilter = .aerial
         var scorerMatchThreshold: Float = 0.45
         var scorerReidWeight: Float = 0.35
+        /// The shared scorer's face weight (`MatchScorer`, the same on every platform). The app
+        /// never has a face score, so the scorer gives this weight to the other signals.
         var scorerFaceWeight: Float = 0.40
         var scorerReasoningWeight: Float = 0.25
         var trackerIouThreshold: Float = 0.3
@@ -79,17 +85,9 @@ final class FlightRiskConfig {
     var signalConfig = SignalConfig()
 
     struct SignalConfig {
-        // -- Face Recognition signals --
-        var faceEnabled: Bool = true
-        var faceWeight: Float = 0.40
-        var insightFaceEnabled: Bool = false  // disabled by default (model may not be bundled)
-        var insightFaceWeight: Float = 0.35
-
-        // -- Person Re-ID signals --
+        // -- Appearance Re-ID signal --
         var reidEnabled: Bool = true
         var reidWeight: Float = 0.35
-        var osnetReidEnabled: Bool = false    // disabled by default (model may not be bundled)
-        var osnetReidWeight: Float = 0.30
 
         // -- Appearance signals --
         var clothingColorEnabled: Bool = true
@@ -103,18 +101,14 @@ final class FlightRiskConfig {
 
         /// All signal names for iteration.
         static let allSignalNames: [String] = [
-            "face", "insightFace",
-            "reid", "osnetReid",
+            "reid",
             "clothingColor", "heightRatio",
             "reasoning"
         ]
 
         /// Signal display names by key.
         static let displayNames: [String: String] = [
-            "face": "ArcFace",
-            "insightFace": "InsightFace R18",
-            "reid": "CLIP ReID",
-            "osnetReid": "OSNet ReID",
+            "reid": "CLIP appearance (ReID)",
             "clothingColor": "Clothing Color",
             "heightRatio": "Height Ratio",
             "reasoning": "LLM Reasoning"
@@ -122,8 +116,7 @@ final class FlightRiskConfig {
 
         /// Signal categories for UI grouping.
         static let categories: [(name: String, signals: [String])] = [
-            ("Face Recognition", ["face", "insightFace"]),
-            ("Person Re-ID", ["reid", "osnetReid"]),
+            ("Person Re-ID", ["reid"]),
             ("Appearance", ["clothingColor", "heightRatio"]),
             ("Other", ["reasoning"])
         ]
@@ -131,10 +124,7 @@ final class FlightRiskConfig {
         /// Get enabled state for a signal by name.
         func isEnabled(_ name: String) -> Bool {
             switch name {
-            case "face": return faceEnabled
-            case "insightFace": return insightFaceEnabled
             case "reid": return reidEnabled
-            case "osnetReid": return osnetReidEnabled
             case "clothingColor": return clothingColorEnabled
             case "heightRatio": return heightRatioEnabled
             case "reasoning": return reasoningEnabled
@@ -145,10 +135,7 @@ final class FlightRiskConfig {
         /// Get weight for a signal by name.
         func weight(_ name: String) -> Float {
             switch name {
-            case "face": return faceWeight
-            case "insightFace": return insightFaceWeight
             case "reid": return reidWeight
-            case "osnetReid": return osnetReidWeight
             case "clothingColor": return clothingColorWeight
             case "heightRatio": return heightRatioWeight
             case "reasoning": return reasoningWeight
@@ -159,10 +146,7 @@ final class FlightRiskConfig {
         /// Set enabled state for a signal by name.
         mutating func setEnabled(_ name: String, enabled: Bool) {
             switch name {
-            case "face": faceEnabled = enabled
-            case "insightFace": insightFaceEnabled = enabled
             case "reid": reidEnabled = enabled
-            case "osnetReid": osnetReidEnabled = enabled
             case "clothingColor": clothingColorEnabled = enabled
             case "heightRatio": heightRatioEnabled = enabled
             case "reasoning": reasoningEnabled = enabled
@@ -173,10 +157,7 @@ final class FlightRiskConfig {
         /// Set weight for a signal by name.
         mutating func setWeight(_ name: String, weight: Float) {
             switch name {
-            case "face": faceWeight = weight
-            case "insightFace": insightFaceWeight = weight
             case "reid": reidWeight = weight
-            case "osnetReid": osnetReidWeight = weight
             case "clothingColor": clothingColorWeight = weight
             case "heightRatio": heightRatioWeight = weight
             case "reasoning": reasoningWeight = weight
@@ -192,7 +173,6 @@ final class FlightRiskConfig {
     func applyPreset(_ preset: SensitivityPreset) {
         vision.reidThreshold = preset.reidThreshold
         vision.scorerMatchThreshold = preset.scorerMatchThreshold
-        vision.faceMatchThreshold = preset.faceMatchThreshold
     }
 
     // MARK: - UserDefaults Loading
@@ -213,6 +193,19 @@ final class FlightRiskConfig {
         }
         if let scorerThreshold = defaults.object(forKey: "FLIGHTRISK_SCORER_THRESHOLD") as? Float {
             vision.scorerMatchThreshold = scorerThreshold
+        }
+        // The person box filter (fractions of the frame; width / height for the aspect limits).
+        if let v = defaults.object(forKey: "FLIGHTRISK_MIN_BOX_HEIGHT_RATIO") as? Float {
+            vision.personBoxFilter.minHeightRatio = v
+        }
+        if let v = defaults.object(forKey: "FLIGHTRISK_MIN_BOX_AREA_RATIO") as? Float {
+            vision.personBoxFilter.minAreaRatio = v
+        }
+        if let v = defaults.object(forKey: "FLIGHTRISK_MIN_BOX_ASPECT_RATIO") as? Float {
+            vision.personBoxFilter.minAspectRatio = v
+        }
+        if let v = defaults.object(forKey: "FLIGHTRISK_MAX_BOX_ASPECT_RATIO") as? Float {
+            vision.personBoxFilter.maxAspectRatio = v
         }
         if let model = defaults.string(forKey: "FLIGHTRISK_GEMMA_MODEL") {
             reasoning.model = model

@@ -109,7 +109,7 @@ struct OnboardingView: View {
                     )
                     PrivacyBulletView(
                         title: "On-Device Processing",
-                        description: "Person detection and matching run on your device. Camera frames are not uploaded or stored."
+                        description: PrivacyNotice.onDeviceText
                     )
                     PrivacyBulletView(
                         title: "Ground Station (Optional)",
@@ -437,6 +437,11 @@ enum PrivacyNotice {
         + "Away from your local network, use a wss:// or https:// address. A VPN also works if it gives the ground station an address in a private range; "
         + "addresses in 100.64.0.0/10, which Tailscale uses, are refused for ws:// and http://. The app does not pin certificates. "
         + "The station's key is sent to the address you enter and is kept on this phone in the iOS Keychain."
+
+    /// The on-device bullet.
+    static let onDeviceText =
+        "Person detection and matching run on your device. Matching compares appearance (clothing, colours and build) "
+        + "with your reference photo; FlightRisk does not use face recognition. Camera frames are not uploaded or stored."
 
     /// The cloud bullet. It matches the consent text in Settings
     /// (`SettingsView.cloudConsentMessage`).

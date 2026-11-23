@@ -5,7 +5,7 @@ import Foundation
 ///
 /// Mirrors the Android `MatchEntry` data class and the Python `match_entry`
 /// dict emitted in `pipeline.py` and `alerts.py`. Every match -- whether from
-/// ReID, face recognition, or LLM description matching -- is captured as a
+/// appearance matching (ReID) or LLM description matching -- is captured as a
 /// `MatchEntry` with scores, alert level, and optional GPS coordinates.
 struct MatchEntry: Identifiable, Sendable {
 
@@ -20,9 +20,6 @@ struct MatchEntry: Identifiable, Sendable {
 
     /// ReID (re-identification) cosine similarity score.
     let reidScore: Float
-
-    /// Face recognition similarity score.
-    let faceScore: Float
 
     /// One of "confirmed_match", "possible_match", "weak_signal", or "no_match".
     let alertLevel: String
@@ -42,7 +39,7 @@ struct MatchEntry: Identifiable, Sendable {
     /// Free-text reasoning from the LLM, or nil if not yet available.
     var reasoning: String?
 
-    /// How the match was detected: "reid", "face", or "description".
+    /// How the match was detected: "reid" or "description".
     let matchType: String
 
     /// GPS latitude at time of match, or nil if unavailable.

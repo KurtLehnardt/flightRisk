@@ -16,7 +16,7 @@ protocol PipelineDetectionCallback: AnyObject {
     func annotate(frame: CGImage, detections: [Detection], matchIdx: Int?) -> CGImage?
 }
 
-/// ReID callback for body re-identification matching.
+/// ReID callback for appearance matching.
 ///
 /// Implemented by `PersonReID` (or an adapter) and set on the pipeline
 /// before calling ``SearchPipeline/start()``.
@@ -34,30 +34,6 @@ protocol PipelineReidCallback: AnyObject {
 
     /// Compare a single crop against the target embedding.
     /// - Returns: Cosine similarity score.
-    func compare(crop: CGImage) -> Float
-}
-
-/// Face recognition callback for face matching.
-///
-/// Implemented by `FaceRecognizer` (or an adapter) and set on the pipeline
-/// before calling ``SearchPipeline/start()``.
-protocol PipelineFaceCallback: AnyObject {
-    /// Whether a target face embedding has been set.
-    var hasTarget: Bool { get }
-
-    /// Face match threshold.
-    var matchThreshold: Float { get }
-
-    /// Set the target reference photo and compute the face embedding.
-    /// - Returns: `true` if the embedding was computed successfully.
-    func setTarget(photo: CGImage) -> Bool
-
-    /// Find the best face match among detections.
-    /// - Returns: Tuple of (best index or nil, similarity score).
-    func findMatch(detections: [Detection]) -> (index: Int?, score: Float)
-
-    /// Compare a single crop against the target face.
-    /// - Returns: Face similarity score.
     func compare(crop: CGImage) -> Float
 }
 
@@ -102,31 +78,32 @@ enum ReasoningWorkItem: Sendable {
 ///
 /// Port of Android `SearchPipeline.kt` (~794 lines) and Python's
 /// `flightrisk/dashboard/pipeline.py` to Swift structured concurrency.
-/// Runs detection, ReID, face matching, scoring, tracking, and async
-/// LLM reasoning in a continuous frame loop.
+/// Runs detection, appearance matching (ReID), scoring, tracking, and async
+/// LLM reasoning in a continuous frame loop. Matching is by appearance only:
+/// the app ships no face detection or face recognition model, so the
+/// scorer's face signal is always missing and its weight goes to the others.
 ///
 /// ## Pipeline sequence per frame
 ///
 /// 1. Check match-pause state (sleep 200ms if paused)
 /// 2. Acquire frame from frame source
-/// 3. Detect persons via YOLO / CoreML
+/// 3. Detect persons (YOLOX-S, or the user's own detector, on Core ML)
 /// 4. ReID match (cosine similarity against target embedding)
-/// 5. Face match (face recognition against target face)
-/// 6. Merge best match (prefer face if ReID found nothing, or if face > reid)
 /// 7. Update IoU-based detection tracker
 /// 8. Score via weighted MatchScorer + multi-frame corroboration
-/// 9. Face-only promotion check
 /// 10. Fire alert if match (skip suppressed, respect cooldown)
 /// 11. Pause pipeline on match alert
 /// 12. Enqueue LLM reasoning (rate-limited)
 /// 13. Description-only matching path (when no target photo)
 /// 14. Annotate frame, calculate FPS, emit event
 ///
-/// ## Six critical behaviors
+/// (Steps 5, 6 and 9, face matching and face-only promotion, were removed
+/// with the face models; the numbers of the other steps are kept.)
+///
+/// ## Critical behaviors
 ///
 /// - **(a) Match-pause flow**: `matchPaused` flag halts frame processing.
 /// - **(b) Track suppression**: dismissed tracks are excluded from future alerts.
-/// - **(c) Face-only promotion**: strong face score promotes "no_match" to "possible_match".
 /// - **(d) Description-only matching**: LLM-only path when no reference photo.
 /// - **(e) LLM result back-fill**: reasoning worker updates match history entries.
 /// - **(f) Two reasoning work item types**: `.analyze` and `.describe`.
@@ -150,7 +127,6 @@ actor SearchPipeline {
 
     // MARK: - Captured Config Values
 
-    private let faceThreshold: Float
     private let reidThreshold: Float
     private let corroborationThreshold: Int
     private let alertCooldownSec: TimeInterval
@@ -182,9 +158,6 @@ actor SearchPipeline {
 
     /// ReID callback (body re-identification). Set by the vision layer.
     var reidCallback: PipelineReidCallback?
-
-    /// Face recognition callback. Set by the vision layer.
-    var faceCallback: PipelineFaceCallback?
 
     // MARK: - Target
 
@@ -263,7 +236,6 @@ actor SearchPipeline {
         locationProvider: LocationProvider
     ) {
         // Capture config values to avoid storing non-Sendable config reference
-        self.faceThreshold = config.vision.faceMatchThreshold
         self.reidThreshold = config.vision.reidThreshold
         self.corroborationThreshold = config.reasoning.corroborationThreshold
         self.alertCooldownSec = config.reasoning.alertCooldown
@@ -440,7 +412,6 @@ actor SearchPipeline {
                 // ---------------------------------------------------
                 var matchIdx: Int? = nil
                 var reidScore: Float = 0
-                var faceScore: Float = 0
 
                 let reid = reidCallback
                 if reid != nil && targetPhoto != nil && !detections.isEmpty {
@@ -449,29 +420,6 @@ actor SearchPipeline {
                         matchIdx = idx
                         reidScore = result.score
                     }
-                }
-
-                // ---------------------------------------------------
-                // Step 5: Face match
-                // ---------------------------------------------------
-                var faceMatchIdx: Int? = nil
-                let face = faceCallback
-                if let face = face, face.hasTarget, !detections.isEmpty {
-                    let result = face.findMatch(detections: detections)
-                    if let idx = result.index {
-                        faceMatchIdx = idx
-                        faceScore = result.score
-                    }
-                }
-
-                // ---------------------------------------------------
-                // Step 6: Merge best match
-                // Prefer face if ReID found nothing, or if face > reid
-                // ---------------------------------------------------
-                if matchIdx == nil && faceMatchIdx != nil {
-                    matchIdx = faceMatchIdx
-                } else if matchIdx != nil && faceMatchIdx != nil && faceScore > reidScore {
-                    matchIdx = faceMatchIdx
                 }
 
                 // ---------------------------------------------------
@@ -488,25 +436,15 @@ actor SearchPipeline {
                 if let matchIdx = matchIdx {
                     let crop = detections[matchIdx].crop
 
-                    // Get per-detection scores via compare()
-                    let detReid = reid?.compare(crop: crop) ?? 0
-                    let detFace = face?.compare(crop: crop) ?? 0
+                    // The match's ReID score (the score findMatch returned).
+                    let detReid = reidScore
 
                     // Use MatchScorer for weighted combination with
                     // dynamic weight redistribution for missing signals
-                    let scored = scorer.score(reidScore: Double(detReid), faceScore: Double(detFace))
+                    // (no face signal: the app ships no face model).
+                    let scored = scorer.score(reidScore: Double(detReid))
                     matchScore = Float(scored.combinedScore)
                     alertLevel = scorer.alertLevel(scored)
-
-                    // -------------------------------------------
-                    // Step 9: Face-only promotion (Behavior C)
-                    // If face is strong but combined score is weak,
-                    // promote to possible_match.
-                    // -------------------------------------------
-                    if alertLevel == AlertManager.noMatch && detFace >= faceThreshold {
-                        alertLevel = AlertManager.possibleMatch
-                        matchScore = max(matchScore, detFace)
-                    }
 
                     // Find the tracked detection with highest IoU to our match
                     let matchedBbox = detections[matchIdx].bbox
@@ -519,7 +457,7 @@ actor SearchPipeline {
                     let trackId = trackedMatch?.trackId ?? computeTrackId(bbox: matchedBbox)
 
                     // Add scores to the tracker's rolling window
-                    tracker.addScores(trackId: trackId, reidScore: detReid, faceScore: detFace)
+                    tracker.addScores(trackId: trackId, reidScore: detReid)
 
                     // Multi-frame corroboration via tracker history
                     let trackSummary = tracker.getTrack(trackId)
@@ -581,14 +519,13 @@ actor SearchPipeline {
                                 let location = await locationProvider.getCurrentLocation()
 
                                 let llmAvailable = await llmSelector.isLlmAvailable
-                                let matchType = (faceScore > reidScore && faceMatchIdx != nil) ? "face" : "reid"
+                                let matchType = "reid"
                                 let timeStr = Self.currentTimeString()
 
                                 let entry = MatchEntry(
                                     time: timeStr,
                                     score: matchScore,
                                     reidScore: reidScore,
-                                    faceScore: faceScore,
                                     alertLevel: alertLevel,
                                     trackId: trackKey,
                                     snapshot: crop,
@@ -799,7 +736,6 @@ actor SearchPipeline {
                             time: timeStr,
                             score: 0.5,
                             reidScore: 0,
-                            faceScore: 0,
                             alertLevel: alertLevel,
                             trackId: trackKey,
                             snapshot: candidateCrop,
