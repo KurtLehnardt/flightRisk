@@ -82,7 +82,9 @@ class PersonDetector(
         detections: List<Detection>,
         matchIdx: Int? = null,
     ): Bitmap {
-        val annotated = frame.copy(frame.config, true)
+        // Bitmap.config is nullable from API 35 (for example a bitmap whose format has no
+        // Config); draw on an ARGB_8888 copy in that case.
+        val annotated = frame.copy(frame.config ?: Bitmap.Config.ARGB_8888, true)
         val canvas = Canvas(annotated)
 
         val matchPaint = Paint().apply {

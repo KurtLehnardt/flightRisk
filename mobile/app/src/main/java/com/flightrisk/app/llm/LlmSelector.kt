@@ -26,6 +26,11 @@ import java.util.concurrent.atomic.AtomicBoolean
  * @property unavailable Providers that cannot be used now, with the reason to show.
  * @property notice Set when the selected provider could not be used and the
  *   app fell back, so the user is told instead of left guessing.
+ * @property cloudProblem Why recent cloud requests failed (HTTP status, rejected key), or null.
+ *   While it is set, Settings and Search show it, so "Cloud active" is never shown alone
+ *   while the cloud is failing.
+ * @property cloudCoolingOff True while the cloud backend's failure breaker is open and
+ *   no request is sent; the on-device model answers if there is one.
  * @property checkingKey True while the saved key has not been read yet after
  *   start-up (opted in, key state unknown). Cloud is not active then, but no
  *   "unavailable" reason or fallback notice is shown, because none is known.
@@ -38,6 +43,8 @@ data class ReasoningStatus(
     val unavailable: Map<ReasoningProvider, String> = emptyMap(),
     val notice: String? = null,
     val checkingKey: Boolean = false,
+    val cloudProblem: String? = null,
+    val cloudCoolingOff: Boolean = false,
 ) {
     /** True whenever cloud reasoning is the active backend. Settings and Search show "Cloud active" then. */
     val isCloudActive: Boolean get() = active.isCloud
@@ -99,6 +106,8 @@ class LlmSelector(
 
     /** Registers a backend; the fallback walks registration order, so register the on-device backend first. */
     fun registerBackend(backend: LlmBackend) {
+        // A cloud backend tells the selector when its health changes, so the banner follows.
+        (backend as? CloudClaudeLlmBackend)?.healthListener = { refresh() }
         backends.add(backend)
         refresh()
     }
@@ -119,6 +128,10 @@ class LlmSelector(
         val current = cachedActive
         if (ReasoningProvider.fromBackendName(current.name)?.isCloud == true && !current.isAvailable) {
             refresh()
+        } else if (mutableStatus.value.cloudCoolingOff) {
+            // The cool-off ends by itself; pick the cloud backend up again then.
+            val cloud = backends.firstOrNull { ReasoningProvider.fromBackendName(it.name)?.isCloud == true } as? CloudClaudeLlmBackend
+            if (cloud != null && !cloud.breakerOpen) refresh()
         }
         return cachedActive
     }
@@ -146,6 +159,8 @@ class LlmSelector(
                 checkingKey -> Unit
                 keyState == ClaudeKeyState.UNAVAILABLE ->
                     unavailable[ReasoningProvider.CLOUD_CLAUDE] = ReasoningReason.SECURE_STORAGE_UNAVAILABLE
+                keyState == ClaudeKeyState.INVALID ->
+                    unavailable[ReasoningProvider.CLOUD_CLAUDE] = ReasoningReason.CLAUDE_KEY_REJECTED
                 keyState != ClaudeKeyState.FOUND -> unavailable[ReasoningProvider.CLOUD_CLAUDE] = ReasoningReason.CLAUDE_KEY_MISSING
                 cloudBackend == null -> unavailable[ReasoningProvider.CLOUD_CLAUDE] = ReasoningReason.CLAUDE_NOT_REGISTERED
                 !online -> unavailable[ReasoningProvider.CLOUD_CLAUDE] = ReasoningReason.OFFLINE
@@ -153,6 +168,13 @@ class LlmSelector(
 
             val localAvailable = localBackend != null && (localBackend.isAvailable || localModelUsable())
             if (!localAvailable) unavailable[ReasoningProvider.LOCAL] = ReasoningReason.LOCAL_NOT_READY
+
+            val cloudClaude = cloudBackend as? CloudClaudeLlmBackend
+            val coolingOff = cloudClaude?.breakerOpen == true
+            if (coolingOff && ReasoningProvider.CLOUD_CLAUDE !in unavailable) {
+                unavailable[ReasoningProvider.CLOUD_CLAUDE] =
+                    "Cloud Claude is paused for a minute after repeated failures. ${cloudClaude?.problem.orEmpty()}".trim()
+            }
 
             val selected = settings.selectedProvider(localAvailable)
             var active: LlmBackend = noOp
@@ -208,11 +230,17 @@ class LlmSelector(
                 cloudOptIn = optIn,
                 keyState = keyState,
                 unavailable = unavailable,
-                notice = notice,
+                notice = notice ?: failingNotice(activeProvider, cloudClaude?.problem),
                 checkingKey = checkingKey,
+                cloudProblem = cloudClaude?.problem,
+                cloudCoolingOff = coolingOff,
             )
         }
     }
+
+    /** The notice for a cloud backend that is active but whose latest request failed. */
+    private fun failingNotice(active: ReasoningProvider, problem: String?): String? =
+        if (active.isCloud && problem != null) "Cloud Claude is failing: $problem" else null
 
     /**
      * Starts monitoring connectivity; [refresh] runs on every change. Safe to

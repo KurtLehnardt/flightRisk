@@ -1,7 +1,7 @@
 # FlightRisk Mobile -- Privacy Policy
 
 **Effective Date:** September 4, 2026
-**Last Updated:** October 30, 2026
+**Last Updated:** November 22, 2026
 **Contact:** krlehnardt@gmail.com
 
 ---
@@ -14,7 +14,7 @@ FlightRisk is an AI-powered tool designed to help parents and guardians locate a
 
 ## 2. On-Device Processing
 
-All face detection, face recognition (ArcFace), and appearance matching (CLIP ReID) processing runs on your device using ONNX Runtime and/or CoreML. **Face embeddings and appearance feature vectors never leave your phone under any setting.** Specifically:
+All face detection, face recognition (ArcFace), and appearance matching (CLIP ReID) processing runs on your device: on iPhone with Apple's Core ML, and on Android with ONNX Runtime. **Face embeddings and appearance feature vectors never leave your phone under any setting.** Specifically:
 
 - Face embeddings (numerical representations of facial features) are computed locally and exist only in device memory during the active session.
 - Body detection and appearance feature extraction happen locally.
@@ -52,7 +52,7 @@ This section covers templates and embeddings only. Images (the reference photo a
 - **A video of the search.** Only if you turn on "Record search video" in Settings (off by default), each search is recorded as an MP4 video of the camera view with the detection boxes drawn on it, in the app's `recordings` folder. The video can show people. Existing installs start with the setting off.
 - **Match images.** Only while "Record search video" is on, the cropped image of the matched person is saved as an image file in the app's `snapshots` folder.
 - **A local database** (SQLite, through Room) with the session, its start and end time, counts, the match scores and timestamps, the reasoning text, the file paths of the images and video, and the description you typed.
-- **A reference photo taken with the camera** is saved as a file in the app's cache. The app does not delete it; Android may clear the cache, and uninstalling the app removes it.
+- **A reference photo taken with the camera** is saved as a temporary file in the app's cache only until the app has read it. The app then deletes the file, whether or not you use the photo.
 - **GPS coordinates are kept in memory only.** The database has no location fields.
 
 This data:
@@ -60,7 +60,7 @@ This data:
 - Is stored **only on your device**, in the app's private storage.
 - Is **never transmitted** by the app to any server, cloud service, or third party, except through the optional features in Sections 5 and 5B.
 - **Delete control.** Settings has "Delete saved sessions and recordings", with a confirmation. It deletes the saved sessions, matches and feedback, the recordings and the match images. Clearing the app's storage or uninstalling the app also removes them.
-- **Can be copied by Android backup.** Android Auto Backup and device-to-device transfer can copy the video, the images and the database to your Google account or to another phone, because the app excludes only its preference files (the encrypted secret store, the cloud reasoning choice, the ground station link consent and the general config file) from backup. A change is planned.
+- **Is excluded from Android backup.** Android Auto Backup and device-to-device transfer do not copy the recorded video, the match images or the session database, and they do not copy the app's preference files either (the encrypted secret store, the cloud reasoning choice, the ground station link consent, the privacy notice acknowledgement and the general config file). A restored phone starts without them.
 
 ---
 
@@ -127,7 +127,7 @@ This section applies to the Android app. Everything in Section 5 about cloud rea
 ## 7. Camera Usage
 
 - The camera is used solely for real-time person detection and face matching to help locate a missing child.
-- On iPhone, camera frames are processed on-device in real time and are not recorded or stored. On Android, each search is recorded as a video of the camera view in the app's private storage, and match images are saved as files (Section 4). Camera frames are not transmitted, except for the crops, reference photo and description sent when the optional cloud reasoning feature is enabled (Section 5) and, on Android with phone-as-edge on, a small picture of the whole camera view sent to your ground station when it asks for video (Section 5B).
+- On iPhone, camera frames are processed on-device in real time and are not recorded or stored. On Android, a search is recorded as a video of the camera view in the app's private storage, and match images are saved as files, only if you turn on "Record search video" in Settings (off by default; Section 4). Camera frames are not transmitted, except for the crops, reference photo and description sent when the optional cloud reasoning feature is enabled (Section 5) and, on Android with phone-as-edge on, a small picture of the whole camera view sent to your ground station when it asks for video (Section 5B).
 
 ---
 
@@ -149,7 +149,7 @@ The only exceptions are the optional features you turn on or start yourself: clo
 - The app does not target children as users.
 - The app does not collect any personal information from children.
 - No user accounts are created. No names, email addresses, or identifying information of any person (adult or child) are collected by the app.
-- The reference photo used for matching is provided by the parent/guardian and processed on-device. On iPhone it is not stored beyond the session. On Android, a reference photo taken with the camera is saved as a file in the app's cache (the app does not delete it; Android may clear the cache, and uninstalling the app removes it). It is not transmitted unless the optional cloud reasoning feature (Section 5) is enabled, in which case it is sent to Anthropic.
+- The reference photo used for matching is provided by the parent/guardian and processed on-device. On iPhone it is not stored beyond the session. On Android, a reference photo taken with the camera is saved as a temporary file in the app's cache and the app deletes that file as soon as it has read it. It is not transmitted unless the optional cloud reasoning feature (Section 5) is enabled, in which case it is sent to Anthropic.
 
 ---
 

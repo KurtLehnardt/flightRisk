@@ -95,6 +95,9 @@ class DroneManager(
         } catch (e: Exception) {
             Log.w(TAG, "Obstacle avoidance init failed: ${e.message}")
             obstacleGuard = null
+        } catch (e: LinkageError) {
+            Log.w(TAG, "Obstacle avoidance: native runtime did not load (${e.javaClass.simpleName})")
+            obstacleGuard = null
         }
     }
 

@@ -407,6 +407,34 @@ final class GroundClientTests: XCTestCase {
         await harness.client.shutdown()
     }
 
+    /// The app calls `retryNow()` when its scene becomes active, so a dropped link comes back at
+    /// once instead of after the rest of the backoff wait (1 to 10 s).
+    func testRetryNowEndsAReconnectBackoffWaitAtOnce() async throws {
+        let harness = try Harness()
+        await harness.client.connect()
+        let first = try await harness.handshake(0)
+        first.serverDrop()
+        try await eventually("waiting to reconnect") {
+            if case let .reconnecting(1, delay, _) = await harness.client.state { return delay > .zero }
+            return false
+        }
+        let waitingSince = harness.clock.now
+
+        await harness.client.retryNow()
+
+        // The second session starts without the fake clock moving, so the wait was cut short.
+        let second = try await harness.handshake(1)
+        XCTAssertEqual(harness.clock.now, waitingSince)
+        XCTAssertEqual(second.sent.first, #"40{"api_key":"test-key"}"#)
+        // Retrying a connected client changes nothing.
+        await harness.client.retryNow()
+        await settle()
+        XCTAssertEqual(harness.network.transports.count, 2)
+        let state = await harness.client.state
+        XCTAssertTrue(state.isConnected)
+        await harness.client.shutdown()
+    }
+
     func testAnOptionalSlowRetryAfterARefusedKey() async throws {
         let harness = try Harness(authFailureRetryDelay: .seconds(60))
         await harness.client.connect()
