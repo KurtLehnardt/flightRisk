@@ -61,6 +61,13 @@ def _wait_for(predicate, timeout=WAIT_S, interval=0.05):
 
 
 def _pid_alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        # os.kill(pid, 0) would terminate the process on Windows, so ask psutil instead.
+        psutil = pytest.importorskip("psutil", reason="psutil is needed to tell whether a process is alive on Windows")
+        try:
+            return psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:  # it exited between the check and the status call
+            return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -70,6 +77,14 @@ def _pid_alive(pid: int) -> bool:
     # A zombie still answers signal 0; ps reports its state.
     state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
     return bool(state) and not state.startswith("Z")
+
+
+def _kill_leftover(proc: subprocess.Popen) -> None:
+    """Test cleanup: kill the process group on POSIX, the process itself on Windows (which has no killpg)."""
+    if sys.platform == "win32":
+        proc.kill()
+    else:
+        os.killpg(proc.pid, signal.SIGKILL)
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +174,10 @@ _STUBBORN = (
 
 
 def test_terminate_all_leaves_no_orphans(tmp_path):
+    if sys.platform == "win32":
+        psutil = pytest.importorskip("psutil", reason="psutil is needed to find and clean up the grandchild on Windows")
     group = launcher.ProcessGroup()
+    grandchild = None
     try:
         log = tmp_path / "grandparent.log"
         gp = group.spawn("gp", [sys.executable, "-u", "-c", _GRANDPARENT], dict(os.environ), log)
@@ -174,13 +192,25 @@ def test_terminate_all_leaves_no_orphans(tmp_path):
 
         assert gp.poll() is not None and stubborn.poll() is not None
         assert group.alive() == []
-        assert _wait_for(lambda: not _pid_alive(grandchild), timeout=5.0), "the grandchild was orphaned"
+        if sys.platform != "win32":
+            # Windows has no process groups to signal, so a grandchild outlives its parent there; the
+            # demo script stops what it started, not what those processes started.
+            assert _wait_for(lambda: not _pid_alive(grandchild), timeout=5.0), "the grandchild was orphaned"
     finally:
         for proc in group.procs.values():
             if proc.poll() is None:
-                os.killpg(proc.pid, signal.SIGKILL)
+                _kill_leftover(proc)
+        if sys.platform == "win32" and grandchild is not None:
+            try:
+                psutil.Process(grandchild).kill()
+            except psutil.Error:
+                pass
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Needs POSIX SIGINT delivery to a child process; Windows has only Ctrl+C events for a console process group",
+)
 def test_ctrl_c_tears_down_the_launched_processes(tmp_path):
     """Attach to a throwaway listener, send SIGINT and check the edges die."""
     import socket

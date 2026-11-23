@@ -330,3 +330,47 @@ def test_retask_offers_keep_the_gap_and_report_lanes_no_drone_can_take():
     assert "below the 100 cm gap" in failed[-1]["detail"]
     current = coordinator.current_plan()
     assert any(entry.get("drone_id") == "drone-1" and "gap" in entry["reason"] for entry in current["uncovered"])
+
+
+# ---------------------------------------------------------------- sidestep margin (PR #193)
+
+
+def _two_drone_plan(**kwargs):
+    rect = pp.Rect(0, 0, 400, 400)
+    zones = pp.split_area(rect, 2, 100)
+    takeoffs = {d: (z.x, z.y) for d, z in zip(("drone-1", "drone-2"), zones)}
+    spec = PlanSpec(pattern="parallel_track", area=rect)
+    return build_plan(spec, ["drone-1", "drone-2"], geofence_cm=3000, takeoffs=takeoffs, **kwargs)
+
+
+def test_the_path_check_keeps_the_sidestep_margin_from_a_drone_that_may_sidestep():
+    # The generated paths are 175 cm apart: enough for the 100 cm gap plus a 50 cm sidestep margin.
+    assert _two_drone_plan().ok
+    assert _two_drone_plan(sidestep_margin_of=lambda drone_id: 50).ok
+    # A margin the paths do not leave is a separation problem, named as such.
+    built = _two_drone_plan(sidestep_margin_of=lambda drone_id: 100 if drone_id == "drone-2" else 0)
+    (problem,) = [p for p in built.problems if p.kind == "separation"]
+    assert "below the 100 cm gap and the 100 cm sidestep margin" in problem.text
+    # No drone that may sidestep: the gap alone.
+    assert _two_drone_plan(sidestep_margin_of=lambda drone_id: 0).ok
+
+
+def test_the_ground_reads_its_sidestep_margin_from_the_environment(monkeypatch):
+    from flightrisk.dashboard.app import fleet_sidestep_margin_cm
+    from flightrisk.drone.coordinator import SIDESTEP_MARGIN_CM, SIDESTEP_MARGIN_ENV
+
+    monkeypatch.delenv(SIDESTEP_MARGIN_ENV, raising=False)
+    assert fleet_sidestep_margin_cm() == SIDESTEP_MARGIN_CM == 50
+    monkeypatch.setenv(SIDESTEP_MARGIN_ENV, "80")
+    assert fleet_sidestep_margin_cm() == 80
+    monkeypatch.setenv(SIDESTEP_MARGIN_ENV, "0")
+    assert fleet_sidestep_margin_cm() == 0
+    for bad in ("-5", "501", "fifty", "5.5"):
+        monkeypatch.setenv(SIDESTEP_MARGIN_ENV, bad)
+        with pytest.raises(ValueError, match=SIDESTEP_MARGIN_ENV):
+            fleet_sidestep_margin_cm()
+
+
+def test_the_supervisor_gives_the_coordinator_its_sidestep_margin():
+    supervisor, *_ = _supervisor(sidestep_margin_cm=70)
+    assert supervisor.coordinator._sidestep_margin_cm == 70
