@@ -245,3 +245,91 @@ def test_windows_falls_back_to_atexit_cleanup_when_the_job_is_refused(monkeypatc
     assert len(registered) == 1
     registered[0]()
     assert proc.terminated
+
+
+windows_only = pytest.mark.skipif(not sys.platform.startswith("win"), reason="needs the real Windows kernel32")
+
+
+def _win_k32():
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    k32.WaitForSingleObject.restype = wintypes.DWORD
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    k32.IsProcessInJob.argtypes = [wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]
+    k32.IsProcessInJob.restype = wintypes.BOOL
+    k32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    k32.TerminateProcess.restype = wintypes.BOOL
+    return k32
+
+
+_SYNCHRONIZE = 0x00100000
+_PROCESS_TERMINATE = 0x0001
+_WAIT_OBJECT_0 = 0
+
+
+def _win_exited(k32, pid: int, timeout_s: float) -> bool:
+    """True when the process is gone (or exits within *timeout_s*)."""
+    handle = k32.OpenProcess(_SYNCHRONIZE, False, pid)
+    if not handle:
+        return True  # cannot open: no such process any more
+    try:
+        return k32.WaitForSingleObject(handle, int(timeout_s * 1000)) == _WAIT_OBJECT_0
+    finally:
+        k32.CloseHandle(handle)
+
+
+def _win_kill_pid(k32, pid: int) -> None:
+    handle = k32.OpenProcess(_PROCESS_TERMINATE, False, pid)
+    if handle:
+        k32.TerminateProcess(handle, 1)
+        k32.CloseHandle(handle)
+
+
+@windows_only
+def test_windows_real_job_holds_the_child():
+    import ctypes
+    from ctypes import wintypes
+
+    from flightrisk.drone import supervised
+
+    k32 = _win_k32()
+    proc = supervised.spawn_tied_to_parent([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        assert supervised._job_handle, "no job was created"
+        result = wintypes.BOOL(0)
+        ok = k32.IsProcessInJob(wintypes.HANDLE(int(proc._handle)), wintypes.HANDLE(supervised._job_handle), ctypes.byref(result))
+        assert ok, "IsProcessInJob failed"
+        assert result.value, "the child is not in the kill-on-close job"
+    finally:
+        proc.kill()
+        proc.wait(10)
+
+
+@windows_only
+def test_windows_child_dies_when_the_parent_is_killed():
+    k32 = _win_k32()
+    parent_code = (
+        "import sys, time\n"
+        f"sys.path.insert(0, {str(ROOT)!r})\n"
+        "from flightrisk.drone.supervised import spawn_tied_to_parent\n"
+        "p = spawn_tied_to_parent([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        "print(p.pid, flush=True)\n"
+        "time.sleep(60)\n"
+    )
+    parent = subprocess.Popen([sys.executable, "-c", parent_code], stdout=subprocess.PIPE, text=True)
+    child_pid = None
+    try:
+        child_pid = int(parent.stdout.readline())
+        assert not _win_exited(k32, child_pid, 0.2), "the child died early"
+        parent.kill()  # TerminateProcess: no atexit, no cleanup
+        parent.wait(10)
+        assert _win_exited(k32, child_pid, 5), "the child outlived its killed parent"
+    finally:
+        parent.kill()
+        if child_pid is not None:
+            _win_kill_pid(k32, child_pid)
