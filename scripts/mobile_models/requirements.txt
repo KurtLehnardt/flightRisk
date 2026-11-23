@@ -1,0 +1,31 @@
+# Conversion tools for scripts/mobile_models/make_models.py, pinned exactly.
+#
+# Install these in a SEPARATE virtual environment, never in FlightRisk's own
+# venv (its test suites depend on the versions there):
+#
+#   python3.13 -m venv .venv-mobile-models
+#   .venv-mobile-models/bin/pip install -r scripts/mobile_models/requirements.txt
+#   .venv-mobile-models/bin/python scripts/mobile_models/make_models.py all
+#
+# make_models.py refuses to convert with other versions of the packages below
+# (PINNED_TOOLS) unless --allow-unpinned-tools is given, because the parity
+# tolerances in docs/mobile-models.md were measured with these.
+#
+# torch 2.7.0 is the newest torch coremltools 9.0 is tested with.
+# numpy stays at 2.3.x: from numpy 2.4, int() of a one-element array raises,
+# and coremltools 9.0's PyTorch frontend relies on it when it folds the
+# attention layers' shape arithmetic.
+# open_clip_torch 3.3.0 is the version the ground uses, so the model
+# definition and preprocessing are the ground's.
+# The YOLOX model code is vendored in yolox_vendor/ (Apache-2.0); the yolox
+# package is not installed.
+torch==2.7.0
+torchvision==0.22.0
+open_clip_torch==3.3.0
+onnx==1.18.0
+onnxruntime==1.22.1
+coremltools==9.0
+safetensors==0.8.0
+numpy==2.3.5
+pillow==13.0.0
+opencv-python-headless==5.1.0.95

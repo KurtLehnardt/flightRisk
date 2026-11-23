@@ -22,6 +22,12 @@ venv/
 
 # Models (downloaded at runtime, and weights fine-tuned by scripts/finetune_heridal.py)
 models/
+# Mobile models installed by scripts/mobile_models/make_models.py (the model files
+# themselves are covered by *.onnx and *.mlpackage; never commit any of them)
+mobile/app/src/main/assets/mobile-models.json
+mobile/app/src/main/assets/model-notices.md
+ios/FlightRisk/Models/mobile-models.json
+ios/FlightRisk/Models/model-notices.md
 *.pt
 *.onnx
 *.mlpackage
