@@ -46,6 +46,7 @@ struct SettingsView: View {
             sensitivitySection
             llmSection
             GroundSettingsSection(viewModel: .live)
+            DemoSettingsSection(viewModel: .live)
             matchingAlgorithmsSection
             advancedSection
             aboutSection

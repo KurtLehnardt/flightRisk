@@ -196,8 +196,11 @@ enum GroundLinkStatus: Equatable {
     /// The ground refused the key. Distinct from network loss; the client waits for the user.
     case wrongKey
     case stopped
+    /// The demo: a simulated ground on this phone. No real drones, nothing sent to any network.
+    case demo
 
-    var isConnected: Bool { self == .connected }
+    /// True when commands have somewhere to go: the live ground, or the demo on the phone.
+    var isConnected: Bool { self == .connected || self == .demo }
 
     var text: String {
         switch self {
@@ -212,6 +215,7 @@ enum GroundLinkStatus: Equatable {
             return "Reconnecting (attempt \(attempt), next try in \(GroundText.number(retryIn)) s): \(reason)"
         case .wrongKey: return "Wrong key: the ground station refused the API key. Check the key in Settings."
         case .stopped: return "Not connected."
+        case .demo: return GroundUIText.demoLinkText
         }
     }
 
@@ -227,6 +231,7 @@ enum GroundLinkStatus: Equatable {
         case .addressRefused: return "REFUSED"
         case .off: return "OFF"
         case .paused, .stopped: return "OFFLINE"
+        case .demo: return "DEMO"
         }
     }
 }
@@ -279,9 +284,13 @@ struct GroundBanner: Identifiable, Equatable {
     let text: String
     let isFailure: Bool
     let receivedAt: Date
+    /// True for a failed, partial or unanswered LAND ALL. Such a banner keeps the demo from
+    /// starting until it is dismissed.
+    var isLandAllFailure = false
 }
 
-/// An `error` or `warning` from the ground. Errors stay until dismissed; warnings fade.
+/// An `error` or `warning` from the ground, or a notice from the phone. Errors stay until
+/// dismissed; warnings fade.
 struct GroundToast: Identifiable, Equatable {
     let id: UUID
     let text: String
@@ -346,6 +355,22 @@ enum GroundUIText {
     static let lastValueSuffix = " (last value)"
     static let partialRecord = "Partial record: only manual-control data so far; waiting for the fleet status."
     static let privacyNote = "Connects only to the ground station address you enter."
+    static let demoLinkText = "Demo: a simulated ground station on this phone. No real drones; nothing is sent to any network."
+    static let demoBlocksLink = "Demo mode is on. Turn it off to use the ground station."
+    /// In front of every command result, banner and toast while the demo runs.
+    static let demoPrefix = "DEMO: "
+    static let landAllButton = "LAND ALL"
+    static let landAllButtonDemo = "LAND ALL (demo)"
+    static let landAllLabel = "Land all drones"
+    static let landAllHint = "Sends LAND ALL to the ground station at once, without a confirmation."
+    static let landAllHintDemo = "Demo: lands only the simulated drones on this phone. Nothing is sent to a ground station."
+    static let landAllAgain = "Send LAND ALL again"
+    static let landAllAgainDemo = "Send LAND ALL (demo) again"
+    static let demoStartedAnnouncement =
+        "Demo started. No real drones. LAND ALL lands only the simulated drones on this phone; nothing is sent to a ground station."
+    static let demoStoppedAnnouncement = "Demo stopped. Everything the demo showed is cleared."
+    static let demoSwitchedLinkOff =
+        "The demo switched the ground link off, and it stays off. Switch it on again in Settings to connect to the ground station."
 
     /// The dashboard's partial-ack text (ui.js `landAllAckFeedback`): reached_any is true but at
     /// least one path reports 0 drones. Nil when no path reports 0.
@@ -434,6 +459,14 @@ typealias GroundClientFactory = @MainActor (GroundEndpoint, GroundAPIKey) -> Gro
 
 // MARK: - View model
 
+/// Whether the demo runs, readable without creating `GroundViewModel.live`: the onboarding
+/// screens must not create the ground view model, which may open a link. `live` keeps it current.
+@MainActor @Observable
+final class DemoModeState {
+    static let shared = DemoModeState()
+    fileprivate(set) var isActive = false
+}
+
 @MainActor @Observable
 final class GroundViewModel {
     /// The one instance the app uses (Ground tab and Settings section). Created on first use.
@@ -442,6 +475,7 @@ final class GroundViewModel {
         liveWasCreated = true
         #endif
         let model = GroundViewModel()
+        model.publishesDemoState = true
         model.startAppLifecycle()
         return model
     }()
@@ -532,7 +566,13 @@ final class GroundViewModel {
     /// it. At most `maxMatchAlerts` ids are kept, oldest dropped first.
     private(set) var alertAnswers: [String: MatchAlertAction] = [:]
     private var alertAnswerOrder: [String] = []
+    /// The ground's reasoning verdicts and raised levels for `matchAlerts`, by alert id (#185).
+    private(set) var alertVerdicts = AlertVerdictBook()
     private(set) var streamVideoEnabled: Bool?
+    /// True while the demo runs: a simulated ground on this phone instead of the live link.
+    private(set) var isDemoActive = false {
+        didSet { if publishesDemoState { DemoModeState.shared.isActive = isDemoActive } }
+    }
 
     // Settings, mirrored for the views.
     private(set) var savedAddress: String?
@@ -570,6 +610,20 @@ final class GroundViewModel {
     /// Drones whose land was sent to a ground without a fleet, oldest first; each
     /// `command_ack` answers the oldest.
     @ObservationIgnored private var pendingLegacyLands: [String] = []
+    /// The demo ground while the demo runs. Commands go to it and never to a client.
+    @ObservationIgnored private var demoSession: DemoGroundSession?
+    @ObservationIgnored private var demoStartedAt: Date?
+    @ObservationIgnored private var demoTicker: Task<Void, Never>?
+    /// Bumped on every demo start and stop, so a stale ticker delivers nothing.
+    @ObservationIgnored private var demoGeneration = 0
+    /// True for `live` only: it mirrors `isDemoActive` into `DemoModeState.shared`.
+    @ObservationIgnored private var publishesDemoState = false
+    /// True when starting the demo switched the live link off; leaving the demo then says so.
+    @ObservationIgnored private var demoSwitchedLinkOff = false
+    /// Posts a VoiceOver announcement. Tests replace it to read the announcements.
+    @ObservationIgnored var announce: @MainActor (String) -> Void = { text in
+        UIAccessibility.post(notification: .announcement, argument: text)
+    }
 
     init(
         keyStore: any GroundKeyStore = KeychainGroundKeyStore(),
@@ -650,7 +704,7 @@ final class GroundViewModel {
     func appWillEnterForeground() {
         appInBackground = false
         keyState = keyStore.keyState
-        if client == nil {
+        if client == nil, !isDemoActive {
             linkStatus = idleStatus()
         }
         connectIfWanted()
@@ -683,7 +737,8 @@ final class GroundViewModel {
             let changed = normalized != savedAddress
             settings.address = normalized
             savedAddress = normalized
-            if changed { forgetGroundState() }
+            // The demo's state is not the ground's: a new address while the demo runs keeps it.
+            if changed, !isDemoActive { forgetGroundState() }
             restartIfWanted()
             return nil
         }
@@ -709,6 +764,7 @@ final class GroundViewModel {
     func removeKey() {
         keyStore.deleteKey()
         keyState = keyStore.keyState
+        guard !isDemoActive else { return }
         closeClient()
         markStale(GroundUIText.staleAfterDisconnect)
         linkStatus = idleStatus()
@@ -716,6 +772,15 @@ final class GroundViewModel {
 
     /// Switches the link on or off. On connects only when an address and a key are saved.
     func setEnabled(_ enabled: Bool) {
+        // While the demo runs the live link stays off: it cannot be switched on, and switching
+        // it off leaves the demo's state and status alone.
+        if isDemoActive {
+            if !enabled {
+                settings.enabled = false
+                isEnabled = false
+            }
+            return
+        }
         settings.enabled = enabled
         isEnabled = enabled
         if enabled {
@@ -733,6 +798,7 @@ final class GroundViewModel {
     /// "Test connection": the REST health probe with the saved address and key. The text never
     /// contains the key.
     func testConnection() async -> String {
+        if isDemoActive { return GroundUIText.demoBlocksLink }
         if let reason = addressRefusal { return "Refused: \(GroundText.shorten(reason)). Nothing was sent." }
         guard let address = savedAddress, case let .success(endpoint) = GroundAddress.validate(address) else {
             return "Save the ground station address first."
@@ -762,6 +828,7 @@ final class GroundViewModel {
 
     /// The banner's "Retry": ends a wrong-key or backoff wait at once.
     func retryConnection() {
+        guard !isDemoActive else { return }
         if let client {
             Task { await client.retryNow() }
         } else {
@@ -773,8 +840,157 @@ final class GroundViewModel {
 
     /// Requests the full state again (pull to refresh).
     func refresh() async {
-        guard client != nil else { return }
+        guard client != nil || isDemoActive else { return }
         await sendStateRequests()
+    }
+
+    // MARK: Demo
+
+    /// What switching the demo on needs: at once, a confirmation that the live link closes
+    /// first, or nothing at all because it is refused. The demo never runs beside a live ground
+    /// link, and never while live drones may be in the air or a live LAND ALL is unanswered or
+    /// failed: starting it would close the link those drones depend on and clear that result.
+    var demoStartStep: DemoModePolicy.StartStep {
+        let step = policyStartStep
+        // Before the first fleet status, an unknown fleet is not "no drones in the air": the
+        // link may be open while drones the ground controls are flying.
+        if step == .confirmDisconnectFirst, (client != nil || isEnabled),
+           lastFleetStatusAt == nil, reducer.drones.isEmpty {
+            return .refused(Self.fleetUnknownRefusal)
+        }
+        return step
+    }
+
+    /// Shown when the demo is requested before the live ground has reported its drones.
+    static let fleetUnknownRefusal = "The ground has not reported its drones yet. Wait for it, or switch the link off in Settings first."
+
+    private var policyStartStep: DemoModePolicy.StartStep {
+        DemoModePolicy.startStep(
+            liveLinkOpen: client != nil, liveLinkSwitchedOn: isEnabled,
+            flyingDrones: isDemoActive ? 0 : dronesPossiblyInTheAir,
+            flyingStateIsStale: isStateStale || !linkStatus.isConnected,
+            landAll: isDemoActive ? .settled : liveLandAllState
+        )
+    }
+
+    /// The drones the ground reports in the air: flying, or, without a flying flag, held or
+    /// under manual control. The last values count too while they are stale.
+    private var dronesPossiblyInTheAir: Int {
+        reducer.drones.values.filter { r in
+            if let flying = r.isFlying { return flying }
+            return r.controlMode == .held || r.controlMode == .manual || r.edgeControlMode == .held || r.orphanLandInS != nil
+        }.count
+    }
+
+    /// The latest live LAND ALL: unanswered while it waits for the ground, failed while a
+    /// failure, a partial result or a "no answer" is shown and not dismissed.
+    private var liveLandAllState: DemoModePolicy.LandAllState {
+        if banners.contains(where: \.isLandAllFailure) { return .failed }
+        switch landAllFeedback?.phase {
+        case .failed?, .partial?: return .failed
+        case .sending?, .handedOver?, .noReplyYet?: return .unanswered
+        case .accepted?, .succeeded?, nil: break
+        }
+        return landAllOutstanding.isEmpty ? .settled : .unanswered
+    }
+
+    /// Starts the demo: a simulated ground on this phone. A live link is closed first and
+    /// switched off (the user switches it on again in Settings after the demo; it never comes
+    /// back by itself). Everything from the live ground is cleared, so demo data never mixes
+    /// with a real ground's. Call it only after the user confirmed when `demoStartStep` asked.
+    /// Returns false, and changes nothing, when `demoStartStep` refuses the demo.
+    @discardableResult
+    func startDemo() -> Bool {
+        guard !isDemoActive else { return false }
+        if case let .refused(reason) = demoStartStep {
+            log(.warning, "demo refused: \(reason)")
+            return false
+        }
+        if client != nil {
+            log(.info, "demo: closing the ground link first")
+            closeClient()
+        }
+        if isEnabled {
+            settings.enabled = false
+            isEnabled = false
+            demoSwitchedLinkOff = true
+        }
+        clearEverything()
+        demoGeneration += 1
+        let generationAtStart = demoGeneration
+        let started = clock()
+        demoSession = DemoGroundSession(ground: DemoGround(startedAt: started))
+        demoStartedAt = started
+        isDemoActive = true
+        linkStatus = .demo
+        log(.info, "demo started")
+        announce(GroundUIText.demoStartedAnnouncement)
+        advanceDemo()
+        demoTicker = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard let self, self.demoGeneration == generationAtStart else { return }
+                self.advanceDemo()
+            }
+        }
+        return true
+    }
+
+    /// Leaves the demo and clears every piece of demo state. The live link stays off; when the
+    /// demo switched it off, a notice in the Ground tab says so.
+    func stopDemo() {
+        endDemo(restarting: false)
+    }
+
+    /// Plays the demo again from the start.
+    func restartDemo() {
+        guard isDemoActive else { return }
+        endDemo(restarting: true)
+        startDemo()
+    }
+
+    private func endDemo(restarting: Bool) {
+        guard isDemoActive else { return }
+        demoGeneration += 1
+        demoTicker?.cancel()
+        demoTicker = nil
+        demoSession = nil
+        demoStartedAt = nil
+        isDemoActive = false
+        clearEverything()
+        linkStatus = idleStatus()
+        log(.info, restarting ? "demo restarting" : "demo stopped")
+        guard !restarting else { return }
+        var announcement = GroundUIText.demoStoppedAnnouncement
+        if demoSwitchedLinkOff {
+            demoSwitchedLinkOff = false
+            addToast(GroundUIText.demoSwitchedLinkOff, isError: true, at: clock())
+            announcement += " " + GroundUIText.demoSwitchedLinkOff
+        }
+        announce(announcement)
+    }
+
+    /// Seconds since the demo started.
+    private var demoElapsed: TimeInterval {
+        guard let demoStartedAt else { return 0 }
+        return max(0, clock().timeIntervalSince(demoStartedAt))
+    }
+
+    /// Feeds the demo's due events through the same handler a live ground's events use.
+    private func advanceDemo() {
+        guard let session = demoSession else { return }
+        for event in session.advance(to: demoElapsed) {
+            handle(event)
+        }
+    }
+
+    /// Everything a ground (live or demo) put on the screen, gone.
+    private func clearEverything() {
+        forgetGroundState()
+        banners = []
+        toasts = []
+        landAllFeedback = nil
+        clearStale()
     }
 
     // MARK: Commands
@@ -785,10 +1001,12 @@ final class GroundViewModel {
         let started = clock()
         landAllFeedback = GroundCommandFeedback(attempt: attempt, phase: .sending, text: GroundText.landAllSending, startedAt: started, updatedAt: started)
         let generationAtSend = generation
+        let demoGenerationAtSend = demoGeneration
         let outcome = await emit(.landAll)
         let at = clock()
-        if outcome == .sent, generation == generationAtSend, linkStatus.isConnected {
-            // Only a send on the link that is still up can be answered by an ack.
+        if outcome == .sent, generation == generationAtSend, demoGeneration == demoGenerationAtSend, linkStatus.isConnected {
+            // Only a send on the link (or the demo session) that is still up can be answered by
+            // an ack. A demo played again meanwhile is a new session that never got this tap.
             landAllOutstanding.append((attempt, at))
         }
         guard landAllFeedback?.attempt == attempt else { return }  // A newer tap took over.
@@ -1017,12 +1235,24 @@ final class GroundViewModel {
         return text
     }
 
-    /// A feedback text with its age once it is no longer in flight.
+    /// A feedback text with its age once it is no longer in flight, and "DEMO: " in front
+    /// while the demo runs.
     func feedbackText(_ f: GroundCommandFeedback) -> String {
         switch f.phase {
-        case .sending, .handedOver: return f.text
-        default: return f.text + GroundUIText.age(now.timeIntervalSince(f.updatedAt))
+        case .sending, .handedOver: return shownCommandText(f.text)
+        default: return shownCommandText(f.text + GroundUIText.age(now.timeIntervalSince(f.updatedAt)))
         }
+    }
+
+    /// The LAND ALL result as the top bar shows it: "DEMO: " in front while the demo runs.
+    var landAllFeedbackText: String? {
+        landAllFeedback.map { shownCommandText($0.text) }
+    }
+
+    /// A command result as shown: "DEMO: " in front while the demo runs, so a demo result can
+    /// never be read as a real drone's.
+    func shownCommandText(_ text: String) -> String {
+        isDemoActive ? GroundUIText.demoPrefix + text : text
     }
 
     /// The HELD countdown, counted down locally from the latest server value as the contract
@@ -1078,7 +1308,7 @@ final class GroundViewModel {
                 current.updatedAt = date
                 landAllFeedback = current
             } else {
-                addBanner(GroundUIText.earlierLandAllNoAnswer, isFailure: true, at: date)
+                addBanner(GroundUIText.earlierLandAllNoAnswer, isFailure: true, at: date, landAll: true)
             }
         }
     }
@@ -1176,7 +1406,7 @@ final class GroundViewModel {
             }
         case let .fleetEvent(ev):
             if let info = GroundText.fleetEventBannerInfo(ev) {
-                addBanner(info.text, isFailure: info.isFailure, at: at)
+                addBanner(info.text, isFailure: info.isFailure, at: at, landAll: info.isFailure && ev.resolvedKind == .landAll)
                 if info.isFailure, ev.resolvedKind == .landAll {
                     // A failed LAND ALL stays in the top bar until dismissed or a new tap.
                     landAllFeedback = GroundCommandFeedback(
@@ -1203,8 +1433,14 @@ final class GroundViewModel {
                 matchAlerts.append(a)
                 if matchAlerts.count > Self.maxMatchAlerts { matchAlerts.removeFirst(matchAlerts.count - Self.maxMatchAlerts) }
             }
+            // The book keeps the highest level and the latest final verdict, so a reminder that
+            // carries an older copy never lowers what the row shows.
+            alertVerdicts.apply(event)
         case let .matchAlertResolved(r):
             applyAlertAnswer(r)
+        case .reasoningResult, .alertUpgrade:
+            // Read only: the verdict and a raised level land on the alert row by alert id.
+            alertVerdicts.apply(event)
         case let .detectionProfiles(p):
             detectionProfiles = p
             onProfilesFromGround()
@@ -1258,7 +1494,8 @@ final class GroundViewModel {
     }
 
     private func connectIfWanted() {
-        guard client == nil, isEnabled, !appInBackground else { return }
+        // Never beside the demo: the demo must be off before a live link opens.
+        guard client == nil, isEnabled, !appInBackground, !isDemoActive else { return }
         guard let address = savedAddress, case let .success(endpoint) = GroundAddress.validate(address) else {
             linkStatus = addressRefusal.map { .addressRefused($0) } ?? .notConfigured
             return
@@ -1327,6 +1564,7 @@ final class GroundViewModel {
     }
 
     private func restartIfWanted() {
+        guard !isDemoActive else { return }
         if client != nil {
             closeClient()
             markStale(GroundUIText.staleAfterDisconnect)
@@ -1352,6 +1590,7 @@ final class GroundViewModel {
         matchAlerts = []
         alertAnswers = [:]
         alertAnswerOrder = []
+        alertVerdicts = AlertVerdictBook()
         streamVideoEnabled = nil
         landFeedback = [:]
         resumeFeedback = [:]
@@ -1445,22 +1684,24 @@ final class GroundViewModel {
     }
 
     /// The one path to the wire. Only a `GroundCommand` can be sent, only through
-    /// `wireMessage`, and an unsendable command (an empty drone id) is refused here.
+    /// `wireMessage`, and an unsendable command (an empty drone id) is refused here. While the
+    /// demo runs, `GroundCommandDispatch` hands every command to the demo ground on the phone,
+    /// which answers it like a ground would; nothing reaches a client or a network.
     private func emit(_ command: GroundCommand) async -> EmitOutcome {
-        guard let wire = command.wireMessage else {
+        guard command.isSendable else {
             log(.warning, "refused to send \(command.eventName): the drone id is empty")
             return .refused
         }
-        guard let client else { return .noClient }
-        do {
-            switch try await client.emit(wire.eventName, payload: wire.payloadJSON) {
-            case .sent: return .sent
-            case .notSent(.notConnected): return .notConnected
-            case .notSent(.sendFailed): return .sendFailed
-            case .notSent(.shutDown): return .shutDown
-            }
-        } catch {
-            log(.error, "\(wire.eventName) was refused by the client")
+        let destination = GroundCommandDestination.choose(demo: demoSession, elapsed: demoElapsed, live: client)
+        switch await GroundCommandDispatch.send(command, to: destination) {
+        case .answeredByDemo, .sent: return .sent
+        case .notSent(.notConnected): return .notConnected
+        case .notSent(.sendFailed): return .sendFailed
+        case .notSent(.shutDown): return .shutDown
+        case .noDestination: return .noClient
+        case .notSendable: return .refused
+        case .refusedByClient:
+            log(.error, "\(command.eventName) was refused by the client")
             return .refused
         }
     }
@@ -1489,9 +1730,11 @@ final class GroundViewModel {
         let started = clock()
         setDroneFeedback(isLand, id, GroundCommandFeedback(attempt: attempt, phase: .sending, text: GroundUIText.droneSending(id, action: action), startedAt: started, updatedAt: started))
         let generationAtSend = generation
+        let demoGenerationAtSend = demoGeneration
         let outcome = await emit(command)
         let at = clock()
-        if outcome == .sent, isLand, reducer.isLegacyShape, generation == generationAtSend, linkStatus.isConnected {
+        if outcome == .sent, isLand, reducer.isLegacyShape, generation == generationAtSend,
+           demoGeneration == demoGenerationAtSend, linkStatus.isConnected {
             pendingLegacyLands.append(id)
         }
         guard droneFeedback(isLand, id)?.attempt == attempt else { return }
@@ -1556,14 +1799,14 @@ final class GroundViewModel {
         let latestStillWaiting = !landAllOutstanding.isEmpty
         if latestStillWaiting, landAllFeedback?.isWaiting == true {
             landAllFeedback?.detail = "Earlier LAND ALL: " + text
-            if phase != .succeeded { addBanner(text, isFailure: true, at: at) }
+            if phase != .succeeded { addBanner(text, isFailure: true, at: at, landAll: true) }
             return
         }
         if landAllFeedback?.phase == .failed {
             // A failure shown for LAND ALL stays visible; this answer is added to it.
             landAllFeedback?.detail = text
             landAllFeedback?.updatedAt = at
-            if phase != .succeeded { addBanner(text, isFailure: true, at: at) }
+            if phase != .succeeded { addBanner(text, isFailure: true, at: at, landAll: true) }
             return
         }
         landAllFeedback = GroundCommandFeedback(
@@ -1630,8 +1873,11 @@ final class GroundViewModel {
         }
     }
 
-    private func addBanner(_ text: String, isFailure: Bool, at: Date) {
-        banners.insert(GroundBanner(id: UUID(), text: text, isFailure: isFailure, receivedAt: at), at: 0)
+    /// Adds a banner, with "DEMO: " in front while the demo runs. `landAll` marks a failed,
+    /// partial or unanswered LAND ALL.
+    private func addBanner(_ text: String, isFailure: Bool, at: Date, landAll: Bool = false) {
+        let shown = isDemoActive ? GroundUIText.demoPrefix + text : text
+        banners.insert(GroundBanner(id: UUID(), text: shown, isFailure: isFailure, receivedAt: at, isLandAllFailure: landAll), at: 0)
         if banners.count > Self.maxBanners {
             // Drop the oldest non-failure first; failures go only when nothing else is left.
             if let index = banners.lastIndex(where: { !$0.isFailure }) { banners.remove(at: index) } else { banners.removeLast() }
@@ -1639,7 +1885,8 @@ final class GroundViewModel {
     }
 
     private func addToast(_ text: String, isError: Bool, at: Date) {
-        toasts.insert(GroundToast(id: UUID(), text: text, isError: isError, receivedAt: at), at: 0)
+        let shown = isDemoActive ? GroundUIText.demoPrefix + text : text
+        toasts.insert(GroundToast(id: UUID(), text: shown, isError: isError, receivedAt: at), at: 0)
         while toasts.count > Self.maxToasts {
             // Drop the oldest warning first; errors go only when nothing else is left.
             if let index = toasts.lastIndex(where: { !$0.isError }) { toasts.remove(at: index) } else { toasts.removeLast() }

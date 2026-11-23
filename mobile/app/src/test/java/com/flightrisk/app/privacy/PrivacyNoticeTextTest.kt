@@ -1,5 +1,6 @@
 package com.flightrisk.app.privacy
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -26,8 +27,18 @@ class PrivacyNoticeTextTest {
     }
 
     @Test fun linksToThePrivacyPolicy() {
-        assertTrue(PrivacyNoticeText.POLICY_URL.endsWith("docs/privacy-policy.md"))
+        // One source: the build sets the address (flightrisk.privacyPolicyUrl), and the notice reads it.
+        assertEquals(com.flightrisk.app.BuildConfig.PRIVACY_POLICY_URL, PrivacyNoticeText.POLICY_URL)
         assertTrue(PrivacyNoticeText.POLICY_URL.startsWith("https://"))
+        assertTrue(PrivacyNoticeText.POLICY_URL.none { it.isWhitespace() })
+    }
+
+    @Test fun theDefaultPolicyAddressPointsAtTheRepositoryPolicyFile() {
+        // The default lives in app/build.gradle.kts (tests run with mobile/app as the working directory).
+        val gradle = java.io.File("build.gradle.kts").readText()
+        val default = Regex("""val defaultPrivacyPolicyUrl = "([^"]+)"""").find(gradle)!!.groupValues[1]
+        assertTrue(default, default.endsWith("docs/privacy-policy.md"))
+        assertTrue(java.io.File("../../docs/privacy-policy.md").isFile)
     }
 
     @Test fun recordingExplanationSaysWhatWhereBackupAndDelete() {

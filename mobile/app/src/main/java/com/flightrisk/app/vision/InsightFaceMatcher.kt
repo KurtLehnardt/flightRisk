@@ -66,6 +66,10 @@ class InsightFaceMatcher(
         } catch (e: Exception) {
             Log.w(TAG, "InsightFace R18 model not available: ${e.message}")
             isAvailable = false
+        } catch (e: LinkageError) {
+            // Native LiteRT library failed to load: degrade to "model not loaded".
+            Log.w(TAG, "InsightFace native library did not load: ${e.javaClass.simpleName}")
+            isAvailable = false
         }
     }
 
