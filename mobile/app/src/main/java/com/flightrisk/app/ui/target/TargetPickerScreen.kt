@@ -1,10 +1,14 @@
 package com.flightrisk.app.ui.target
 
+import android.content.ActivityNotFoundException
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import android.util.Log
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -63,6 +67,8 @@ import com.flightrisk.app.ui.quality.QualityReport
 import com.flightrisk.app.ui.theme.AlertRed
 import com.flightrisk.app.ui.theme.MatchGreen
 
+private const val TAG = "TargetPickerScreen"
+
 /**
  * Target photo selection screen.
  *
@@ -89,6 +95,10 @@ fun TargetPickerScreen(
     savedQualityReport: QualityReport? = null,
 ) {
     val context = LocalContext.current
+    // The camera is optional in the manifest; without one only "Select Photo" is offered.
+    val hasCamera = remember {
+        context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
+    }
     var selectedBitmap by remember { mutableStateOf(savedBitmap) }
     var qualityReport by remember { mutableStateOf(savedQualityReport) }
     var photoConfirmed by remember { mutableStateOf(savedBitmap != null) }
@@ -182,18 +192,36 @@ fun TargetPickerScreen(
                     Text("Select Photo")
                 }
 
-                OutlinedButton(
-                    onClick = {
-                        TempCameraPhotos.delete(photoFile)
-                        val file = TempCameraPhotos.create(context.cacheDir)
-                        val uri = fileProviderUri(context, file)
-                        photoFile = file
-                        photoUri = uri
-                        cameraLauncher.launch(uri)
-                    },
-                    modifier = Modifier.sizeIn(minHeight = 48.dp),
-                ) {
-                    Text("Take Photo")
+                if (hasCamera) {
+                    OutlinedButton(
+                        onClick = {
+                            TempCameraPhotos.delete(photoFile)
+                            val file = TempCameraPhotos.create(context.cacheDir)
+                            val uri = fileProviderUri(context, file)
+                            photoFile = file
+                            photoUri = uri
+                            try {
+                                cameraLauncher.launch(uri)
+                            } catch (e: ActivityNotFoundException) {
+                                // No camera app is installed.
+                                Log.w(TAG, "No app can take a photo", e)
+                                TempCameraPhotos.delete(file)
+                                photoFile = null
+                                photoUri = null
+                            } catch (e: SecurityException) {
+                                // ACTION_IMAGE_CAPTURE is refused while the app declares the
+                                // CAMERA permission but the person has not granted it.
+                                Log.w(TAG, "Camera capture not allowed without the camera permission", e)
+                                TempCameraPhotos.delete(file)
+                                photoFile = null
+                                photoUri = null
+                                Toast.makeText(context, "Allow camera access to take a photo", Toast.LENGTH_LONG).show()
+                            }
+                        },
+                        modifier = Modifier.sizeIn(minHeight = 48.dp),
+                    ) {
+                        Text("Take Photo")
+                    }
                 }
             }
 
