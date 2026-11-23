@@ -2136,6 +2136,8 @@ def add_unknown_keys(value: Any, parent_key: str | None = None) -> Any:
     return out
 
 
+#: ``reasoning_result`` and ``alert_upgrade`` are not listed yet: the iOS tests require every event in
+#: unknown_keys.json to be one the iOS app decodes, and it does not decode those two yet.
 UNKNOWN_KEY_SOURCES = {
     "status": ("status.json", "fleet_two_drones"),
     "fleet_status": ("fleet_status.json", "one_held_orphan_countdown"),
@@ -2148,8 +2150,6 @@ UNKNOWN_KEY_SOURCES = {
     "detection_profiles": ("detection_profiles.json", "refused"),
     "ceiling_settings": ("ceiling_settings.json", "edge_refused"),
     "reasoning_provider": ("reasoning_provider.json", "local_gemma_cloud_blocked"),
-    "reasoning_result": ("reasoning_result.json", "match"),
-    "alert_upgrade": ("alert_upgrade.json", "confirmed_match"),
     "manual_status": ("manual_status.json", "held_orphan_countdown"),
     "manual_ack": ("manual_ack.json", "land_ok"),
     "manual_result": ("manual_result.json", "land_acked"),

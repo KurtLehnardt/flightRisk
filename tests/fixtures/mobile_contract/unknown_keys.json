@@ -2,7 +2,7 @@
   "_meta": {
     "description": "Forward compatibility: real payloads with an unknown key added at every object level (never inside maps keyed by drone id or provider name). Decoders must ignore unknown keys everywhere.",
     "file": "unknown_keys.json",
-    "generated_at_commit": "3d79bc28f2f9ee66a84cbdb29b42cfff9c224974",
+    "generated_at_commit": "d991295e2f3a1c484f9bf714081d65a8b6abcd3a",
     "map_keys": [
       "drones",
       "slots_cm",
@@ -17,20 +17,6 @@
     "unknown_key": "x_future_field"
   },
   "cases": {
-    "alert_upgrade": {
-      "direction": "server_to_client",
-      "event": "alert_upgrade",
-      "notes": "alert_upgrade.json case 'confirmed_match' with 'x_future_field' added to every record object. A decoder must produce exactly what it produces for the original.",
-      "payload": {
-        "alert_id": "00000000000040008000000000000032",
-        "new_level": "confirmed_match",
-        "reasoning": "Same red jacket, blue jeans and grey backpack as the reference photo.",
-        "track_id": "8_7",
-        "x_future_field": "ignore me"
-      },
-      "source_case": "confirmed_match",
-      "source_file": "alert_upgrade.json"
-    },
     "ceiling_settings": {
       "direction": "server_to_client",
       "event": "ceiling_settings",
@@ -905,25 +891,6 @@
       },
       "source_case": "local_gemma_cloud_blocked",
       "source_file": "reasoning_provider.json"
-    },
-    "reasoning_result": {
-      "direction": "server_to_client",
-      "event": "reasoning_result",
-      "notes": "reasoning_result.json case 'match' with 'x_future_field' added to every record object. A decoder must produce exactly what it produces for the original.",
-      "payload": {
-        "alert_id": "00000000000040008000000000000032",
-        "result": {
-          "confidence": "high",
-          "match": true,
-          "reasoning": "Same red jacket, blue jeans and grey backpack as the reference photo.",
-          "x_future_field": "ignore me"
-        },
-        "track_id": "8_7",
-        "type": "analyze",
-        "x_future_field": "ignore me"
-      },
-      "source_case": "match",
-      "source_file": "reasoning_result.json"
     },
     "status": {
       "direction": "server_to_client",
