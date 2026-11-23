@@ -2,7 +2,7 @@
   "_meta": {
     "description": "The 'match_alert' and 'match_alert_reminder' events. A phone shows them; the operator answers on the laptop (match_alert_response is not in the phone's allow-list). 'match_alert_resolved' tells every client that the operator answered one.",
     "file": "match_alert.json",
-    "generated_at_commit": "3d79bc28f2f9ee66a84cbdb29b42cfff9c224974",
+    "generated_at_commit": "3751fba8de9a73a5f4467fd626f8b667bd35e686",
     "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
     "sources": [
       "MatchAlertLatch.pending_alert",

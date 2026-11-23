@@ -42,6 +42,8 @@ SLEEPER = (
     "time.sleep(60)\n"
 )
 
+POSIX_ONLY = pytest.mark.skipif(sys.platform == "win32", reason="Exercises the POSIX spawn and stop path; Windows refuses an edge restart by design")
+
 
 def _spec(name, kind="edge", code=SLEEPER, ready_ports=()):
     return ProcessSpec(
@@ -149,6 +151,7 @@ def test_log_is_written_and_read_back_without_the_token(manager, tmp_path):
     assert log.startswith("# edge-drone-1 started by the FlightRisk launcher")
 
 
+@POSIX_ONLY
 def test_restart_replaces_the_process(manager):
     m = manager(windows=False)
     m.start([_spec("edge-drone-1")], wait=True)
@@ -354,6 +357,7 @@ def test_windows_refuses_to_restart_an_edge_but_restarts_the_ground(manager):
     assert _wait(lambda: _status(m, "ground")["status"] == RUNNING)
 
 
+@POSIX_ONLY
 def test_an_edge_that_had_to_be_terminated_is_not_restarted(manager):
     stubborn = "import signal, time\nsignal.signal(signal.SIGINT, signal.SIG_IGN)\nprint('up', flush=True)\ntime.sleep(60)\n"
     m = manager(edge_grace_s=0.3, windows=False)
@@ -368,6 +372,7 @@ def test_an_edge_that_had_to_be_terminated_is_not_restarted(manager):
     assert _wait(lambda: _status(m, "edge-drone-1")["status"] == RUNNING)
 
 
+@POSIX_ONLY
 def test_repeated_stop_signals_each_process_once(manager):
     calls = []
 
@@ -395,6 +400,7 @@ def test_repeated_stop_signals_each_process_once(manager):
     assert _status(m, "edge-drone-1")["status"] == STOPPED
 
 
+@POSIX_ONLY
 def test_overlapping_restarts_and_restart_during_stop_are_refused(manager):
     slow_exit = (
         "import signal, sys, time\n"
@@ -440,6 +446,7 @@ def test_two_launchers_never_share_log_files(tmp_path):
         b.stop_all()
 
 
+@POSIX_ONLY
 def test_restart_writes_a_new_log_file_and_keeps_the_old_one(manager):
     m = manager(windows=False)
     m.start([_spec("edge-drone-1")], wait=True)

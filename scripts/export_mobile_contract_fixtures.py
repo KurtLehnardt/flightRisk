@@ -122,6 +122,8 @@ FORBIDDEN_CLIENT_EMITS: dict[str, str] = {
     "deregister_drone": "drone registration; laptop only",
     "remove_all_drones": "drone registration; laptop only",
     "restart_dashboard": "restarts the ground's pipeline; laptop only",
+    "confirm_retask": "the operator confirms on the laptop that a landed drone's lanes may be offered to another drone",
+    "confirm_reflight": "the operator confirms on the laptop that a cut segment may be flown again",
     "set_target": "target photos and embeddings are managed on the laptop",
 }
 
@@ -613,6 +615,20 @@ def _fleet_scenarios() -> dict[str, Any]:
     out["event"]["retask_failed"] = [e for e in events if e["event"] == "retask_failed"][-1]
     out["plan"]["map_plan_lost_zone_uncovered"] = supervisor.coordinator.current_plan()
 
+    # A drone the ground landed with no controller: its lanes wait for the operator, offered to no drone.
+    from flightrisk.dashboard.app import ORPHAN_LANDED_CONFIRM
+
+    supervisor, transport, sio, clock = _supervisor()
+    supervisor.plan()
+    _ack_lanes(supervisor)
+    supervisor.start()
+    lanes = len(supervisor.coordinator.lanes("drone-2"))
+    supervisor.handle_control(_telemetry("drone-1", is_flying=True, lane_index=0, lanes_total=lanes))
+    supervisor.handle_control(_telemetry("drone-2", is_flying=False, lane_index=1, lanes_total=lanes))
+    supervisor.coordinator.on_drone_lost("drone-2", wait_s=0.0, confirm=ORPHAN_LANDED_CONFIRM)
+    events = sio.named("fleet_event")
+    out["event"]["retask_needs_confirmation"] = [e for e in events if e["event"] == "retask_needs_confirmation"][-1]
+
     # Plan edited on the map after Plan: Start is refused until Plan again.
     supervisor, transport, sio, clock = _supervisor()
     supervisor.plan()
@@ -767,6 +783,11 @@ def build_fleet_files(scenarios: dict[str, Any]) -> dict[str, dict]:
             "'awaiting' lists offered lanes with no answer yet."
         ),
         "retask_failed": "Lanes nobody can take: every entry has a reason; they also appear in fleet_plan.uncovered.",
+        "retask_needs_confirmation": (
+            "The ground landed a drone nobody controlled; its unflown lanes (each with a reason) are offered to no "
+            "drone until the operator confirms on the dashboard. A phone may show the lanes like retask_failed "
+            "lanes and must not offer a confirm control."
+        ),
         "land_all": "LAND ALL went out to every link.",
         "land_all_failed": "LAND ALL could not be sent to some links; detail names them.",
     }

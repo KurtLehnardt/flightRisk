@@ -331,6 +331,9 @@ kbd {
 }
 .uncovered .uncovered-head { font-weight: 700; font-family: var(--font); }
 .uncovered .reflight-confirm { margin-left: 8px; padding: 1px 8px; font-size: 11px; font-family: var(--font); }
+.uncovered .retask-confirm-row { font-family: var(--font); font-weight: 600; margin: 2px 0; }
+.uncovered .retask-confirm { margin-left: 8px; padding: 1px 8px; font-size: 11px; font-family: var(--font); }
+.uncovered .reflight-confirm.armed, .uncovered .retask-confirm.armed { background: var(--bad); color: #fff; }
 .disclaimer { margin: 0; font-size: var(--fs-xs); color: var(--muted); }
 
 /* ---------- Sidebar sections (collapsible, shared card markup) ---------- */

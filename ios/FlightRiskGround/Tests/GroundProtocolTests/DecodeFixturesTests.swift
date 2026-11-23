@@ -122,9 +122,15 @@ final class DecodeFixturesTests: XCTestCase {
             "retask": .retask, "retask_failed": .retaskFailed, "land_all": .landAll,
             "land_all_failed": .landAll, "profile_switch_pending": .profileSwitchPending,
         ]
+        // The app does not know this kind: it is shown by name, with its detail, and offers no confirm control.
+        let unknownKind = "retask_needs_confirmation"
         let cases = try Fixtures.cases("fleet_event")
-        XCTAssertEqual(Set(cases.map(\.name)), Set(expected.keys))
-        for c in cases {
+        XCTAssertEqual(Set(cases.map(\.name)), Set(expected.keys).union([unknownKind]))
+        let unknownCase = try XCTUnwrap(cases.first { $0.name == unknownKind })
+        let unknownEvent = try JSONDecoder().decode(FleetEvent.self, from: XCTUnwrap(unknownCase.payloadData))
+        XCTAssertEqual(unknownEvent.resolvedKind, .unknown(unknownKind))
+        XCTAssertEqual(unknownEvent.resolvedKind?.isKnown, false)
+        for c in cases where c.name != unknownKind {
             let ev = try JSONDecoder().decode(FleetEvent.self, from: XCTUnwrap(c.payloadData))
             XCTAssertEqual(ev.resolvedKind, expected[c.name], c.name)
             XCTAssertEqual(ev.resolvedKind?.isKnown, true, c.name)

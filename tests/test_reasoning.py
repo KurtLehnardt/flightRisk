@@ -150,13 +150,14 @@ class TestAnalyzeMatch:
 
     def test_chat_exception_returns_error_dict(self, make_agent, sample_image):
         agent, client = make_agent()
-        client.chat.side_effect = RuntimeError("connection refused")
+        client.chat.side_effect = RuntimeError("connection refused to http://user:pw@ollama.local")
 
         result = agent.analyze_match(sample_image, sample_image)
 
         assert result["match"] is False
         assert result["confidence"] == "error"
-        assert "connection refused" in result["reasoning"]
+        # Fixed operator text only: the exception's message never reaches clients.
+        assert result["reasoning"] == "AI check failed (Gemma error: RuntimeError)."
 
 
 class TestDescribePerson:
@@ -176,8 +177,7 @@ class TestDescribePerson:
 
         result = agent.describe_person(sample_image)
 
-        assert result.startswith("Error:")
-        assert "boom" in result
+        assert result == "AI check failed (Gemma error: RuntimeError)."
 
 
 class TestAnalyzeScene:
@@ -203,8 +203,7 @@ class TestAnalyzeScene:
 
         result = agent.analyze_scene(sample_image)
 
-        assert result.startswith("Error:")
-        assert "scene analysis failed" in result
+        assert result == "AI check failed (Gemma error: RuntimeError)."
 
 
 class TestMatchDescription:
@@ -233,7 +232,7 @@ class TestMatchDescription:
 
         assert result["match"] is False
         assert result["confidence"] == "error"
-        assert "bad request" in result["reasoning"]
+        assert result["reasoning"] == "AI check failed (Gemma error: ValueError)."
 
 
 class TestParseMatchResponse:

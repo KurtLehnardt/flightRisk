@@ -8,7 +8,9 @@ flask-socketio>=5.4
 websockets>=12.0
 Pillow>=10.4
 ollama>=0.4
-anthropic>=2.3
+# Capped below 2.4: flightrisk/reasoning/claude_agent.py relies on SDK 2.3 details
+# (header reset after construction, the streamed response body), checked at startup and in tests.
+anthropic>=2.3,<2.4
 open-clip-torch>=2.26
 insightface>=0.7
 onnxruntime>=1.18

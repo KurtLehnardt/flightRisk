@@ -277,11 +277,23 @@ class TestFitting:
         assert best["per_label_false_clear"] == {"short": 1.0, "long": 0.0}
 
     def test_per_label_false_block_and_pooled(self):
-        clear = {"a": [0.1, 0.1], "b": [0.9] * 8}
-        obstacle = {"w": [0.95]}
+        clear = {"a": [0.1, 0.1], "b": [0.1] + [0.8] * 7}
+        obstacle = {"w": [0.8, 0.9]}
         best = replay.best_threshold(clear, obstacle)["best"]
-        assert best["per_label_false_block"]["a"] == 0.0
-        assert best["false_block"] == pytest.approx(best["pooled_false_block"] * 0 + _mean_of(best["per_label_false_block"]))
+        assert best["threshold"] == pytest.approx(0.1)
+        assert best["per_label_false_block"] == {"a": 0.0, "b": pytest.approx(7 / 8)}
+        # Equal weight per recording: (0 + 7/8) / 2. Pooled over frames: 7 of the 10 clear frames.
+        assert best["false_block"] == pytest.approx(7 / 16)
+        assert best["pooled_false_block"] == pytest.approx(7 / 10)
+
+    def test_midpoint_is_the_threshold_when_it_is_not_below_the_next_value(self):
+        clear = {"c": [None, None, 0.5, 0.6]}
+        wall = {"w": [0.4, 0.45, 0.9, 0.95]}
+        best = replay.best_threshold(clear, wall)["best"]
+        assert best["just_below_lowest_obstacle"] is True
+        assert best["midpoint"] == best["threshold"]
+        assert best["midpoint"] < 0.4
+        assert not replay.is_clear(0.4, best["midpoint"])
 
     def test_margin(self):
         res = replay.best_threshold({"c": [0.1, 0.4]}, {"o": [0.6, 0.9]})
@@ -535,12 +547,18 @@ class TestCli:
 
     def test_gap_in_a_recording_is_not_voted_across(self, tmp_path, monkeypatch):
         times = [0.0, 0.1, 0.2, 5.0, 5.1, 5.2]
-        write_recording(tmp_path / "a", [30] * 6, times=times)
+        write_recording(tmp_path / "a", [30] * 5 + [200], times=times)
         monkeypatch.setattr(replay, "build_guard", lambda t: FakeGuard())
         report = replay.run_metrics_report([("a", str(tmp_path / "a"))], 1, 0.35, vote_interval_s=0, out=io.StringIO())
         # Two runs of 3 votes around a 4.8 s gap; the gap does not change the median frame interval.
         assert report["sampling"]["a"]["median_frame_interval_s"] == pytest.approx(0.1)
         assert report["metrics"]["score"]["voting"]["votes"]["a"] == 6
+        # The last frame is blocked. Two windows of 3 (one per run, none across the gap): the first is
+        # clear, the second is not. Across the gap there would be four windows and the rate would be 3/4.
+        p = report["metrics"]["score"]["voting"]["p_consecutive_clear"]["a"]
+        assert p["3"] == pytest.approx(1 / 2)
+        assert p["2"] == pytest.approx(3 / 4)
+        assert p["1"] == pytest.approx(5 / 6)
 
     def test_missing_index_exits(self, tmp_path, monkeypatch):
         monkeypatch.setattr(replay, "build_guard", lambda t: pytest.fail("the guard must not be built"))
@@ -586,3 +604,62 @@ class TestCli:
         assert replay.read_height_cm(tmp_path / "b") is None
         (tmp_path / "b" / "meta.json").write_text("not json")
         assert replay.read_height_cm(tmp_path / "b") is None
+
+
+class TestFollowUps:
+    def test_json_inside_a_recording_is_refused(self, tmp_path, monkeypatch, capsys):
+        write_recording(tmp_path / "a", [30, 40])
+        monkeypatch.setattr(replay, "build_guard", lambda t: pytest.fail("the guard must not be built"))
+        before = {p.name: p.read_bytes() for p in (tmp_path / "a").iterdir()}
+        for target in (tmp_path / "a" / "frames.csv", tmp_path / "a" / "meta.json", tmp_path / "a" / "report.json"):
+            with pytest.raises(SystemExit):
+                replay.run_metrics_report([("a", str(tmp_path / "a"))], 1, 0.35, json_out=str(target), out=io.StringIO())
+        assert {p.name: p.read_bytes() for p in (tmp_path / "a").iterdir()} == before
+        assert "inside the recording a" in capsys.readouterr().err
+
+    def test_json_named_like_a_recording_file_is_refused_anywhere(self, tmp_path):
+        for name in ("frames.csv", "meta.json", "Meta.JSON"):
+            with pytest.raises(replay.RecordingError):
+                replay.check_json_target(str(tmp_path / name))
+        replay.check_json_target(str(tmp_path / "report.json"))
+
+    def test_json_next_to_a_recording_is_fine(self, tmp_path):
+        write_recording(tmp_path / "a", [30])
+        replay.check_json_target(str(tmp_path / "report.json"), [("a", str(tmp_path / "a"))])
+
+    def test_fitted_voting_is_marked_not_validated(self):
+        recs = {"yard": recording_of([0.1, 0.2]), "wall": recording_of([0.8, 0.9])}
+        report = replay.build_report(recs, ["yard"], ["wall"], 0.35, 1.0, 0)
+        assert "not validated" in report["caveat"]
+        for entry in report["metrics"].values():
+            assert entry["voting"]["validated"] is False
+            assert entry["voting"]["caveat"] == report["caveat"]
+        fixed = replay.build_report(recs, [], [], 0.35, 1.0, 0)
+        assert "caveat" not in fixed
+        assert all("validated" not in e["voting"] for e in fixed["metrics"].values())
+
+    def test_vote_spacing_is_reported_and_warned_about(self):
+        times = [i * 0.3 for i in range(10)]
+        report = replay.build_report({"a": recording_of([0.1] * 10, times=times)}, [], [], 0.35, 1.0, 0.35)
+        assert report["sampling"]["a"]["median_vote_spacing_s"] == pytest.approx(0.6)
+        assert any("vote spacing" in w and "a:" in w for w in report["warnings"])
+        assert "vote dt s" in replay.format_report(report)
+        close = replay.build_report({"a": recording_of([0.1] * 10, times=[i * 0.2 for i in range(10)])}, [], [], 0.35, 1.0, 0.35)
+        assert close["sampling"]["a"]["median_vote_spacing_s"] == pytest.approx(0.4)
+        assert not any("vote spacing" in w for w in close["warnings"])
+
+    def test_mixed_known_and_unknown_heights_warn(self):
+        recs = {"a": recording_of([0.1], height_cm=100), "b": recording_of([0.1])}
+        report = replay.build_report(recs, [], [], 0.35, 1.0)
+        assert any("others do not" in w and "b" in w for w in report["warnings"])
+        none_known = replay.build_report({"a": recording_of([0.1]), "b": recording_of([0.1])}, [], [], 0.35, 1.0)
+        assert not any("others do not" in w for w in none_known["warnings"])
+
+    def test_rows_without_usable_capture_times_warn(self):
+        recs = {"a": recording_of([0.1, 0.1, 0.1], times=[0.0, None, 0.2])}
+        report = replay.build_report(recs, [], [], 0.35, 1.0)
+        assert any("a:" in w and "captured_at_s" in w for w in report["warnings"])
+
+    def test_vote_interval_needs_report(self):
+        with pytest.raises(SystemExit):
+            replay.parse_args(["--video", "v.mp4", "--vote-interval-s", "0.5"])

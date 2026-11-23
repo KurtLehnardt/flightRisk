@@ -175,3 +175,82 @@ def adapters_for_host(adapters: list[Adapter], host: str) -> list[Adapter]:
         except ValueError:
             continue
     return found
+
+
+@dataclass(frozen=True)
+class DefaultRoute:
+    """The interface this computer's default (internet) route leaves through: a name, an index, or both."""
+
+    name: str | None = None
+    index: int | None = None
+
+    def is_adapter(self, adapter: Adapter) -> bool:
+        """Whether *adapter* is that interface. Matches on the index when both sides have one, else on the name."""
+        if self.index is not None and adapter.index is not None:
+            return self.index == adapter.index
+        return self.name is not None and self.name == adapter.name
+
+
+def parse_route_get_default(text: str) -> DefaultRoute | None:
+    """The interface from macOS ``route -n get default`` (a line ``interface: en0``)."""
+    for line in text.splitlines():
+        key, _, value = line.partition(":")
+        if key.strip() == "interface" and value.strip():
+            name = value.strip()
+            return DefaultRoute(name, _index_of(name))
+    return None
+
+
+def parse_ip_route_default(text: str) -> DefaultRoute | None:
+    """The interface from Linux ``ip -4 route show default`` (``default via 10.0.0.1 dev eth0 ...``)."""
+    for line in text.splitlines():
+        words = line.split()
+        if words[:1] == ["default"] and "dev" in words[:-1]:
+            name = words[words.index("dev") + 1]
+            return DefaultRoute(name, _index_of(name))
+    return None
+
+
+def parse_get_netroute(text: str) -> DefaultRoute | None:
+    """The interface from PowerShell ``Get-NetRoute`` JSON, the default route with the lowest metric."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None
+    rows = data if isinstance(data, list) else [data]
+    best = None
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("InterfaceIndex"), int):
+            continue
+        metric = row.get("RouteMetric")
+        metric = metric if isinstance(metric, int) else 0
+        if best is None or metric < best[0]:
+            best = (metric, row)
+    if best is None:
+        return None
+    alias = best[1].get("InterfaceAlias")
+    return DefaultRoute(alias if isinstance(alias, str) and alias else None, best[1]["InterfaceIndex"])
+
+
+_PS_ROUTE_COMMAND = (
+    "Get-NetRoute -AddressFamily IPv4 -DestinationPrefix 0.0.0.0/0 | "
+    "Select-Object InterfaceIndex,InterfaceAlias,RouteMetric | ConvertTo-Json -Compress"
+)
+
+
+def default_route_interface(run: Runner = _run, platform: str | None = None) -> DefaultRoute | None:
+    """The interface of this computer's default route, or ``None`` when it cannot be determined.
+
+    Read-only: it asks the operating system's route tool and sends no packet.
+    Callers that need to avoid the internet adapter must treat ``None`` as
+    "unknown" and fail closed.
+    """
+    platform = sys.platform if platform is None else platform
+    try:
+        if platform == "win32":
+            return parse_get_netroute(run(["powershell", "-NoProfile", "-NonInteractive", "-Command", _PS_ROUTE_COMMAND]))
+        if platform.startswith("linux"):
+            return parse_ip_route_default(run(["ip", "-4", "route", "show", "default"]))
+        return parse_route_get_default(run(["route", "-n", "get", "default"]))
+    except (OSError, subprocess.SubprocessError):
+        return None
