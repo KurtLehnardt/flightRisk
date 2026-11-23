@@ -374,6 +374,14 @@ ACCEPTED_TODAY_REFUSED_BY_RESOLVE_UNIT = frozenset({
     (F, "--alt-slot-m", "120"),
     (T, G + "TELLO_TEMP_WARN_C", "120"),
     (T, G + "TELLO_TEMP_REFUSE_C", "40"),
+    # K-8 again, once the resolver reads "--alt-slot" below 10 as metres and accepts a fractional
+    # ceiling as today's readers do.
+    (T, "--alt-slot", "5"),
+    (T, "--alt-slot", "1.6"),
+    (T, G + "CEILING_CM", "150.5"),
+    # K-6: a link-loss detect time under 1.5 heartbeat intervals, which today accepts.
+    (T, G + "LINK_LOSS_LAND_S", "1.4"),
+    (F, G + "LINK_LOSS_LAND_S", "1.4"),
 })
 
 
