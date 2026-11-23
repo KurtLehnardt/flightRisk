@@ -87,3 +87,18 @@ targets:
       base:
         INFOPLIST_FILE: FlightRiskTests/Info.plist
         TARGETED_DEVICE_FAMILY: "1"
+  FlightRiskUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - FlightRiskUITests
+    dependencies:
+      - target: FlightRisk
+    configFiles:
+      Debug: Config/Signing.xcconfig
+      Release: Config/Signing.xcconfig
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: FlightRisk
+        TARGETED_DEVICE_FAMILY: "1"

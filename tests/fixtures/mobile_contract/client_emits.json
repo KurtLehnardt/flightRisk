@@ -2,7 +2,7 @@
   "_meta": {
     "description": "The Socket.IO events a phone may emit (allowed true, with an example payload) and the ones it must never emit (allowed false). Every listed event has a handler on the dashboard; the table itself is the contract and has no builder.",
     "file": "client_emits.json",
-    "generated_at_commit": "a6db91ed43155b20ae37f1906930f7303da2e959",
+    "generated_at_commit": "118efe71ebaef531c5c04dbdb2e33d9574537a6f",
     "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
     "sources": [
       "flightrisk.dashboard.app.socketio handlers",

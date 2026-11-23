@@ -38,6 +38,8 @@ val keystoreProperties = Properties().apply {
     if (file.isFile) file.inputStream().use { load(it) }
 }
 
+val signingMismatches = mutableListOf<String>()
+
 fun signingValue(propertyName: String, environmentName: String, trim: Boolean = true): String? {
     fun clean(raw: String?): String? {
         if (raw == null) return null
@@ -46,12 +48,12 @@ fun signingValue(propertyName: String, environmentName: String, trim: Boolean = 
     }
     val fromFile = clean(keystoreProperties.getProperty(propertyName))
     val fromEnvironment = clean(providers.environmentVariable(environmentName).orNull)
-    // Never put a value in the message: it may be a password.
+    // Never put a value in the message: it may be a password. The mismatch is recorded here and
+    // reported below, only when a release task is going to run, so debug builds, tests and lint
+    // are not blocked by a release-signing setup problem.
     if (fromFile != null && fromEnvironment != null && fromFile != fromEnvironment) {
-        throw GradleException(
-            "Release signing: $propertyName in keystore.properties differs from $environmentName. " +
-                "Set it in only one place, or make the two equal.",
-        )
+        signingMismatches += "Release signing: $propertyName in keystore.properties differs from $environmentName. " +
+            "Set it in only one place, or make the two equal."
     }
     return fromEnvironment ?: fromFile
 }
@@ -125,6 +127,14 @@ android {
     }
 }
 
+// A mismatch between keystore.properties and the environment stays a hard failure for a release
+// build (assemble, bundle or any other release task), but only for those.
+gradle.taskGraph.whenReady {
+    if (signingMismatches.isNotEmpty() && allTasks.any { it.project == project && it.name.contains("Release") }) {
+        throw GradleException(signingMismatches.joinToString("\n"))
+    }
+}
+
 // A signed release is a build meant for Play. Warn when it still links to the
 // policy file on GitHub, which Play does not accept as a privacy policy page.
 if (hasReleaseSigning && privacyPolicyUrl == defaultPrivacyPolicyUrl) {
@@ -172,6 +182,7 @@ dependencies {
 
     // Core Android
     implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.4")
     implementation("androidx.activity:activity-compose:1.9.1")

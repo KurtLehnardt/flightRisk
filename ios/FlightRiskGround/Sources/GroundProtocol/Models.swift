@@ -208,10 +208,18 @@ public struct FleetEvent: Codable, Equatable, Sendable {
     @Lenient public var to: [String: Int]?
     @Lenient public var lanes: [PlanLane]?
     @Lenient public var awaiting: [PlanLane]?
+    // `lane_blocked` (an obstacle cut): where the drone stopped and how much of the lane is left.
+    @Lenient public var laneIndex: Int?
+    @Lenient public var xCm: Double?
+    @Lenient public var yCm: Double?
+    @Lenient public var unflownCm: Double?
+    /// `lane_blocked`: why the drone stopped (`obstacle`, `person`, `sensor_stale` and others).
+    @Lenient public var reason: String?
 
     enum CodingKeys: String, CodingKey {
-        case event, type, kind, detail, to, lanes, awaiting
+        case event, type, kind, detail, to, lanes, awaiting, reason
         case droneId = "drone_id", droneIds = "drone_ids"
+        case laneIndex = "lane_index", xCm = "x_cm", yCm = "y_cm", unflownCm = "unflown_cm"
     }
 
     public var resolvedKind: FleetEventKind? { event ?? type ?? kind }

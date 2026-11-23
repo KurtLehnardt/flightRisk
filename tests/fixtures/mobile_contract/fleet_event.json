@@ -2,7 +2,7 @@
   "_meta": {
     "description": "The 'fleet_event' event, one case per kind. Read the kind from 'event'; show 'detail' when present. Unknown kinds must be shown by name, never dropped.",
     "file": "fleet_event.json",
-    "generated_at_commit": "a6db91ed43155b20ae37f1906930f7303da2e959",
+    "generated_at_commit": "118efe71ebaef531c5c04dbdb2e33d9574537a6f",
     "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
     "sources": [
       "FleetCoordinator._on_nack",

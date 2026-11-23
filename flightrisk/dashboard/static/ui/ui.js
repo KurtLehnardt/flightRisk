@@ -1677,11 +1677,18 @@ const socket = io();
     // A person cut is never re-flown on its own: another drone would fly toward the same person from the far side.
     // The operator may confirm it once the person is known to have moved away.
     function reflightConfirmButton(e) {
-        const warning = 'A person stopped ' + e.lost_id + ' on lane ' + e.index + '. Another drone would fly this '
-            + 'segment from the far side, toward where the person was. Re-fly it only if the person has moved away.';
-        return twoStepConfirmButton('reflight:' + e.lost_id + ':' + e.cut_seq, 'reflight-confirm', 'Re-fly',
-            'Confirm re-fly', warning,
-            () => socket.emit('confirm_reflight', { drone_id: e.drone_id || e.lost_id, cut_seq: e.cut_seq }));
+        const offset = e.reason === 'offset';
+        const warning = (offset
+            ? 'A person was seen while ' + e.lost_id + ' flew beside lane ' + e.index + ' to pass an obstacle. '
+            : 'A person stopped ' + e.lost_id + ' on lane ' + e.index + '. ')
+            + 'Another drone would fly this segment from the far side, toward where the person was. Re-fly it only '
+            + 'if the person has moved away.';
+        // An offset segment held for its own sighting has no cut: it is named by its lane and start.
+        const own = offset && (e.cut_seq === null || e.cut_seq === undefined);
+        const key = 'reflight:' + e.lost_id + ':' + e.cut_seq + ':' + (own ? e.index + ':' + e.offset_from_cm : '');
+        return twoStepConfirmButton(key, 'reflight-confirm', 'Re-fly', 'Confirm re-fly', warning,
+            () => socket.emit('confirm_reflight', { drone_id: e.drone_id || e.lost_id, cut_seq: e.cut_seq,
+                offset: own ? [e.index, e.offset_from_cm] : null }));
     }
     socket.on('reflight_confirm_result', (r) => {
         if (!r) return;
@@ -1744,6 +1751,16 @@ const socket = io();
         }
         if (kind === 'lane_blocked') {
             showFleetBanner(laneBlockedText(ev), 15000);
+            return;
+        }
+        if (kind === 'sidestep_held') {
+            // The drone could not get back to its lane after a sidestep: it hovers under manual control.
+            showFleetBanner('SIDESTEP HELD: ' + (ev.detail || ev.drone_id || ''), 30000);
+            return;
+        }
+        if (kind === 'lane_offset') {
+            // The detail already names the drone.
+            showFleetBanner('LANE FLOWN BESIDE: ' + (ev.detail || ev.drone_id || ''), 15000);
             return;
         }
         if (kind && kind.indexOf('reflight_') === 0 && reflightBannerText(kind, ev)) {

@@ -552,6 +552,10 @@ class LanePlanMixin:
             # A plan that does not continue the current one starts from
             # the drone's position: no cut of the old plan applies to it.
             self._reset_obstacle_plan_locked()
+        if not self._is_flying():
+            # On the ground the plan is flown from the next takeoff point: a
+            # point an earlier flight was to continue from never applies.
+            self._resume_target = None
         self._lanes = lanes
         self._moves = moves
         self._step = start_step

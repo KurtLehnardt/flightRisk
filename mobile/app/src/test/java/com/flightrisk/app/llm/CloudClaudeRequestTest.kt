@@ -1,6 +1,10 @@
 package com.flightrisk.app.llm
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -207,6 +211,102 @@ class CloudClaudeRequestTest {
         // Saving a new key gives it a fresh try.
         assertTrue(h.gate.saveKey("another-key"))
         assertEquals(ClaudeKeyState.FOUND, h.gate.keyState)
+        // The old key's failure notice is gone once the status is refreshed.
+        h.selector.refreshWithKeyLookup()
+        val after = h.selector.status.value
+        assertNull(after.cloudProblem)
+        assertNull(after.notice)
+        assertTrue(after.isCloudActive)
+    }
+
+    @Test
+    fun `saving a key clears the failure count and the breaker as well as the notice`() = runBlocking {
+        val h = enabledHarness(http(500, "Server Error"))
+        repeat(3) { h.backend.analyzeMatch(bitmap, bitmap, null) }
+        assertTrue(h.backend.breakerOpen)
+        assertTrue(h.gate.saveKey("another-key"))
+        assertFalse(h.backend.breakerOpen)
+        assertNull(h.backend.problem)
+        // One failure after the save is a first failure, not a probe: the breaker stays closed.
+        h.backend.analyzeMatch(bitmap, bitmap, null)
+        assertFalse(h.backend.breakerOpen)
+        // Removing the key clears the state too.
+        h.backend.analyzeMatch(bitmap, bitmap, null)
+        h.backend.analyzeMatch(bitmap, bitmap, null)
+        assertTrue(h.backend.breakerOpen)
+        h.gate.removeKey()
+        assertFalse(h.backend.breakerOpen)
+        assertNull(h.backend.problem)
+    }
+
+    @Test
+    fun `a late 401 for a key that was replaced does not mark the new key invalid`() = runBlocking {
+        val h = enabledHarness(http(401, "Unauthorized"))
+        // The user saves a new key after the request was prepared but before the answer comes back.
+        h.backend.beforeSend = { h.gate.saveKey("another-key") }
+        val result = h.backend.analyzeMatch(bitmap, bitmap, null)
+        assertEquals(1, h.server.requests.size)
+        assertEquals(CloudClaudeLlmBackend.BLOCKED, result)
+        assertEquals(ClaudeKeyState.FOUND, h.gate.keyState)
+        assertNull(h.backend.problem)
+        assertEquals("another-key", h.gate.keyIfOpen())
+    }
+
+    @Test
+    fun `a 401 after the key was removed does not leave the state invalid`() {
+        val h = enabledHarness()
+        val generationAtSend = h.gate.keyGeneration
+        assertTrue(h.gate.removeKey())
+        assertFalse(h.gate.markKeyInvalid(generationAtSend))
+        assertEquals(ClaudeKeyState.MISSING, h.gate.keyState)
+        assertEquals(ClaudeKeyState.MISSING, h.gate.refreshKeyState())
+        // A 401 for the key that is currently saved still counts.
+        assertTrue(h.gate.saveKey("another-key"))
+        assertTrue(h.gate.markKeyInvalid(h.gate.keyGeneration))
+        assertEquals(ClaudeKeyState.INVALID, h.gate.keyState)
+    }
+
+    @Test
+    fun `after the cool-off a single failed probe opens the breaker again`() = runBlocking {
+        val h = enabledHarness(http(500, "Server Error"))
+        repeat(3) { h.backend.analyzeMatch(bitmap, bitmap, null) }
+        assertTrue(h.backend.breakerOpen)
+        h.nowMs += CloudClaudeLlmBackend.COOL_OFF_MS + 1
+        assertFalse(h.backend.breakerOpen)
+        // The probe fails: one failure is enough to open it again.
+        h.backend.analyzeMatch(bitmap, bitmap, null)
+        assertEquals(4, h.server.requests.size)
+        assertTrue(h.backend.breakerOpen)
+    }
+
+    @Test
+    fun `cancelling the calling coroutine cancels the http call`() = runBlocking {
+        val h = enabledHarness()
+        h.server.hold = true
+        val job = launch(Dispatchers.IO) { h.backend.analyzeMatch(bitmap, bitmap, null) }
+        withTimeout(10_000) { while (h.server.requests.isEmpty()) delay(10) }
+        assertEquals(1, h.backend.inFlightCount())
+        job.cancel()
+        withTimeout(10_000) { job.join() }
+        withTimeout(10_000) { while (h.server.clientClosed.get() == 0) delay(10) }
+        assertEquals(0, h.backend.inFlightCount())
+    }
+
+    @Test
+    fun `the cached reference is dropped when requests are cancelled and when the backend closes`() = runBlocking {
+        val h = enabledHarness()
+        val reference = fakeBitmap()
+        h.backend.analyzeMatch(reference, bitmap, null)
+        h.backend.analyzeMatch(reference, bitmap, null)
+        assertEquals(3, h.encodeCount.get())
+        h.backend.cancelAllRequests()
+        h.backend.analyzeMatch(reference, bitmap, null)
+        // The reference is encoded again after the cancel (one reference plus one crop).
+        assertEquals(5, h.encodeCount.get())
+        h.settings.setCloudOptIn(false)
+        h.settings.confirmCloudConsent(selectCloud = true)
+        h.backend.analyzeMatch(reference, bitmap, null)
+        assertEquals(7, h.encodeCount.get())
     }
 
     @Test

@@ -16,6 +16,7 @@ Usage:
 import base64
 import logging
 import os
+import re
 from typing import Any
 
 import cv2
@@ -23,6 +24,7 @@ import numpy as np
 
 from flightrisk.config import get_config
 from flightrisk.obs_log import notice
+from flightrisk.obs_redact import redact_text
 
 _log = logging.getLogger(__name__)
 
@@ -33,11 +35,64 @@ except ImportError:
     HAS_OLLAMA = False
 
 
+# Operator texts for results that carry no verdict. They are built only from
+# these fixed templates, the backend's label, status codes, short codes and
+# integers, never from an exception's message: results go to every dashboard
+# client, phones included, and exception text can carry request details such
+# as a URL, a header or a key. The full exception is logged server-side only,
+# redacted (``_call_failed``).
+PAUSED_TEXT = "AI check paused ({label} unavailable, retrying in {seconds} s)."
+RATE_CAP_TEXT = "AI check skipped (rate cap)."
+SKIPPED_TEXT = "AI check skipped."
+KEY_REJECTED_TEXT = "AI check off ({label} rejected the API key)."
+UNAVAILABLE_TEXT = "AI check off ({label} unavailable)."
+FAILED_STATUS_TEXT = "AI check failed ({label} error {status})."
+FAILED_TYPE_TEXT = "AI check failed ({label} error: {error_type})."
+FAILED_TEXT = "AI check failed."
+
+_TYPE_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
+
+
+def safe_type_name(exc: BaseException) -> str:
+    """The exception's class name if it is a plain identifier, else ``Exception``."""
+    name = type(exc).__name__
+    return name if _TYPE_NAME_RE.fullmatch(name) else "Exception"
+
+
+class ReasoningCallSkipped(RuntimeError):
+    """The backend chose not to send this call, for example while a cloud API is paused.
+
+    Nothing was sent. ``reason`` is ``"paused"`` (with ``retry_in_s``) or
+    ``"rate_cap"``; the result text is built from these fields and carries
+    ``confidence="skipped"``, so a skip never reads as a failure.
+    """
+
+    def __init__(self, reason: str, retry_in_s: int | None = None):
+        super().__init__(reason)
+        self.reason = reason
+        self.retry_in_s = retry_in_s
+
+
+class ReasoningUnavailable(RuntimeError):
+    """The backend can no longer answer; ``reason`` is a short code such as ``"key_rejected"``.
+
+    The result carries ``confidence="unavailable"`` and a text built from ``reason``.
+    """
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
 class FlightRiskAgent:
     """LLM-powered reasoning for person matching and scene analysis."""
 
     provider = "gemma"
     label = "Gemma"  # shown in the dashboard ("Awaiting Gemma reasoning...")
+    #: Result text while ``_available`` is False.
+    _unavailable_reason = "Model not loaded"
+    #: ``(reference array, base64 JPEG)`` of the last read-only reference photo encoded.
+    _ref_cache: tuple[np.ndarray, str] | None = None
 
     def __init__(self, model: str | None = None):
         """Initialize the reasoning agent.
@@ -83,6 +138,26 @@ class FlightRiskAgent:
         _, buffer = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 85])
         return base64.b64encode(buffer).decode("utf-8")
 
+    def _reference_b64(self, reference: np.ndarray) -> str:
+        """``_image_to_base64(reference)``, reused while the same read-only photo comes back.
+
+        The dashboard hands every job the same cached, read-only reference
+        array (``load_reference_photo``), so it is resized and encoded once,
+        not once per call. The cache holds the array itself, so identity can't
+        be confused with a recycled ``id``; a writable array is never cached
+        because it could change in place.
+        """
+        cached = self._ref_cache
+        if cached is not None and cached[0] is reference:
+            return cached[1]
+        b64 = self._image_to_base64(reference)
+        if not reference.flags.writeable:
+            self._ref_cache = (reference, b64)
+        return b64
+
+    def _admit(self) -> None:
+        """Hook run before any image is encoded; raise ReasoningCallSkipped to skip the call."""
+
     def _ask(self, prompt: str, images_b64: list[str]) -> str:
         """Send one prompt with JPEG images (base64) and return the reply text.
 
@@ -103,10 +178,58 @@ class FlightRiskAgent:
         return response.message.content.strip()
 
     def _call_failed(self, kind: str, exc: Exception) -> None:
-        """Log a reasoning call that failed (type and redacted message, never the prompt)."""
-        self.last_usage = {"error_type": type(exc).__name__}
+        """Log a failed call server-side: type and redacted message, never the prompt.
+
+        ``error_type`` is merged into ``last_usage`` so token counts the call
+        already reported (a reply with no usable verdict) are kept.
+        """
+        usage = self.last_usage if isinstance(self.last_usage, dict) else {}
+        self.last_usage = {**usage, "error_type": safe_type_name(exc)}
         _log.warning("reasoning_call_failed provider=%s kind=%s error_type=%s error=%s",
-                     self.provider, kind, type(exc).__name__, exc)
+                     self.provider, kind, safe_type_name(exc), redact_text(exc))
+
+    def _skip_text(self, exc: ReasoningCallSkipped) -> str:
+        if exc.reason == "paused" and isinstance(exc.retry_in_s, int):
+            return PAUSED_TEXT.format(label=self.label, seconds=max(0, exc.retry_in_s))
+        if exc.reason == "rate_cap":
+            return RATE_CAP_TEXT
+        return SKIPPED_TEXT
+
+    def _unavailable_text(self, exc: ReasoningUnavailable) -> str:
+        if exc.reason == "key_rejected":
+            return KEY_REJECTED_TEXT.format(label=self.label)
+        return UNAVAILABLE_TEXT.format(label=self.label)
+
+    def _error_text(self, exc: Exception) -> str:
+        """Operator text for a failed call, from its status code or class name only.
+
+        Backends may override this with a finer mapping; it must never return
+        any part of ``str(exc)``.
+        """
+        status = getattr(exc, "status_code", None)
+        if isinstance(status, int) and not isinstance(status, bool):
+            return FAILED_STATUS_TEXT.format(label=self.label, status=status)
+        return FAILED_TYPE_TEXT.format(label=self.label, error_type=safe_type_name(exc))
+
+    def _failure_result(self, kind: str, exc: Exception) -> dict[str, Any]:
+        """The result for a call that produced no verdict; it never carries the exception's message."""
+        if isinstance(exc, ReasoningCallSkipped):
+            # Expected, not a fault: INFO, and the reason is a fixed code.
+            self.last_usage = {}
+            _log.info("reasoning_call_skipped provider=%s kind=%s reason=%s",
+                      self.provider, kind, redact_text(exc.reason, 64))
+            return {"match": False, "confidence": "skipped", "reasoning": self._skip_text(exc)}
+        self._call_failed(kind, exc)
+        if isinstance(exc, ReasoningUnavailable):
+            return {"match": False, "confidence": "unavailable", "reasoning": self._unavailable_text(exc)}
+        try:
+            text = self._error_text(exc)
+        except Exception:  # noqa: BLE001 - the result must always be built
+            text = FAILED_TEXT
+        return {"match": False, "confidence": "error", "reasoning": text}
+
+    def _unavailable_result(self) -> dict[str, Any]:
+        return {"match": False, "confidence": "unavailable", "reasoning": self._unavailable_reason}
 
     def analyze_match(
         self, reference: np.ndarray, candidate: np.ndarray
@@ -120,10 +243,7 @@ class FlightRiskAgent:
             dict with keys: match (bool), confidence (str), reasoning (str)
         """
         if not self._available:
-            return {"match": False, "confidence": "unavailable", "reasoning": "Model not loaded"}
-
-        ref_b64 = self._image_to_base64(reference)
-        cand_b64 = self._image_to_base64(candidate)
+            return self._unavailable_result()
 
         prompt = (
             "You are helping find a missing person. "
@@ -139,44 +259,48 @@ class FlightRiskAgent:
 
         try:
             self.last_usage = {}
-            text = self._ask(prompt, [ref_b64, cand_b64])
+            # Admit first, so a skipped call never pays for resizing and encoding.
+            self._admit()
+            images = [self._reference_b64(reference), self._image_to_base64(candidate)]
+            text = self._ask(prompt, images)
             return self._parse_match_response(text)
         except Exception as e:
-            self._call_failed("analyze", e)
-            return {"match": False, "confidence": "error", "reasoning": str(e)}
+            return self._failure_result("analyze", e)
 
     def describe_person(self, image: np.ndarray) -> str:
         """Generate a text description of a detected person."""
         if not self._available:
             return "Model not available"
 
-        b64 = self._image_to_base64(image)
         try:
+            self.last_usage = {}
+            self._admit()
             return self._ask(
                 "Describe this person's appearance in one sentence. "
                 "Include: clothing colors, hair, approximate age, "
                 "and any visible accessories (backpack, hat, etc).",
-                [b64],
+                [self._image_to_base64(image)],
             )
         except Exception as e:
-            return f"Error: {e}"
+            return self._failure_result("describe_person", e)["reasoning"]
 
     def analyze_scene(self, image: np.ndarray) -> str:
         """Analyze the scene for search planning."""
         if not self._available:
             return "Model not available"
 
-        b64 = self._image_to_base64(image)
         try:
+            self.last_usage = {}
+            self._admit()
             return self._ask(
                 "Briefly describe this aerial/drone view scene. "
                 "Is it a park, field, forest, crowd, parking lot? "
                 "How many people are visible? Any obstacles? "
                 "One short paragraph.",
-                [b64],
+                [self._image_to_base64(image)],
             )
         except Exception as e:
-            return f"Error: {e}"
+            return self._failure_result("scene", e)["reasoning"]
 
     def match_description(
         self, image: np.ndarray, description: str
@@ -187,9 +311,8 @@ class FlightRiskAgent:
         the child and Gemma 4 compares against each detection.
         """
         if not self._available:
-            return {"match": False, "confidence": "unavailable", "reasoning": "Model not loaded"}
+            return self._unavailable_result()
 
-        b64 = self._image_to_base64(image)
         prompt = (
             "You are helping find a missing person. "
             f"The person's description: {description}\n\n"
@@ -205,11 +328,11 @@ class FlightRiskAgent:
 
         try:
             self.last_usage = {}
-            text = self._ask(prompt, [b64])
+            self._admit()
+            text = self._ask(prompt, [self._image_to_base64(image)])
             return self._parse_match_response(text)
         except Exception as e:
-            self._call_failed("describe", e)
-            return {"match": False, "confidence": "error", "reasoning": str(e)}
+            return self._failure_result("describe", e)
 
     def _parse_match_response(self, text: str) -> dict[str, Any]:
         """Parse the structured response from analyze_match."""

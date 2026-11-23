@@ -1,6 +1,7 @@
 """Tests of the resource checks in tests/support/leaks.py: a check that cannot fail proves nothing."""
 
 import socket
+import sys
 import threading
 import warnings
 
@@ -48,8 +49,14 @@ def test_a_thread_that_ends_before_the_check_is_not_reported():
 def test_a_leaked_socket_is_found():
     before = snapshot()
     sock = socket.socket()
+    if sys.platform == "win32":
+        # psutil reads the TCP table, which holds only listening and connected sockets: a TCP socket that is
+        # merely bound (as the ZBook showed) is not listed. Listening puts it in the table.
+        sock.bind(("127.0.0.1", 0))
+        sock.listen(1)
     try:
-        assert "fds" in snapshot().leaked_since(before, settle_s=0.2)
+        found = snapshot().leaked_since(before, settle_s=0.2)
+        assert "sockets" in found if sys.platform == "win32" else "fds" in found
     finally:
         sock.close()
     assert snapshot().leaked_since(before, settle_s=1.0) == {}
@@ -134,3 +141,25 @@ def test_a_leaked_thread_named_like_the_logging_listener_is_still_found():
         assert snapshot().leaked_since(before, settle_s=0.3) == {"threads": ["Thread-1 (_monitor)"]}
     finally:
         impostor.stop()
+
+
+def test_handle_noise_is_ignored_only_on_windows(monkeypatch):
+    from tests.support import leaks
+
+    monkeypatch.setattr(leaks, "_IS_WINDOWS", False)
+    assert leaks.fd_delta_is_leak(1) and not leaks.fd_delta_is_leak(0)
+    monkeypatch.setattr(leaks, "_IS_WINDOWS", True)
+    assert not leaks.fd_delta_is_leak(leaks.WINDOWS_HANDLE_NOISE)
+    assert leaks.fd_delta_is_leak(leaks.WINDOWS_HANDLE_NOISE + 1)
+
+
+def test_a_new_socket_is_a_leak_on_windows_whatever_the_handle_tolerance(monkeypatch):
+    from tests.support import leaks
+
+    monkeypatch.setattr(leaks, "_IS_WINDOWS", True)
+    monkeypatch.setattr(leaks, "open_fds", lambda: 100)
+    monkeypatch.setattr(leaks, "_warm_up", lambda: None)
+    counts = iter([4, 5])  # before, then the snapshot inside leaked_since
+    monkeypatch.setattr(leaks, "open_sockets", lambda: next(counts))
+    before = leaks.snapshot()
+    assert before.leaked_since(before, settle_s=0) == {"sockets": 1}
