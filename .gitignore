@@ -68,3 +68,6 @@ demo/screenshots/
 
 # Edge console logs written by scripts/demo_edge_pair.ps1
 logs/
+
+# iOS signing: the local team ID file is never committed (see ios/README.md, "Signing")
+ios/Config/Signing.local.xcconfig
