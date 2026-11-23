@@ -18,6 +18,7 @@ import pytest
 from flightrisk.dashboard.app import app, socketio
 from flightrisk.dashboard.state import app_state
 from flightrisk.drone import plan_paths as pp
+from tests.single_drone_doubles import ready_single_drone
 from tests.test_fleet_dashboard import (  # noqa: F401
     WAIT_S,
     _telemetry,
@@ -170,6 +171,7 @@ def flying_drone(clean_app_state, monkeypatch):
     drone.get_frame.return_value = None
     drone.move.return_value = True
     drone.rotate.return_value = True
+    ready_single_drone(drone)  # a healthy link, a fresh battery and a video frame
     app_state.fleet = MagicMock(primary=drone)
     app_state.fleet_supervisor = None
     app_state.obstacle_guard = MagicMock()  # a single-drone search does not start without one
