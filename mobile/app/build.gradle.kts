@@ -347,8 +347,12 @@ ksp {
 // licence texts. Only the release variant's runtime dependencies are listed.
 // Offline and reproducible: the plugin fetches nothing (offlineMode), and the
 // licence texts come from the committed files in config/aboutlibraries/licenses
-// (SPDX texts for Apache-2.0, MIT, BSD-3-Clause and BSD-2-Clause, plus libyuv's
-// own notice, attached to camera-core in config/aboutlibraries/libraries).
+// (the Apache-2.0 SPDX text, libyuv's own notice, and for each MIT or BSD
+// library its real licence text with its copyright line, attached per library in
+// config/aboutlibraries/libraries). The generic MIT and BSD templates are not
+// shipped: their "<year> <owner>" placeholders are not a copyright notice. A new
+// MIT or BSD library needs its own licence text with its copyright line, and
+// checkLicenceTexts fails the release build until it has one.
 // The build fails (strictMode FAIL) when a library has no licence or one
 // outside the allowed list, and checkLicenceTexts fails the release build when
 // a library has no licence at all or a licence without text (reviewed URL-only
@@ -368,7 +372,7 @@ aboutLibraries {
     }
     license {
         strictMode = com.mikepenz.aboutlibraries.plugin.StrictMode.FAIL
-        allowedLicenses.addAll("Apache-2.0", "MIT", "BSD-3-Clause", "BSD-2-Clause")
+        allowedLicenses.addAll("Apache-2.0", "MIT", "BSD-3-Clause")
         // Reviewed exceptions, each tied to the one library that carries it.
         allowedLicensesMap.put("Android Software Development Kit License", listOf(
             "com.google.android.gms:play-services-base",
@@ -379,6 +383,11 @@ aboutLibraries {
         // camera-core's POM names libyuv's BSD licence by URL only; the text is committed as "BSD License (libyuv)".
         allowedLicensesMap.put("BSD License", listOf("androidx.camera:camera-core"))
         allowedLicensesMap.put("BSD License (libyuv)", listOf("androidx.camera:camera-core"))
+        // MIT and BSD libraries are allowed one by one, each with its own text and copyright line.
+        allowedLicensesMap.put("MIT License (ONNX Runtime)", listOf("com.microsoft.onnxruntime:onnxruntime-android"))
+        allowedLicensesMap.put("MIT License (Checker Framework annotations)", listOf("org.checkerframework:checker-compat-qual"))
+        allowedLicensesMap.put("MIT License (Animal Sniffer)", listOf("org.codehaus.mojo:animal-sniffer-annotations"))
+        allowedLicensesMap.put("BSD 3-Clause License (Protocol Buffers)", listOf("com.google.protobuf:protobuf-javalite"))
         allowedLicensesMap.put("GNU General Public License, version 2 (GPL2), with the classpath exception", listOf("org.checkerframework:checker-compat-qual"))
     }
 }
@@ -399,6 +408,7 @@ val urlOnlyLicences = mapOf(
     // camera-core's POM pointer to libyuv; the libyuv text is attached beside it.
     "44d1a25c593283261968a15c8cc213cd" to setOf("androidx.camera:camera-core"),
 )
+val genericLicenceIds = setOf("MIT", "BSD-3-Clause")
 val checkLicenceTexts = tasks.register("checkLicenceTexts") {
     group = "verification"
     description = "Fails when a library in the generated licence list has no licence or a licence without text."
@@ -418,8 +428,18 @@ val checkLicenceTexts = tasks.register("checkLicenceTexts") {
             @Suppress("UNCHECKED_CAST")
             val ids = (library["licenses"] as? List<String>).orEmpty()
             if (ids.isEmpty()) problems += "$id: no licence"
+            // The plugin merges a library's own licence file with the POM's licence, so a
+            // library keeps the POM's generic "MIT" or "BSD-3-Clause" id (no text, no
+            // copyright line). That id is accepted only when the library also carries
+            // its own text, which is what the per-library licence files provide.
+            val hasOwnText = ids.any { other ->
+                other !in genericLicenceIds &&
+                    other != "Apache-2.0" &&
+                    licences[other]?.get("content")?.toString().orEmpty().isNotBlank()
+            }
             for (licenceId in ids) {
                 val text = licences[licenceId]?.get("content")?.toString().orEmpty()
+                if (text.isBlank() && licenceId in genericLicenceIds && hasOwnText) continue
                 if (text.isBlank() && id !in (urlOnlyLicences[licenceId] ?: emptySet())) {
                     problems += "$id: licence $licenceId has no text"
                 }
