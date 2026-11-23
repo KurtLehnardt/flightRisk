@@ -153,22 +153,37 @@ from flightrisk.drone.obstacle_sensor import (
     CHANNEL_ORDER_RGB,
     ENV_FAKE_OBSTACLE_Y_CM,
     ENV_MAX_DECODE_LAG_S,
+    ENV_OBSTACLE_AVOID_BUDGET_S,
+    ENV_OBSTACLE_CLEAR_VOTES,
     ENV_OBSTACLE_MIN_SAFE_DEPTH,
     ENV_OBSTACLE_PERSON_FRACTION,
+    ENV_OBSTACLE_RELOOK,
     ENV_OBSTACLE_SENSING,
     ENV_OBSTACLE_SETTLE_S,
+    ENV_OBSTACLE_SIDESTEP_CM,
+    ENV_OBSTACLE_SIDESTEPS,
     ENV_OBSTACLE_STEP_CM,
     ENV_OBSTACLE_TURN,
     EVENT_SETTING_NON_DEFAULT,
     MAX_DECODE_LAG_RANGE_S,
     MAX_DECODE_LAG_S,
+    OBSTACLE_AVOID_BUDGET_RANGE_S,
+    OBSTACLE_AVOID_BUDGET_S,
+    OBSTACLE_CLEAR_VOTES,
+    OBSTACLE_CLEAR_VOTES_RANGE,
     OBSTACLE_MIN_SAFE_DEPTH,
     OBSTACLE_MIN_SAFE_DEPTH_RANGE,
     OBSTACLE_PERSON_FRACTION,
     OBSTACLE_PERSON_FRACTION_RANGE,
+    OBSTACLE_RELOOK,
+    OBSTACLE_RELOOK_RANGE,
     OBSTACLE_SENSE_TIMEOUT_S,
     OBSTACLE_SETTLE_RANGE_S,
     OBSTACLE_SETTLE_S,
+    OBSTACLE_SIDESTEP_CM,
+    OBSTACLE_SIDESTEP_RANGE_CM,
+    OBSTACLE_SIDESTEPS,
+    OBSTACLE_SIDESTEPS_RANGE,
     OBSTACLE_STEP_CM,
     OBSTACLE_STEP_FIELD_CM,
     OBSTACLE_STEP_MAX_CM,
@@ -1755,6 +1770,8 @@ class ObstacleWiring:
     ``sensor`` and ``sensor_error`` are mutually exclusive, and both are None for
     a drone whose autopilot avoids obstacles by itself. ``holder`` is the frame
     holder that ``drone.on_frame`` feeds, or None when no camera sensor is used.
+    ``avoid`` holds the executor's clear votes, re-look and sidestep settings
+    (``ObstacleSettings.avoid_kwargs``), or None for the executor's own defaults.
     """
 
     def __init__(
@@ -1765,6 +1782,7 @@ class ObstacleWiring:
         turn: bool = True,
         holder: LatestFrame | None = None,
         settle_s: float = OBSTACLE_SETTLE_S,
+        avoid: dict[str, Any] | None = None,
     ):
         self.sensor = sensor
         self.sensor_error = sensor_error
@@ -1772,6 +1790,7 @@ class ObstacleWiring:
         self.turn = turn
         self.holder = holder
         self.settle_s = settle_s
+        self.avoid = dict(avoid) if avoid else None
 
     def executor_kwargs(self) -> dict[str, Any]:
         """Keyword arguments for ``LaneExecutor``; empty when the executor should fly as before.
@@ -1789,6 +1808,11 @@ class ObstacleWiring:
             kwargs["obstacle_turn"] = self.turn
             if self.settle_s > OBSTACLE_SETTLE_S:
                 kwargs["obstacle_sense_timeout_s"] = sense_timeout_for_settle(self.settle_s)
+            if self.settle_s != OBSTACLE_SETTLE_S:
+                # The gates' freshness floor uses the sensor's own settle time.
+                kwargs["obstacle_settle_s"] = self.settle_s
+            if self.avoid:
+                kwargs.update(self.avoid)
         return kwargs
 
 
@@ -1843,7 +1867,8 @@ class ObstacleSettings:
     """Every obstacle setting of the environment, parsed and validated (design section 3.2).
 
     ``FLIGHTRISK_OBSTACLE_SENSING``, ``_STEP_CM``, ``_TURN``, ``_MIN_SAFE_DEPTH``,
-    ``_PERSON_FRACTION``, ``_SETTLE_S``, ``FLIGHTRISK_MAX_DECODE_LAG_S`` (the bound Tello
+    ``_PERSON_FRACTION``, ``_SETTLE_S``, ``_CLEAR_VOTES``, ``_RELOOK``, ``_SIDESTEP_CM``,
+    ``_SIDESTEPS``, ``_AVOID_BUDGET_S``, ``FLIGHTRISK_MAX_DECODE_LAG_S`` (the bound Tello
     decoder reads it itself, ``tello_bound.max_decode_lag_s``) and
     ``FLIGHTRISK_FAKE_OBSTACLE_Y_CM`` are all read
     whatever the mode, the drone kind or the video source, so a malformed value
@@ -1876,6 +1901,17 @@ class ObstacleSettings:
             ENV_MAX_DECODE_LAG_S, MAX_DECODE_LAG_S, *MAX_DECODE_LAG_RANGE_S, environ,
         )
         self.fake_obstacle_y_cm = _obstacle_number(ENV_FAKE_OBSTACLE_Y_CM, None, -100000.0, 100000.0, environ)
+        self.clear_votes = _obstacle_number(
+            ENV_OBSTACLE_CLEAR_VOTES, OBSTACLE_CLEAR_VOTES, *OBSTACLE_CLEAR_VOTES_RANGE, environ, integer=True,
+        )
+        self.relook = _obstacle_number(ENV_OBSTACLE_RELOOK, OBSTACLE_RELOOK, *OBSTACLE_RELOOK_RANGE, environ, integer=True)
+        self.sidestep_cm = _obstacle_sidestep_cm(environ)
+        self.sidesteps = _obstacle_number(
+            ENV_OBSTACLE_SIDESTEPS, OBSTACLE_SIDESTEPS, *OBSTACLE_SIDESTEPS_RANGE, environ, integer=True,
+        )
+        self.avoid_budget_s = _obstacle_number(
+            ENV_OBSTACLE_AVOID_BUDGET_S, OBSTACLE_AVOID_BUDGET_S, *OBSTACLE_AVOID_BUDGET_RANGE_S, environ,
+        )
         self.non_default: list[tuple[str, Any, Any]] = [
             (name, value, default)
             for name, value, default in (
@@ -1887,9 +1923,24 @@ class ObstacleSettings:
                 (ENV_OBSTACLE_SETTLE_S, self.settle_s, OBSTACLE_SETTLE_S),
                 (ENV_MAX_DECODE_LAG_S, self.max_decode_lag_s, MAX_DECODE_LAG_S),
                 (ENV_FAKE_OBSTACLE_Y_CM, self.fake_obstacle_y_cm, None),
+                (ENV_OBSTACLE_CLEAR_VOTES, self.clear_votes, OBSTACLE_CLEAR_VOTES),
+                (ENV_OBSTACLE_RELOOK, self.relook, OBSTACLE_RELOOK),
+                (ENV_OBSTACLE_SIDESTEP_CM, self.sidestep_cm, OBSTACLE_SIDESTEP_CM),
+                (ENV_OBSTACLE_SIDESTEPS, self.sidesteps, OBSTACLE_SIDESTEPS),
+                (ENV_OBSTACLE_AVOID_BUDGET_S, self.avoid_budget_s, OBSTACLE_AVOID_BUDGET_S),
             )
             if value != default
         ]
+
+    def avoid_kwargs(self) -> dict[str, Any]:
+        """The ``LaneExecutor`` keyword arguments of the clear votes, the re-look and the sidestep."""
+        return {
+            "obstacle_clear_votes": self.clear_votes,
+            "obstacle_relook": self.relook,
+            "obstacle_sidestep_cm": self.sidestep_cm,
+            "obstacle_sidesteps": self.sidesteps,
+            "obstacle_avoid_budget_s": self.avoid_budget_s,
+        }
 
     def warn_non_default(self, log: StructuredLogger, drone_id: str | None) -> None:
         """Log every setting that is not its default once, at warning level, by name and value."""
@@ -1900,6 +1951,17 @@ class ObstacleSettings:
             )
 
 
+def _obstacle_sidestep_cm(environ: Any) -> int:
+    """``FLIGHTRISK_OBSTACLE_SIDESTEP_CM``: 0 (no sidestep) or a sensed step's range; anything else refuses to start."""
+    lo, hi = OBSTACLE_SIDESTEP_RANGE_CM
+    value = _obstacle_number(ENV_OBSTACLE_SIDESTEP_CM, OBSTACLE_SIDESTEP_CM, 0, hi, environ, integer=True)
+    if value != 0 and value < lo:
+        raw = (environ.get(ENV_OBSTACLE_SIDESTEP_CM) or "").strip()
+        raise SystemExit(
+            f"edge_device: {ENV_OBSTACLE_SIDESTEP_CM}={raw!r} must be 0 (no sidestep) or a whole number "
+            f"from {lo:g} to {hi:g}. Refusing to start."
+        )
+    return value
 def _flight_guards(environ: Any) -> FlightGuards:
     """The flight guard settings of the environment (``flightrisk.drone.flight_guards``); a bad value refuses to start.
 
@@ -2095,6 +2157,7 @@ def _build_obstacle_wiring(
             log.info("edge_obstacle_fake", drone_id=drone_id, blocked_from_y_cm=y_cm)
         return ObstacleWiring(
             sensor=FakeObstacleSensor(envelope.pose_snapshot, zones), step_cm=step_cm, turn=turn,
+            avoid=settings.avoid_kwargs(),
         )
 
     min_safe_depth, person_fraction = settings.min_safe_depth, settings.person_fraction
@@ -2112,8 +2175,10 @@ def _build_obstacle_wiring(
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
         log.error("edge_obstacle_sensor_unavailable", drone_id=drone_id, error=error)
-        return ObstacleWiring(sensor_error=error, step_cm=step_cm, turn=turn, holder=holder, settle_s=settle_s)
-    return ObstacleWiring(sensor=sensor, step_cm=step_cm, turn=turn, holder=holder, settle_s=settle_s)
+        return ObstacleWiring(sensor_error=error, step_cm=step_cm, turn=turn, holder=holder, settle_s=settle_s,
+                              avoid=settings.avoid_kwargs())
+    return ObstacleWiring(sensor=sensor, step_cm=step_cm, turn=turn, holder=holder, settle_s=settle_s,
+                          avoid=settings.avoid_kwargs())
 
 
 def feed_sensor_holder(drone: Any, holder: LatestFrame, frames: EdgeFrames | None = None) -> None:

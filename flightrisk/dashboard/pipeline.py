@@ -33,6 +33,7 @@ from flightrisk.dashboard.state import (
 from flightrisk.dashboard.alerts import (  # noqa: F401 -- _save_match_snapshot is re-exported for backward compat
     _compute_track_key,
     _save_match_snapshot,
+    load_reference_photo,
     maybe_save_match_snapshot,
     resolve_reasoning,
 )
@@ -486,12 +487,15 @@ def _frame_loop(socketio):
                             if now_alert - gemma_last_call.get(track_key, 0) < GEMMA_RATE_LIMIT:
                                 skipped = "rate-limited"
                             else:
-                                ref_img = cv2.imread(app_state.target_photo_path)
+                                # The cached, read-only reference is shared, not
+                                # copied: the reasoning agent can then reuse its
+                                # encoded upload instead of redoing it per call.
+                                ref_img = load_reference_photo(app_state.target_photo_path)
                                 if ref_img is None:
                                     skipped = "reference photo unreadable"
                                 else:
                                     try:
-                                        gemma_queue.put_nowait(("analyze", track_key, candidate_crop.copy(), ref_img.copy(), alert_id))
+                                        gemma_queue.put_nowait(("analyze", track_key, candidate_crop.copy(), ref_img, alert_id))
                                         gemma_last_call[track_key] = now_alert
                                     except queue.Full:
                                         obs_events.queue_dropped("reasoning", kind="analyze")  # drop, don't block

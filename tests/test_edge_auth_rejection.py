@@ -104,9 +104,9 @@ def test_ordinary_close_keeps_fast_reconnect_and_rate_limits_the_warning(caplog)
             connects[0] += 1
             await ws.close(code=4500, reason="restarting")
 
-        async with websockets.serve(handler, "localhost", 0) as server:
+        async with websockets.serve(handler, "127.0.0.1", 0) as server:
             port = server.sockets[0].getsockname()[1]
-            et = EdgeTransport(ws_url=f"ws://localhost:{port}", base_delay=1.0, max_delay=2.0)
+            et = EdgeTransport(ws_url=f"ws://127.0.0.1:{port}", base_delay=1.0, max_delay=2.0)
             try:
                 await et.connect()
                 await asyncio.sleep(3.5)
@@ -151,7 +151,7 @@ def test_rate_limited_log_first_every_nth_and_time():
 
 
 def test_sync_send_before_connect_is_quiet():
-    sync = EdgeTransportSync(ws_url="ws://localhost:1")
+    sync = EdgeTransportSync(ws_url="ws://127.0.0.1:1")
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         assert sync.send({"type": "telemetry"}) is False

@@ -166,9 +166,14 @@ class MonitorMixin:
 
         Such a landing (the Tello's own auto-land, a crash, a state poller
         that saw the drone on the ground) invalidates the plan and clears a
-        hold, like every landing.
+        hold, like every landing. Every landing, requested or not, also
+        forgets the point a plan was to continue from (``_resume_target``,
+        set by a ``resume_search`` or a sidestep): it is a point of the
+        flight that just ended, and the next takeoff starts a new frame.
         """
         was_flying, self._was_flying = self._was_flying, flying
+        if was_flying and not flying:
+            self._resume_target = None
         if not was_flying or flying or self._land_reason is not None or self._land_inflight:
             return False
         self._plan_valid = False

@@ -39,7 +39,10 @@ Obstacle sensing (design ``.claude/build/obstacle/design.md`` sections 3 and
    than the end of the last move or turn plus the settle time (and newer
    than the gate itself). The call runs on a helper thread that is abandoned
    if it hangs. Only ``clear`` lets the step be claimed and sent; nothing is
-   sent after any other result. A drone that measures its own heading in
+   sent after any other result. With ``obstacle_clear_votes`` above 1
+   (``FLIGHTRISK_OBSTACLE_CLEAR_VOTES``, 2 on the edge) the gate needs that
+   many consecutive clear views, each a separate call judging a frame
+   captured after the previous one. A drone that measures its own heading in
    the plan frame (``measured_heading_deg()``, an autopilot's compass) must
    also face the commanded heading within ``HEADING_TOLERANCE_DEG``, before
    and after the look: otherwise the gate's result is ``unavailable``
@@ -57,7 +60,10 @@ Obstacle sensing (design ``.claude/build/obstacle/design.md`` sections 3 and
    removed from the plan, the cut ``(lane, flown_cm, reason)`` is recorded
    and reported in telemetry, and later lanes are re-planned with the
    deficit rule (``lane_steps``), which never lengthens a lane. The drone
-   never lands for an obstacle and continues with the next lane.
+   never lands for an obstacle and continues with the next lane. Before an
+   obstacle (``obstacle``, never ``person``) cuts a lane step, the executor
+   may look again and sidestep around it (``flightrisk.drone.lane_avoid``,
+   off unless the executor is given its settings; the edge switches it on).
 4. **Fail-safe.** A sensor that cannot look (stale frame, timeout, error) is
    asked again up to ``OBSTACLE_SENSE_RETRIES`` times, hovering
    ``obstacle_retry_pause_s`` between attempts, and then cuts the lane with
@@ -128,6 +134,7 @@ from flightrisk.drone.obstacle_sensor import (
     OBSTACLE_STATE_BLOCKED,
     OBSTACLE_STATE_CLEAR,
     OBSTACLE_STATE_UNAVAILABLE,
+    PERSON_CUE_CLEAR,
     REASON_ERROR,
     REASON_STALE,
     REASON_TIMEOUT,
@@ -196,6 +203,7 @@ _GO = "go"  # fly the step now
 _AGAIN = "again"  # look at the plan again (after a turn, a cut, a re-task)
 _STOP = "stop"  # the sequence ends (landing, hold)
 _RETRY = "retry"  # ask the sensor again (inside the gate only)
+_VOTE = "vote"  # a clear view, but the gate needs another one (inside the gate only)
 _CUT = "cut"  # the gate or a turn that did not finish cut the lane
 _OBSTACLE_STATES = {
     STATE_CLEAR: OBSTACLE_STATE_CLEAR,
@@ -220,6 +228,15 @@ _FIRST_PHASE = {
 
 class MoveNotExecutedError(RuntimeError):
     """The drone controller reported a move as not executed (it was not flown)."""
+
+
+def _takes_person_wait(sensor: Any) -> bool:
+    """Whether ``sensor.sense`` takes the ``person_wait`` keyword (``ObstacleSensor``). Never raises."""
+    try:
+        parameters = inspect.signature(sensor.sense).parameters
+    except (TypeError, ValueError, AttributeError):
+        return False
+    return "person_wait" in parameters
 
 
 class FlightSequenceMixin:
@@ -501,7 +518,8 @@ class FlightSequenceMixin:
         if kind == "manual_takeoff":
             return None
         started = self._clock()
-        after = max(self._last_motion_end_s, started - OBSTACLE_SETTLE_S)
+        # ``after`` plus the sensor's settle time is the gate's start: the view is newer than the probe.
+        after = max(self._last_motion_end_s, started - self.obstacle_settle_s)
         result, latency_ms = self._sense_once(after)
         detail = result.detail if isinstance(result.detail, dict) else {}
         with self._lock:
@@ -644,6 +662,9 @@ class FlightSequenceMixin:
                 # takeoff that executes but reports a failure still starts
                 # from the right origin.
                 previous_pose = self.envelope.reset_pose()
+                # A point the plan was to continue from (a sidestep's point on
+                # the lane, a hold point) belongs to the frame just replaced.
+                self._resume_target = None
                 # The flight's refusal budget and the fence margin of its
                 # refused lane steps start again (``_retry_refusal``).
                 self._flight_refusals = 0
@@ -1210,7 +1231,19 @@ class FlightSequenceMixin:
                 return _AGAIN if verdict == _CUT else verdict
         elif direction != "forward":
             return _GO
-        verdict = self._look(step, current, cut)
+        # A gate that saw an obstacle may first look again and sidestep
+        # (``lane_avoid``): its cut is held back here and made there.
+        seen: list[SenseResult] = []
+
+        def gate_cut(reason: str, result: SenseResult) -> None:
+            if self._avoid_wanted_locked(reason, result):
+                seen.append(result)
+            else:
+                cut(reason, result)
+
+        verdict = self._look(step, current, gate_cut)
+        if verdict == _CUT and seen:
+            verdict = self._avoid_blocked(step, gen, current, cut, seen[0])
         return _AGAIN if verdict == _CUT else verdict
 
     def _plan_step_check(self, step: tuple[int, int, str, int], gen: int) -> Callable[[], bool]:
@@ -1415,16 +1448,30 @@ class FlightSequenceMixin:
         current: Callable[[], bool],
         cut: Callable[[str, SenseResult], None],
         source: str | None = None,
+        *,
+        person_wait: bool = False,
+        need_person: bool = False,
     ) -> str:
         """The sense gate before *step*: ``_GO``, ``_CUT``, ``_AGAIN`` or ``_STOP``.
 
-        Only a ``clear`` view, taken while the drone faced its commanded
-        heading (``_sense_facing``), for a step that is still *current*,
-        returns ``_GO``. ``blocked`` returns ``_CUT``. A result that is not a
-        view (``unavailable``, or an exception) is retried after a short
-        hover, up to ``OBSTACLE_SENSE_RETRIES`` attempts, then returns
-        ``_CUT`` with ``sensor_stale``; once the plan's gates have been
-        unable to look for ``OBSTACLE_SENSOR_DOWN_S``, with ``sensor_down``.
+        Only ``obstacle_clear_votes`` consecutive ``clear`` views (one by
+        default; ``FLIGHTRISK_OBSTACLE_CLEAR_VOTES`` on the edge), each taken
+        while the drone faced its commanded heading (``_sense_facing``), for
+        a step that is still *current*, return ``_GO``. Every vote is its own
+        sense call, and every vote after the first passes an ``after`` no
+        earlier than the end of the previous vote. A sensor that honours
+        ``after`` (the camera's ``LatestFrame.wait_for`` judges only a frame
+        captured at or after ``after`` plus its settle time) therefore never
+        judges the same frame twice, and the frames of two votes are at
+        least the settle time apart. Views from one hover are still not
+        independent, so the votes reduce false clears without removing them.
+        The scripted sensors of the tests ignore ``after``. ``blocked`` at
+        any vote returns ``_CUT``. A result that is not a view
+        (``unavailable``, or an exception) starts the votes again and is
+        retried after a short hover, up to ``OBSTACLE_SENSE_RETRIES`` such
+        attempts, then returns ``_CUT`` with ``sensor_stale``; once the
+        plan's gates have been unable to look for ``OBSTACLE_SENSOR_DOWN_S``,
+        with ``sensor_down``.
         Every ``_CUT`` first calls *cut* under ``_lock`` with the reason and
         the result: a lane step cuts its lane there, the way back of a
         ``resume_search`` only records why it stopped. A step that is no
@@ -1432,8 +1479,27 @@ class FlightSequenceMixin:
         returns ``_AGAIN``; so does a hold, manual control or a link-loss
         hold between attempts, and the caller stops for it. *source* (for
         example ``return``) is added to the gate's log.
+
+        *person_wait* asks a sensor that supports it to wait for a fresh
+        person detection even when the depth cue blocks (``_sense_once``);
+        the gates of the re-look and the sidestep pass it. With
+        *need_person* (the sidestep's own gates) a clear view counts only
+        when its ``person_cue`` is ``clear``, a fresh detection that saw no
+        close person: any other person cue is handled like a view that is
+        not a view (the votes start again, it is retried, and it ends in
+        ``sensor_stale``), so a sidestep never moves on a view that could
+        not rule a person out.
         """
+        votes = max(1, int(getattr(self, "obstacle_clear_votes", 1)))
+        settle_s = float(getattr(self, "obstacle_settle_s", OBSTACLE_SETTLE_S))
         attempt = 0
+        failures = 0
+        clear_votes = 0
+        # Edge clock time at which the previous clear vote of this run ended.
+        # The next vote passes it as its ``after``: a sensor that honours
+        # ``after`` then judges a frame captured at least the settle time
+        # after this vote ended, never the frame this vote judged.
+        vote_after: float | None = None
         while True:
             attempt += 1
             # A probe of a down sensor may hold it (a camera has one
@@ -1441,28 +1507,49 @@ class FlightSequenceMixin:
             deadline = time.monotonic() + self.obstacle_sense_timeout_s + _SENSE_JOIN_GRACE_S
             self._wait_for_probe(deadline)
             started = self._clock()
-            # A view newer than the end of the last move or turn plus the
-            # settle time, and never older than the gate itself.
-            after = max(self._last_motion_end_s, started - OBSTACLE_SETTLE_S)
-            result, latency_ms = self._sense_facing(after, deadline)
+            # The sensor judges a frame captured at or after ``after`` plus its
+            # settle time (``obstacle_settle_s``, the setting the sensor uses):
+            # after the end of the last move or turn plus the settle time, and
+            # never before this gate started (``started - settle + settle``).
+            after = max(self._last_motion_end_s, started - settle_s)
+            if vote_after is not None:
+                after = max(after, vote_after)
+            result, latency_ms = self._sense_facing(after, deadline, person_wait=person_wait)
             now = self._clock()
             if self._abort.is_set():
                 return _STOP
             pose = self.envelope.pose_snapshot()
             with self._lock:
                 self._note_sense_locked(result, latency_ms, started)
+                # The view this gate judged last (``lane_avoid``'s person check reads it).
+                self._last_look_result = result
                 verdict, reason = _RETRY, None
                 if not current():
                     # A re-task replaced the step while the sensor looked.
                     verdict = _AGAIN
+                elif result.clear and need_person and result.person_cue != PERSON_CUE_CLEAR:
+                    # A sidestep's gate: no fresh view of "no person", so not a view for it.
+                    clear_votes = 0
+                    vote_after = None
+                    failures += 1
+                    if failures >= OBSTACLE_SENSE_RETRIES:
+                        reason = CUT_SENSOR_STALE
                 elif result.clear:
-                    verdict = _GO
+                    clear_votes += 1
+                    verdict = _GO if clear_votes >= votes else _VOTE
+                    # The next vote's ``after``: this vote ended now.
+                    vote_after = now
                 elif result.blocked:
                     reason = result.cut_reason
-                elif self._plan_sensor_down_locked(now):
-                    reason = CUT_SENSOR_DOWN
-                elif attempt >= OBSTACLE_SENSE_RETRIES:
-                    reason = CUT_SENSOR_STALE
+                else:
+                    # Not a view: the votes so far no longer count as consecutive.
+                    clear_votes = 0
+                    vote_after = None
+                    failures += 1
+                    if self._plan_sensor_down_locked(now):
+                        reason = CUT_SENSOR_DOWN
+                    elif failures >= OBSTACLE_SENSE_RETRIES:
+                        reason = CUT_SENSOR_STALE
                 if reason is not None:
                     verdict = _CUT
                     cut(reason, result)
@@ -1470,14 +1557,17 @@ class FlightSequenceMixin:
                     self._held or self._manual is not None or self._link_holding or not self._is_active()
                 )
             self._log_gate(step, attempt, result, latency_ms, pose, source)
-            if verdict != _RETRY:
+            if verdict not in (_RETRY, _VOTE):
                 return verdict
             if stopping:
                 return _AGAIN
-            if self._abort.wait(self.obstacle_retry_pause_s):
+            # The next vote needs no pause: its call waits for a newer frame.
+            if verdict == _RETRY and self._abort.wait(self.obstacle_retry_pause_s):
                 return _STOP
 
-    def _sense_facing(self, after: float, deadline: float | None = None) -> tuple[SenseResult, float]:
+    def _sense_facing(
+        self, after: float, deadline: float | None = None, *, person_wait: bool = False,
+    ) -> tuple[SenseResult, float]:
         """One look, valid only while the drone faces its commanded heading. Never raises.
 
         A drone that measures its heading and does not face the commanded
@@ -1486,12 +1576,12 @@ class FlightSequenceMixin:
         after a ``clear`` view, which counts only if the drone still faced
         it: the view arrived between the two readings. Drones that do not
         measure their heading get the sensor's answer unchanged. *deadline*
-        is passed to ``_sense_once``.
+        and *person_wait* are passed to ``_sense_once``.
         """
         off = self._heading_off()
         if off is not None:
             return SenseResult.make_unavailable(REASON_STALE, detail=off), 0.0
-        result, latency_ms = self._sense_once(after, deadline)
+        result, latency_ms = self._sense_once(after, deadline, person_wait=person_wait)
         if result.clear:
             off = self._heading_off()
             if off is not None:
@@ -1511,8 +1601,13 @@ class FlightSequenceMixin:
             if not probe_idle.wait(max(0.0, deadline - time.monotonic())):
                 return False
 
-    def _sense_once(self, after: float, deadline: float | None = None) -> tuple[SenseResult, float]:
+    def _sense_once(
+        self, after: float, deadline: float | None = None, *, person_wait: bool = False,
+    ) -> tuple[SenseResult, float]:
         """One sense call on a helper thread: ``(result, latency_ms)``. Never raises.
+
+        *person_wait* is passed to a sensor whose ``sense`` takes that
+        keyword (``ObstacleSensor``); any other sensor is called as before.
 
         An exception, or anything that is not a ``SenseResult``, becomes an
         ``unavailable`` result with reason ``error``. A call still running
@@ -1558,10 +1653,11 @@ class FlightSequenceMixin:
                 ), waited_ms
         box: dict[str, Any] = {}
         done = threading.Event()
+        extra = {"person_wait": True} if person_wait and _takes_person_wait(sensor) else {}
 
         def run() -> None:
             try:
-                box["result"] = sensor.sense(after, timeout_s)
+                box["result"] = sensor.sense(after, timeout_s, **extra)
             except Exception as exc:  # noqa: BLE001 - a failing sensor is a gate that cannot look
                 box["error"] = exc
             finally:
@@ -1774,7 +1870,9 @@ class FlightSequenceMixin:
     # The sensed way back of a resume_search (``lane_manual._run_return``)
     # ------------------------------------------------------------------
 
-    def _fly_return_sensed(self, path: list[tuple[str, int]]) -> tuple[str, tuple[str, SenseResult] | None]:
+    def _fly_return_sensed(
+        self, path: list[tuple[str, int]], source: str = "return", *, person: bool = False,
+    ) -> tuple[str, tuple[str, SenseResult] | None]:
         """Fly the way back of a ``resume_search`` in sensed steps: ``(outcome, why)``.
 
         *outcome* is ``done``, ``stopped`` or ``blocked``; *why* is the
@@ -1800,6 +1898,13 @@ class FlightSequenceMixin:
         back under manual control with its hold point kept. A landing, a
         hold, manual control or a link-loss hold stops it before its next
         move (``stopped``), exactly as an unsensed way back stops.
+
+        *source* names the way back in the gate and geofence logs: ``return``
+        for a ``resume_search``, and the sidestep's own names when
+        ``lane_avoid`` flies a sidestep and its way back to the lane. With
+        *person* (the sidestep) every gate asks the sensor to wait for a
+        person detection and clears only on a fresh ``clear`` person cue
+        (``_look``'s *person_wait* and *need_person*).
         """
         turning = self._turns_to_face()
         limits = getattr(self.envelope, "limits", ROOM_LIMITS)
@@ -1843,7 +1948,7 @@ class FlightSequenceMixin:
                             return ended(verdict)
                     if body != "forward":
                         break  # forward_only: a back or sideways step is flown unsensed, as on a lane
-                    verdict = self._look(step, current, stop, source="return")
+                    verdict = self._look(step, current, stop, source=source, person_wait=person, need_person=person)
                     if verdict == _GO:
                         break
                     if verdict == _AGAIN:
@@ -1856,7 +1961,7 @@ class FlightSequenceMixin:
                     self._log.error(
                         "edge_geofence_refused", drone_id=self.drone_id, direction=body, distance_cm=distance,
                         x_cm=round(pose.x_cm, 1), y_cm=round(pose.y_cm, 1), heading_deg=round(pose.heading_deg, 1),
-                        source="return",
+                        source=source,
                     )
                     self.land_now("geofence")
                     return "stopped", None

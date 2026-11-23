@@ -121,13 +121,38 @@ stays active and the reason is shown.
 | `FLIGHTRISK_REASONING_PROVIDER` | `gemma` | `gemma`, `claude` or `off` |
 | `FLIGHTRISK_ALLOW_CLOUD_LLM` | unset (off) | `1` to allow the Claude cloud backend |
 | `FLIGHTRISK_CLAUDE_API_KEY` | unset | Anthropic API key used only when cloud use is allowed |
-| `FLIGHTRISK_CLAUDE_MODEL` | `claude-opus-5-5` | any vision-capable Claude model, e.g. `claude-sonnet-5-5` to cut cost |
-| `FLIGHTRISK_CLAUDE_EFFORT` | `medium` | `low` to `max`; lower is faster and cheaper |
+| `FLIGHTRISK_CLAUDE_MODEL` | `claude-sonnet-5-5` | any vision-capable Claude model, e.g. `claude-opus-5-5` for harder cases |
+| `FLIGHTRISK_CLAUDE_EFFORT` | `high` | `low`, `medium`, `high`, `xhigh` or `max`; lower is faster and cheaper; any other value falls back to `high` with a warning |
+| `FLIGHTRISK_CLAUDE_BREAKER_THRESHOLD` | `3` | consecutive outages (connection error, stalled read, 429, 5xx) before Claude calls pause; at least 1 |
+| `FLIGHTRISK_CLAUDE_BREAKER_COOLOFF` | `60` | seconds Claude calls stay paused after the breaker opens; clamped to 1-3600 |
+| `FLIGHTRISK_CLAUDE_MAX_CALLS_PER_MINUTE` | `20` | cap on Claude calls per rolling minute (a call and its one retry count once); extra calls are skipped, never queued; at least 1 |
+| `FLIGHTRISK_CLAUDE_DEADLINE` | `90` | wall-clock limit in seconds for one Claude call, including its retry; clamped to 10-600 |
+| `FLIGHTRISK_CLAUDE_BASE_URL` | Anthropic's API | an https URL to send Claude calls to instead (for example a proxy); `ANTHROPIC_BASE_URL` is never used |
 | `FLIGHTRISK_GEMMA_MODEL` | `gemma4:latest` | Ollama model when using `gemma` |
 
 Each confirmation sends the reference photo and the detected person's crop to the chosen backend
 (for Gemma, to the local Ollama server; for Claude, to the Anthropic API). Calls are rate-limited per
-tracked person.
+tracked person. For Claude, both images are downscaled to at most 768 px on the long edge before
+upload. Each call is streamed: a read that gets no data for 30 s fails (connecting has 5 s), and a
+90 s deadline ends a reply that is still streaming. The deadline does not cover setting up the
+request: the DNS lookup (no timeout of its own), connecting (5 s), the upload (10 s per write) and
+the wait for the first response headers (30 s) are bounded only by their own timeouts, so a call
+can end later than 90 s by that setup time, or by one 30 s read when the connection goes silent just
+before the deadline. A connection error or a 429/529 response is retried once after at most 2 s,
+and only if the wait plus a connect and a read timeout still fit inside the deadline; a stalled read
+or the deadline is never retried. Only a reply that ended normally gives a verdict; one cut off (for
+example at the token limit) is reported as a failed check. After 3 consecutive outages
+a circuit breaker pauses Claude calls for 60 s, and at most 20 calls go out per minute. A paused or
+capped call is skipped at once and the alert reads "AI check paused (Claude unavailable, retrying in
+N s)" or "AI check skipped (rate cap)", so the reasoning worker never stalls. If Anthropic rejects the
+key (HTTP 401 or 403), Claude checks turn off with a notice until the dashboard restarts or Claude is
+selected again. Settings from `ANTHROPIC_*` variables (base URL, custom headers, API key, trace
+content) are ignored, and the agent refuses to start if a header from the environment or a different
+key would still be sent. The SDK's own tracing records metadata only, never sends FlightRisk's trace
+context to Anthropic, and is off when `ANTHROPIC_OPEN_TELEMETRY=false` is set. The `anthropic`
+package is capped below 2.4 because these checks rely on how 2.3 builds its client. A failed check shows fixed text built from the status code or error type, for
+example "AI check failed (Claude error 529: overloaded).", never the raw error message, because the
+result goes to every connected client; the full error is logged on the ground, redacted.
 
 ## Observability (Grafana)
 

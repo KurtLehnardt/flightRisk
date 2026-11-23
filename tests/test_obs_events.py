@@ -206,6 +206,24 @@ def test_reasoning_call_never_logs_text(rec, caplog):
     assert obs_events.reasoning_outcome(None) == "error"
 
 
+@pytest.mark.parametrize("confidence", ["skipped", "unavailable"])
+def test_reasoning_call_without_a_model_answer_adds_no_latency_sample(rec, caplog, confidence):
+    outcome = obs_events.reasoning_outcome({"match": False, "confidence": confidence, "reasoning": "x"})
+    assert outcome == confidence
+    with caplog.at_level(logging.INFO, logger="flightrisk"):
+        obs_events.reasoning_call(provider="claude", model="claude-x", kind="analyze", duration_ms=0.2,
+                                  outcome=outcome)
+    assert rec["reasoning_calls"].calls[-1][1] == {"provider": "claude", "kind": "analyze", "outcome": confidence}
+    assert rec["reasoning_duration"].calls == []
+    level = events(caplog, "reasoning")[-1].levelno
+    assert level == (logging.INFO if confidence == "skipped" else logging.WARNING)
+
+
+def test_reasoning_call_with_an_answer_records_latency(rec):
+    obs_events.reasoning_call(provider="claude", model="claude-x", kind="analyze", duration_ms=812.0, outcome="no_match")
+    assert rec["reasoning_duration"].calls == [(812.0, {"provider": "claude", "kind": "analyze", "outcome": "no_match"})]
+
+
 def test_timed_reasoning_records_metadata(rec, caplog):
     from flightrisk.dashboard.alerts import _timed_reasoning
 
