@@ -229,6 +229,90 @@ final class ReasoningVerdictTests: XCTestCase {
         XCTAssertEqual(book.level(for: a), .confirmedMatch, "the verdict text never lowers the level")
     }
 
+    /// The dashboard ignores an `alert_upgrade` that does not rank higher than the level shown
+    /// (`ui.js`); so does the phone, and such an upgrade writes no verdict either.
+    func testAnUpgradeThatDoesNotRaiseTheLevelChangesNothing() throws {
+        // The critic's probe: a confirmed alert without a verdict, then weak_signal and no_match.
+        var book = AlertVerdictBook()
+        let confirmed = try matchAlert(alert(level: "confirmed_match"))
+        book.apply(.matchAlert(confirmed))
+        XCTAssertNil(book.display(for: confirmed))
+        book.apply(upgrade("weak_signal", reasoning: "x"))
+        XCTAssertNil(book.display(for: confirmed), "a lower upgrade writes no verdict")
+        XCTAssertEqual(book.level(for: confirmed), .confirmedMatch)
+        book.apply(event("alert_upgrade", #"{"alert_id":"\#(alertId)","new_level":"no_match"}"#))
+        XCTAssertNil(book.display(for: confirmed))
+        book.apply(upgrade("confirmed_match"))
+        XCTAssertNil(book.display(for: confirmed), "an equal level is not a raise")
+
+        // An error, then an upgrade to the level the alert already has: the error stays.
+        book = AlertVerdictBook()
+        let possible = try matchAlert(alert(level: "possible_match", confidence: "pending"))
+        book.apply(.matchAlert(possible))
+        book.apply(result(confidence: "error", match: false, reasoning: "boom"))
+        book.apply(upgrade("possible_match", reasoning: "r"))
+        XCTAssertEqual(book.display(for: possible)?.headline, AlertVerdictText.errorNote)
+        XCTAssertEqual(book.verdict(for: alertId)?.confidence, "error")
+    }
+
+    /// A raise to `weak_signal` moves the level but is not a match verdict; only a raise to
+    /// `possible_match` or `confirmed_match` stands in for one.
+    func testOnlyARaiseToAMatchLevelStandsInForAVerdict() throws {
+        var book = AlertVerdictBook()
+        let noMatch = try matchAlert(alert(level: "no_match"))
+        book.apply(.matchAlert(noMatch))
+        book.apply(upgrade("weak_signal"))
+        XCTAssertEqual(book.level(for: noMatch), .weakSignal)
+        XCTAssertNil(book.verdict(for: alertId))
+        book.apply(upgrade("possible_match", reasoning: "Similar coat."))
+        XCTAssertEqual(book.level(for: noMatch), .possibleMatch)
+        XCTAssertEqual(book.display(for: noMatch)?.headline, "AI check: match (medium confidence)")
+        XCTAssertEqual(book.display(for: noMatch)?.rowRationale, "Similar coat.")
+        // An upgrade without a level changes nothing.
+        book.apply(event("alert_upgrade", #"{"alert_id":"\#(alertId)","reasoning":"no level"}"#))
+        XCTAssertEqual(book.level(for: noMatch), .possibleMatch)
+        XCTAssertEqual(book.display(for: noMatch)?.rowRationale, "Similar coat.")
+    }
+
+    /// A result without `confidence` is still a yes or no; a result without `match` is no clear
+    /// verdict. Neither crashes nor shows a confidence the ground did not send.
+    func testAResultMissingConfidenceOrMatch() throws {
+        let a = try matchAlert(alert(confidence: "pending"))
+        var book = AlertVerdictBook()
+        book.apply(.matchAlert(a))
+        book.apply(event("reasoning_result", #"{"alert_id":"\#(alertId)","type":"analyze","result":{"match":true,"reasoning":"Same coat."}}"#))
+        var shown = try XCTUnwrap(book.display(for: a))
+        XCTAssertEqual(shown.headline, "AI check: match")
+        XCTAssertNil(shown.confidence)
+        XCTAssertFalse(shown.isNeutral)
+        XCTAssertEqual(shown.rowRationale, "Same coat.")
+
+        book.apply(event("reasoning_result", #"{"alert_id":"\#(alertId)","type":"analyze","result":{"confidence":"high","reasoning":"Unsure."}}"#))
+        shown = try XCTUnwrap(book.display(for: a))
+        XCTAssertEqual(shown.headline, AlertVerdictText.noClearVerdictNote)
+        XCTAssertTrue(shown.isNeutral)
+        XCTAssertNil(shown.rowRationale)
+
+        book.apply(event("reasoning_result", #"{"alert_id":"\#(alertId)","type":"analyze","result":{}}"#))
+        XCTAssertEqual(book.display(for: a)?.headline, AlertVerdictText.noClearVerdictNote)
+    }
+
+    /// `clip` counts and cuts grapheme clusters, never splitting a letter and its accent or an
+    /// emoji, and removes the invisible direction marks.
+    func testClipCutsOnGraphemeClustersAndRemovesDirectionMarks() {
+        let accented = String(repeating: "e\u{301}", count: 10)
+        XCTAssertEqual(AlertVerdictText.clip(accented, max: 10), accented)
+        let cut = AlertVerdictText.clip(accented, max: 4)
+        XCTAssertEqual(cut, "e\u{301}e\u{301}e\u{301}\u{2026}")
+        XCTAssertEqual(cut.count, 4)
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"
+        XCTAssertEqual(AlertVerdictText.clip(family + family + family, max: 2), family + "\u{2026}")
+        XCTAssertEqual(AlertVerdictText.clip("a\u{200E}b\u{200F}c\u{061C}d", max: 10), "abcd")
+        XCTAssertEqual(AlertVerdictText.clip("\u{200E}\u{200F}abc", max: 2), "a\u{2026}", "a removed mark is not counted")
+        XCTAssertEqual(AlertVerdictText.clip("a\r\nb\u{202E}c\u{2066}d", max: 10), "a b c d")
+        XCTAssertEqual(AlertVerdictText.clip("abc", max: 0), "")
+    }
+
     func testTheRationaleIsShortAndSafe() throws {
         let a = try matchAlert(alert())
         var book = AlertVerdictBook()
@@ -276,5 +360,30 @@ final class ReasoningVerdictTests: XCTestCase {
         XCTAssertEqual(GroundText.fleetEventBanner(person),
                        "OBSTACLE drone-2: a lane stopped at (250, 210) cm; a person: re-flown only if the operator confirms it on the laptop")
         XCTAssertEqual(GroundText.fleetEventBannerInfo(ev)?.isFailure, false)
+    }
+
+    /// A cut that was not an obstacle or a person names its reason: no obstacle was seen.
+    func testLaneBlockedNamesAReasonOtherThanAnObstacleOrAPerson() {
+        guard case let .fleetEvent(ev) = event("fleet_event", #"""
+        {"event":"lane_blocked","drone_id":"drone-2","lane_index":1,"x_cm":250.0,"y_cm":210.0,"unflown_cm":190.0,"reason":"sensor_down"}
+        """#) else { return XCTFail("not decoded") }
+        let base = "OBSTACLE drone-2: lane 1 stopped at (250, 210) cm, 190 cm not searched"
+        XCTAssertEqual(GroundText.fleetEventBanner(ev), base + " (obstacle sensor down)")
+        var cut = ev
+        cut.reason = "sensor_stale"
+        XCTAssertEqual(GroundText.fleetEventBanner(cut), base + " (obstacle sensor could not look)")
+        cut.reason = "autopilot"
+        XCTAssertEqual(GroundText.fleetEventBanner(cut), base + " (stopped by the autopilot's obstacle avoidance)")
+        cut.reason = "skipped"
+        XCTAssertEqual(GroundText.fleetEventBanner(cut), base + " (reason: skipped)")
+        cut.reason = "new_reason\u{202E}" + String(repeating: "x", count: 100)
+        let unknown = GroundText.fleetEventBanner(cut) ?? ""
+        XCTAssertTrue(unknown.hasPrefix(base + " (reason: new_reason "), unknown)
+        XCTAssertFalse(unknown.unicodeScalars.contains("\u{202E}"))
+        XCTAssertLessThan(unknown.count, base.count + 60)
+        for plain in ["obstacle", "", nil] as [String?] {
+            cut.reason = plain
+            XCTAssertEqual(GroundText.fleetEventBanner(cut), base)
+        }
     }
 }

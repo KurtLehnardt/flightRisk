@@ -9,8 +9,9 @@ import XCTest
 final class DemoNetworkIsolationTests: XCTestCase {
     /// Every command the phone can build.
     private let everyCommand: [GroundCommand] = [
-        .landAll, .landDrone(droneId: "drone-1"), .landDrone(droneId: "drone-2"), .resumeHeldDrone(droneId: "drone-1"),
-        .setDetectionProfile(droneId: "drone-1", profile: "top_down"), .setFleetDetectionProfile(profile: "level"),
+        .landAll, .landDrone(droneId: DemoGround.spotterDroneId), .landDrone(droneId: DemoGround.cutDroneId),
+        .resumeHeldDrone(droneId: DemoGround.spotterDroneId),
+        .setDetectionProfile(droneId: DemoGround.spotterDroneId, profile: "top_down"), .setFleetDetectionProfile(profile: "level"),
     ] + GroundCommand.stateRequests
 
     private func makeClient(_ network: TripwireNetwork, http: any GroundHTTPClient) throws -> GroundClient {
@@ -24,8 +25,9 @@ final class DemoNetworkIsolationTests: XCTestCase {
         )
     }
 
-    /// The demo as the Ground tab runs it: no live client. A transport or HTTP request made at
-    /// all fails the test.
+    /// The demo with a live client handed to `choose`, as a client that is closing could still
+    /// be: the client is never connected and never used. A transport or HTTP request made at all
+    /// fails the test.
     func testDemoCommandsOpenNoConnection() async throws {
         let network = TripwireNetwork(mode: .failOnAnyUse)
         let http = TripwireHTTP()
@@ -33,7 +35,7 @@ final class DemoNetworkIsolationTests: XCTestCase {
         let demo = DemoGroundSession(ground: DemoGround(startedAt: Date(timeIntervalSince1970: 0)))
         _ = demo.advance(to: 6)
         for command in everyCommand {
-            let destination = GroundCommandDestination.choose(demo: demo, elapsed: 6, live: nil)
+            let destination = GroundCommandDestination.choose(demo: demo, elapsed: 6, live: client)
             XCTAssertTrue(destination.isDemo)
             let outcome = await GroundCommandDispatch.send(command, to: destination)
             XCTAssertEqual(outcome, .answeredByDemo, "\(command)")

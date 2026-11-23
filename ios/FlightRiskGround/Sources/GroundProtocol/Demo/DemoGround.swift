@@ -11,8 +11,8 @@ import Foundation
 /// | 0 | Connect: `status`, reasoning provider, detection profiles, ceiling, plan, fleet status. |
 /// | 3 | `fleet_event` `start`. |
 /// | 5 | Both drones take off and fly their lanes at 30 cm/s. |
-/// | 12 | drone-2 hits an obstacle: `fleet_event` `lane_blocked`; it skips to its next lane. |
-/// | 14 | drone-1 sees a person: `fleet_detection` and a `match_alert` waiting for the AI check. |
+/// | 12 | demo-drone-2 hits an obstacle: `fleet_event` `lane_blocked`; it skips to its next lane. |
+/// | 14 | demo-drone-1 sees a person: `fleet_detection` and a `match_alert` waiting for the AI check. |
 /// | 22 | The AI check answers: `reasoning_result` (match, high confidence) and `alert_upgrade`. |
 /// | 30 | The operator confirms the alert on the laptop: `match_alert_resolved`. |
 /// | 33 | The ground lands every drone: `fleet_event` `land_all`; landing takes 3 s. |
@@ -22,6 +22,11 @@ import Foundation
 /// live ground. Every command the phone sends is answered here, on the phone, as the ground would
 /// answer it (`receive(_:at:)`): nothing is ever sent to a network. The type is a pure value: time
 /// moves only through `advance(to:)`, so a test can drive it second by second.
+///
+/// Every id the demo sends starts with `idPrefix`: the drones are `demo-drone-1` and
+/// `demo-drone-2` (the fixtures' `drone-1` and `drone-2`, renamed as they are loaded), the alert
+/// is `demo-alert-1` and its track `demo-track-1`. A demo drone can never share an id with a real
+/// one.
 public struct DemoGround: Sendable {
     /// When each part of the scenario happens, in seconds from the start.
     public enum Moment {
@@ -45,12 +50,18 @@ public struct DemoGround: Sendable {
     public static let profileAnswerDelay: TimeInterval = 0.8
     public static let stateAnswerDelay: TimeInterval = 0.2
 
-    /// Ids of everything the demo invents carry this prefix, so they can never be taken for a
-    /// real ground's.
+    /// Every id the demo sends (drones, the alert, its track) carries this prefix, so it can
+    /// never be taken for a real ground's.
     public static let idPrefix = "demo-"
     public static let alertId = "demo-alert-1"
-    public static let cutDroneId = "drone-2"
-    public static let spotterDroneId = "drone-1"
+    public static let trackId = "demo-track-1"
+    public static let cutDroneId = "demo-drone-2"
+    public static let spotterDroneId = "demo-drone-1"
+
+    /// The demo id of a drone the contract fixtures name: "drone-1" becomes "demo-drone-1".
+    public static func demoId(_ fixtureId: String) -> String {
+        fixtureId.hasPrefix(idPrefix) ? fixtureId : idPrefix + fixtureId
+    }
     public static let verdictRationale =
         "Simulated verdict for the demo: the build and the clothing colours of the person match the reference placeholder. Verify in person before acting."
 
@@ -154,7 +165,7 @@ public struct DemoGround: Sendable {
         let plan = Self.fleetPlanTemplate
         let records = Self.fleetStatusTemplate.drones ?? [:]
         drones = (plan.zones ?? []).compactMap { zone in
-            guard let id = zone.droneId else { return nil }
+            guard let id = zone.droneId else { return nil }  // Already a demo id.
             let legs: [Leg] = (zone.lanes ?? []).compactMap { lane in
                 guard let length = lane.distanceCm, length > 0 else { return nil }
                 switch lane.direction {
@@ -366,7 +377,7 @@ public struct DemoGround: Sendable {
             nextStatusAt = Self.statusInterval
             return [
                 DemoFixtures.status.decoded(), DemoFixtures.reasoningProvider.decoded(), .detectionProfiles(profiles),
-                ceiling(), DemoFixtures.fleetPlan.decoded(), fleetStatus(), manualStatus(), DemoFixtures.streamVideoOff.decoded(),
+                ceiling(), .fleetPlan(Self.fleetPlanTemplate), fleetStatus(), manualStatus(), DemoFixtures.streamVideoOff.decoded(),
             ]
         case .start:
             started = true
@@ -410,11 +421,11 @@ public struct DemoGround: Sendable {
         case .verdict:
             guard alertRaised else { return [] }
             let result = Self.decode("reasoning_result", [
-                "track_id": Self.alertTemplate.trackId ?? "", "alert_id": Self.alertId, "type": "analyze",
+                "track_id": Self.trackId, "alert_id": Self.alertId, "type": "analyze",
                 "result": ["match": true, "confidence": "high", "reasoning": Self.verdictRationale],
             ])
             let upgrade = Self.decode("alert_upgrade", [
-                "track_id": Self.alertTemplate.trackId ?? "", "alert_id": Self.alertId,
+                "track_id": Self.trackId, "alert_id": Self.alertId,
                 "new_level": "confirmed_match", "reasoning": Self.verdictRationale,
             ])
             return [result, upgrade]
@@ -436,6 +447,7 @@ public struct DemoGround: Sendable {
     private func pendingAlert() -> MatchAlert {
         var a = Self.alertTemplate
         a.alertId = Self.alertId
+        a.trackId = Self.trackId
         a.time = alertTimeText
         a.snapshot = nil
         a.gemmaConfidence = .string("pending")
@@ -478,7 +490,7 @@ public struct DemoGround: Sendable {
             return [.detectionProfiles(profiles)]
         case let .state(command):
             switch command {
-            case .getFleetStatus: return [fleetStatus(), DemoFixtures.fleetPlan.decoded()]
+            case .getFleetStatus: return [fleetStatus(), .fleetPlan(Self.fleetPlanTemplate)]
             case .getDetectionProfiles: return [.detectionProfiles(profiles)]
             case .getCeilingSettings: return [ceiling()]
             case .getReasoningProvider: return [DemoFixtures.reasoningProvider.decoded()]
@@ -534,19 +546,41 @@ public struct DemoGround: Sendable {
         return GroundEvent.decode(name: name, payload: data)
     }
 
+    // The templates carry the demo ids: every drone id of a fixture is renamed with `demoId`.
+
+    /// A per-drone map with its keys renamed to demo ids, and `edit` applied to each value.
+    private static func renamed<Value>(_ map: [String: Value]?, _ edit: (inout Value, String) -> Void = { _, _ in }) -> [String: Value]? {
+        guard let map else { return nil }
+        var out: [String: Value] = [:]
+        for (fixtureId, value) in map {
+            let id = demoId(fixtureId)
+            var copy = value
+            edit(&copy, id)
+            out[id] = copy
+        }
+        return out
+    }
+
     static var fleetPlanTemplate: FleetPlanPayload {
-        if case let .fleetPlan(p) = DemoFixtures.fleetPlan.decoded() { return p }
-        return FleetPlanPayload()
+        guard case var .fleetPlan(p) = DemoFixtures.fleetPlan.decoded() else { return FleetPlanPayload() }
+        p.zones = p.zones?.map { zone in
+            var z = zone
+            z.droneId = z.droneId.map(demoId)
+            return z
+        }
+        return p
     }
 
     static var fleetStatusTemplate: FleetStatusPayload {
-        if case let .fleetStatus(p) = DemoFixtures.fleetStatus.decoded() { return p }
-        return FleetStatusPayload()
+        guard case var .fleetStatus(p) = DemoFixtures.fleetStatus.decoded() else { return FleetStatusPayload() }
+        p.drones = renamed(p.drones) { record, id in record.droneId = id }
+        return p
     }
 
     static var profilesTemplate: DetectionProfilesPayload {
-        if case let .detectionProfiles(p) = DemoFixtures.profiles.decoded() { return p }
-        return DetectionProfilesPayload()
+        guard case var .detectionProfiles(p) = DemoFixtures.profiles.decoded() else { return DetectionProfilesPayload() }
+        p.drones = renamed(p.drones) { state, id in state.droneId = id }
+        return p
     }
 
     static var inFlightRefusal: ProfileRefusal? {
@@ -557,13 +591,23 @@ public struct DemoGround: Sendable {
     }
 
     static var ceilingOnGroundTemplate: CeilingSettingsPayload {
-        if case let .ceilingSettings(p) = DemoFixtures.ceilingOnGround.decoded() { return p }
-        return CeilingSettingsPayload()
+        demoCeiling(DemoFixtures.ceilingOnGround)
     }
 
     static var ceilingInFlightTemplate: CeilingSettingsPayload {
-        if case let .ceilingSettings(p) = DemoFixtures.ceilingInFlight.decoded() { return p }
-        return CeilingSettingsPayload()
+        demoCeiling(DemoFixtures.ceilingInFlight)
+    }
+
+    private static func demoCeiling(_ template: DemoFixtures.Template) -> CeilingSettingsPayload {
+        guard case var .ceilingSettings(p) = template.decoded() else { return CeilingSettingsPayload() }
+        p.drones = p.drones?.map { drone in
+            var d = drone
+            d.droneId = d.droneId.map(demoId)
+            return d
+        }
+        // "... (drone-1 reported flying)" names a fixture drone.
+        p.lockedReason = p.lockedReason?.replacingOccurrences(of: "drone-", with: idPrefix + "drone-")
+        return p
     }
 
     static var reasoningProviderTemplate: ReasoningProviderPayload {
@@ -572,8 +616,10 @@ public struct DemoGround: Sendable {
     }
 
     static var manualStatusTemplate: ManualStatusPayload {
-        if case let .manualStatus(p) = DemoFixtures.manualStatus.decoded() { return p }
-        return ManualStatusPayload()
+        guard case var .manualStatus(p) = DemoFixtures.manualStatus.decoded() else { return ManualStatusPayload() }
+        p.drones = renamed(p.drones)
+        p.controlled = p.controlled.map(demoId)
+        return p
     }
 
     static var frameDetectionsOnlyTemplate: FramePayload {
@@ -654,9 +700,52 @@ public enum DemoModePolicy {
         /// A live link is open or switched on: the user confirms that it is closed and switched
         /// off first. The demo never runs beside a live ground link.
         case confirmDisconnectFirst
+        /// The demo cannot start now, for the reason given: live drones may be in the air, or a
+        /// LAND ALL is unanswered or failed. Nothing changes; the live link stays as it is.
+        case refused(String)
     }
 
-    public static func startStep(liveLinkOpen: Bool, liveLinkSwitchedOn: Bool) -> StartStep {
-        liveLinkOpen || liveLinkSwitchedOn ? .confirmDisconnectFirst : .startNow
+    /// The state of the latest live LAND ALL.
+    public enum LandAllState: Equatable, Sendable {
+        /// No LAND ALL, or it succeeded.
+        case settled
+        /// Sent and not answered yet.
+        case unanswered
+        /// Failed, reached only some drones, or never answered. Stays until the user dismisses it.
+        case failed
+    }
+
+    public static let refusedTitle = "The demo cannot start now"
+
+    /// "2 drones are in the air. Land them first. ..." for drones the live ground reports flying
+    /// (or hovering, held or manual). `stale` is true when that report is not live.
+    public static func flyingRefusal(_ count: Int, stale: Bool) -> String {
+        let noun = count == 1 ? "1 drone" : "\(count) drones"
+        let verb = stale ? (count == 1 ? "was in the air at the last update from the ground" : "were in the air at the last update from the ground")
+            : (count == 1 ? "is in the air" : "are in the air")
+        let them = count == 1 ? "it" : "them"
+        return "\(noun) \(verb). Land \(them) first. The demo closes the ground link, and LAND ALL on this phone would then reach only the simulated drones."
+    }
+
+    public static let landAllUnansweredRefusal =
+        "A LAND ALL has no answer from the ground yet. Wait for its result before starting the demo."
+    public static let landAllFailedRefusal =
+        "The last LAND ALL failed, reached only some drones or got no answer. Make sure every drone has landed and dismiss that result before starting the demo."
+
+    /// - Parameters:
+    ///   - flyingDrones: the live drones that are, or may be, in the air.
+    ///   - flyingStateIsStale: true when that count comes from values that are not live.
+    ///   - landAll: the latest live LAND ALL.
+    public static func startStep(
+        liveLinkOpen: Bool, liveLinkSwitchedOn: Bool,
+        flyingDrones: Int = 0, flyingStateIsStale: Bool = false, landAll: LandAllState = .settled
+    ) -> StartStep {
+        if flyingDrones > 0 { return .refused(flyingRefusal(flyingDrones, stale: flyingStateIsStale)) }
+        switch landAll {
+        case .unanswered: return .refused(landAllUnansweredRefusal)
+        case .failed: return .refused(landAllFailedRefusal)
+        case .settled: break
+        }
+        return liveLinkOpen || liveLinkSwitchedOn ? .confirmDisconnectFirst : .startNow
     }
 }

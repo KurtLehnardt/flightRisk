@@ -8,8 +8,9 @@ import Foundation
 // - `reasoning_result`: `{track_id, alert_id, type: "analyze", result: {match, confidence, reasoning}}`.
 //   `confidence` is `high`, `medium` or `low` for a verdict, or `error`, `skipped`,
 //   `unavailable`, `off` or `unknown` when there is none.
-// - `alert_upgrade`: `{track_id, alert_id, new_level, reasoning}`, sent only when the verdict
-//   raised the alert's level. A level only ever goes up.
+// - `alert_upgrade`: `{track_id, alert_id, new_level, reasoning}`, sent when the verdict
+//   raised the alert's level. A level only ever goes up, and the phone, like the dashboard
+//   (`ui.js`, `alert_upgrade`), ignores an upgrade that does not rank higher than the level shown.
 //
 // The dashboard handles both in `ui.js` (`reasoning_result`, `alert_upgrade`). A reminder or a
 // reconnect carries the latest verdict in the alert itself (`gemma_match`, `gemma_confidence`,
@@ -171,26 +172,36 @@ public enum AlertVerdictText {
                        detailRationale: rationale(maxDetailRationale), isNeutral: false)
     }
 
-    /// At most `max` characters (the last an ellipsis when cut), with control and bidirectional
-    /// override characters replaced by spaces. Reads the text only up to `max` characters.
+    /// At most `max` characters (the last an ellipsis when cut), counted and cut as grapheme
+    /// clusters, so an accented letter or an emoji is never split. A character holding a control,
+    /// line or paragraph separator or bidirectional override or isolate becomes one space; the
+    /// invisible direction marks (U+200E, U+200F, U+061C) are removed. Reads the text only up to
+    /// `max` characters.
     public static func clip(_ text: String, max: Int) -> String {
         guard max > 0 else { return "" }
-        var kept = String.UnicodeScalarView()
-        var count = 0
+        var kept: [String] = []
         var wasCut = false
-        for scalar in text.unicodeScalars {
-            if count == max {
+        for character in text {
+            var scalars = String.UnicodeScalarView()
+            scalars.append(contentsOf: character.unicodeScalars.filter { !isDirectionMark($0) })
+            if scalars.isEmpty { continue }
+            if kept.count == max {
                 wasCut = true
                 break
             }
-            kept.append(isUnsafe(scalar) ? " " : scalar)
-            count += 1
+            kept.append(scalars.contains(where: isUnsafe) ? " " : String(scalars))
         }
         if wasCut {
             kept.removeLast()
             kept.append("\u{2026}")
         }
-        return String(kept)
+        return kept.joined()
+    }
+
+    /// Left-to-right, right-to-left and Arabic letter marks: invisible, and able to reorder the
+    /// text around them.
+    private static func isDirectionMark(_ scalar: Unicode.Scalar) -> Bool {
+        scalar.value == 0x200E || scalar.value == 0x200F || scalar.value == 0x061C
     }
 
     private static func isUnsafe(_ scalar: Unicode.Scalar) -> Bool {
@@ -215,7 +226,10 @@ public enum AlertVerdictText {
 ///   changes nothing.
 /// - `reasoning_result` counts only with `type == "analyze"`, an `alert_id` and a `result`.
 /// - A level only goes up: `alert_upgrade` applies only when it ranks higher, and a later
-///   reminder with a lower level does not lower it.
+///   reminder with a lower level does not lower it. An upgrade that does not rank higher changes
+///   nothing at all, its verdict included.
+/// - An upgrade stands in for a verdict only when it raised the alert to `possible_match` or
+///   `confirmed_match` and no `reasoning_result` gave one.
 /// - A final verdict is never replaced by "pending" from a re-sent alert.
 /// - An `alert_id` longer than `maxAlertIdLength` is ignored. At most `maxAlerts` ids are kept.
 public struct AlertVerdictBook: Equatable, Sendable {
@@ -242,12 +256,20 @@ public struct AlertVerdictBook: Equatable, Sendable {
             guard r.isAlertVerdict, let id = usableId(r.alertId), order.contains(id), let body = r.result else { return }
             verdicts[id] = AlertVerdict(match: body.match, confidence: body.confidence, rationale: body.reasoning)
         case let .alertUpgrade(u):
-            guard let id = usableId(u.alertId), order.contains(id) else { return }
-            if let level = AlertLevel.raised(levels[id], to: u.newLevel) { levels[id] = level }
-            // An upgrade means the provider said yes. Without a `reasoning_result` (an older
-            // ground), it is the only verdict the phone gets.
+            guard let id = usableId(u.alertId), order.contains(id), let newLevel = u.newLevel else { return }
+            // The dashboard's rule (`ui.js`): an upgrade that does not rank higher than the level
+            // shown is ignored, so it can neither lower the level nor write a verdict.
+            guard newLevel.rank > (levels[id]?.rank ?? 0) else { return }
+            levels[id] = newLevel
+            // An upgrade to a match level means the provider said yes. Without a
+            // `reasoning_result` (an older ground), it is the only verdict the phone gets.
+            let confidence: String?
+            switch newLevel {
+            case .confirmedMatch: confidence = "high"
+            case .possibleMatch: confidence = "medium"
+            default: return
+            }
             if verdicts[id]?.kind != .verdict {
-                let confidence: String? = u.newLevel == .confirmedMatch ? "high" : u.newLevel == .possibleMatch ? "medium" : nil
                 verdicts[id] = AlertVerdict(match: true, confidence: confidence, rationale: u.reasoning)
             }
         default:

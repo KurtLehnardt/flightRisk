@@ -112,21 +112,21 @@ final class DemoGroundTests: XCTestCase {
         // Takeoff, flight and landing, as the fleet status shows them.
         let s = statuses(events)
         let atStart = try XCTUnwrap(s.last { $0.t < DemoGround.Moment.takeoff })
-        XCTAssertEqual(atStart.status.drones?["drone-1"]?.isFlying, false)
+        XCTAssertEqual(atStart.status.drones?["demo-drone-1"]?.isFlying, false)
         let flying = try XCTUnwrap(s.first { $0.t >= DemoGround.Moment.takeoff })
-        XCTAssertEqual(flying.status.drones?["drone-1"]?.isFlying, true)
-        XCTAssertEqual(flying.status.drones?["drone-2"]?.heightCm, 130, "flies at its plan altitude")
+        XCTAssertEqual(flying.status.drones?["demo-drone-1"]?.isFlying, true)
+        XCTAssertEqual(flying.status.drones?["demo-drone-2"]?.heightCm, 130, "flies at its plan altitude")
         let last = try XCTUnwrap(s.last)
-        XCTAssertEqual(last.status.drones?["drone-1"]?.isFlying, false)
-        XCTAssertEqual(last.status.drones?["drone-2"]?.isFlying, false)
-        XCTAssertEqual(last.status.drones?["drone-1"]?.heightCm, 0)
-        XCTAssertFalse(g.isFlying("drone-1"))
+        XCTAssertEqual(last.status.drones?["demo-drone-1"]?.isFlying, false)
+        XCTAssertEqual(last.status.drones?["demo-drone-2"]?.isFlying, false)
+        XCTAssertEqual(last.status.drones?["demo-drone-1"]?.heightCm, 0)
+        XCTAssertFalse(g.isFlying("demo-drone-1"))
     }
 
     func testTheDronesMoveThroughTheirLanes() throws {
         var g = makeGround()
         let s = statuses(run(&g, until: DemoGround.Moment.landAll))
-        let drone1 = s.compactMap { $0.status.drones?["drone-1"] }
+        let drone1 = s.compactMap { $0.status.drones?["demo-drone-1"] }
         let lanes = drone1.compactMap(\.laneIndex)
         XCTAssertEqual(lanes.first, 0)
         XCTAssertEqual(lanes, lanes.sorted(), "lanes are flown in order")
@@ -138,7 +138,7 @@ final class DemoGroundTests: XCTestCase {
         let batteries = drone1.compactMap(\.battery)
         XCTAssertLessThan(try XCTUnwrap(batteries.last), try XCTUnwrap(batteries.first))
         // drone-2 is cut on lane 0 and goes on with lane 1.
-        let drone2 = s.filter { $0.t > DemoGround.Moment.obstacleCut }.compactMap { $0.status.drones?["drone-2"]?.laneIndex }
+        let drone2 = s.filter { $0.t > DemoGround.Moment.obstacleCut }.compactMap { $0.status.drones?["demo-drone-2"]?.laneIndex }
         XCTAssertEqual(drone2.first, 1)
     }
 
@@ -148,12 +148,12 @@ final class DemoGroundTests: XCTestCase {
         guard case let .fleetEvent(cut)? = events.first(where: { name($0.event) == "fleet_event:lane_blocked" })?.event else {
             return XCTFail("no obstacle cut")
         }
-        XCTAssertEqual(cut.droneId, "drone-2")
+        XCTAssertEqual(cut.droneId, "demo-drone-2")
         XCTAssertEqual(cut.laneIndex, 0)
         XCTAssertEqual(cut.xCm, 250)
         XCTAssertEqual(cut.yCm, 210)
         XCTAssertEqual(cut.unflownCm, 190)
-        XCTAssertEqual(GroundText.fleetEventBanner(cut), "OBSTACLE drone-2: lane 0 stopped at (250, 210) cm, 190 cm not searched")
+        XCTAssertEqual(GroundText.fleetEventBanner(cut), "OBSTACLE demo-drone-2: lane 0 stopped at (250, 210) cm, 190 cm not searched")
 
         guard case let .matchAlert(alert)? = events.first(where: { name($0.event) == "match_alert" })?.event else {
             return XCTFail("no alert")
@@ -192,7 +192,7 @@ final class DemoGroundTests: XCTestCase {
         XCTAssertEqual(answer?.alertId, DemoGround.alertId)
         XCTAssertEqual(answer?.action, .confirm)
         XCTAssertEqual(answer?.ok, true)
-        XCTAssertEqual(reducer.sortedDroneIds, ["drone-1", "drone-2"])
+        XCTAssertEqual(reducer.sortedDroneIds, ["demo-drone-1", "demo-drone-2"])
         XCTAssertEqual(reducer.cards.map(\.control), [.autonomous(.onGround), .autonomous(.onGround)])
     }
 
@@ -257,29 +257,29 @@ final class DemoGroundTests: XCTestCase {
     func testLandOneDroneIsAcceptedThenAcknowledged() throws {
         var g = makeGround()
         let events = run(&g, until: 12) { t, ground in
-            if t == 7 { ground.receive(.landDrone(droneId: "drone-1"), at: t) }
+            if t == 7 { ground.receive(.landDrone(droneId: "demo-drone-1"), at: t) }
         }
         let after = events.filter { $0.t >= 7 }
         guard case let .manualAck(ack)? = after.first(where: { name($0.event) == "manual_ack" })?.event,
               case let .manualResult(result)? = after.first(where: { name($0.event) == "manual_result" })?.event else {
             return XCTFail("missing answers")
         }
-        XCTAssertEqual(ack.droneId, "drone-1")
+        XCTAssertEqual(ack.droneId, "demo-drone-1")
         XCTAssertEqual(ack.ok, true)
         XCTAssertEqual(ack.action, .land)
-        XCTAssertEqual(result.droneId, "drone-1")
+        XCTAssertEqual(result.droneId, "demo-drone-1")
         XCTAssertEqual(result.ok, true)
         XCTAssertEqual(firstTime(after, "manual_ack"), 7 + DemoGround.answerDelay)
         XCTAssertEqual(firstTime(after, "manual_result"), 7 + DemoGround.finalAnswerDelay)
-        XCTAssertFalse(g.isFlying("drone-1"))
-        XCTAssertTrue(g.isFlying("drone-2"), "only the drone named is landed")
+        XCTAssertFalse(g.isFlying("demo-drone-1"))
+        XCTAssertTrue(g.isFlying("demo-drone-2"), "only the drone named is landed")
     }
 
     func testRefusalsAreAnsweredLikeTheGround() throws {
         var g = makeGround()
         _ = g.advance(to: 6)
         g.receive(.landDrone(droneId: "drone-9"), at: 6)
-        g.receive(.resumeHeldDrone(droneId: "drone-1"), at: 6)
+        g.receive(.resumeHeldDrone(droneId: "demo-drone-1"), at: 6)
         let answers = g.advance(to: 7).compactMap { e -> ManualReply? in
             if case let .manualAck(r) = e { return r }
             return nil
@@ -292,7 +292,7 @@ final class DemoGroundTests: XCTestCase {
         XCTAssertEqual(answers[1].action, .resumeSearch)
         XCTAssertEqual(answers[1].ok, false)
         XCTAssertEqual(answers[1].reason, .notManual)
-        XCTAssertEqual(GroundText.manualRefusal(answers[1]), "drone-1: drone-1 is not under manual control")
+        XCTAssertEqual(GroundText.manualRefusal(answers[1]), "demo-drone-1: demo-drone-1 is not under manual control")
     }
 
     func testProfileChangesOnTheGroundAndRefusedInFlight() throws {
@@ -301,16 +301,16 @@ final class DemoGroundTests: XCTestCase {
         }
         var g = makeGround()
         _ = g.advance(to: 1)
-        g.receive(.setDetectionProfile(droneId: "drone-1", profile: "top_down"), at: 1)
-        let onGround = try XCTUnwrap(profiles(g.advance(to: 2))?.drones?["drone-1"])
+        g.receive(.setDetectionProfile(droneId: "demo-drone-1", profile: "top_down"), at: 1)
+        let onGround = try XCTUnwrap(profiles(g.advance(to: 2))?.drones?["demo-drone-1"])
         XCTAssertEqual(onGround.active, "top_down")
         XCTAssertEqual(onGround.override, "top_down")
         XCTAssertNil(onGround.refusal)
         XCTAssertEqual(onGround.mismatch, false)
 
         _ = g.advance(to: 8)
-        g.receive(.setDetectionProfile(droneId: "drone-1", profile: "level"), at: 8)
-        let inFlight = try XCTUnwrap(profiles(g.advance(to: 9))?.drones?["drone-1"])
+        g.receive(.setDetectionProfile(droneId: "demo-drone-1", profile: "level"), at: 8)
+        let inFlight = try XCTUnwrap(profiles(g.advance(to: 9))?.drones?["demo-drone-1"])
         XCTAssertEqual(inFlight.active, "top_down")
         XCTAssertEqual(inFlight.desired, "level")
         XCTAssertEqual(inFlight.mismatch, true)
@@ -339,8 +339,8 @@ final class DemoGroundTests: XCTestCase {
             return XCTFail("no manual_status")
         }
         XCTAssertNil(m.controlled)
-        XCTAssertEqual(m.drones?.keys.sorted(), ["drone-1", "drone-2"])
-        XCTAssertEqual(m.drones?["drone-2"]?.controlMode, .autonomous)
+        XCTAssertEqual(m.drones?.keys.sorted(), ["demo-drone-1", "demo-drone-2"])
+        XCTAssertEqual(m.drones?["demo-drone-2"]?.controlMode, .autonomous)
     }
 
     // MARK: Policy and placeholder
@@ -350,6 +350,87 @@ final class DemoGroundTests: XCTestCase {
         XCTAssertEqual(DemoModePolicy.startStep(liveLinkOpen: true, liveLinkSwitchedOn: true), .confirmDisconnectFirst)
         XCTAssertEqual(DemoModePolicy.startStep(liveLinkOpen: false, liveLinkSwitchedOn: true), .confirmDisconnectFirst)
         XCTAssertEqual(DemoModePolicy.startStep(liveLinkOpen: true, liveLinkSwitchedOn: false), .confirmDisconnectFirst)
+    }
+
+    /// Live drones in the air, or a LAND ALL that is unanswered or failed, refuse the demo with
+    /// the reason, whatever the link does: starting it would close the link they depend on.
+    func testTheDemoIsRefusedWhileLiveDronesFlyOrALandAllIsOpen() {
+        XCTAssertEqual(DemoModePolicy.startStep(liveLinkOpen: true, liveLinkSwitchedOn: true, flyingDrones: 2),
+                       .refused("2 drones are in the air. Land them first. The demo closes the ground link, and LAND ALL on this phone would then reach only the simulated drones."))
+        XCTAssertEqual(DemoModePolicy.startStep(liveLinkOpen: false, liveLinkSwitchedOn: false, flyingDrones: 1, flyingStateIsStale: true),
+                       .refused("1 drone was in the air at the last update from the ground. Land it first. The demo closes the ground link, and LAND ALL on this phone would then reach only the simulated drones."))
+        XCTAssertEqual(DemoModePolicy.startStep(liveLinkOpen: true, liveLinkSwitchedOn: true, landAll: .unanswered),
+                       .refused(DemoModePolicy.landAllUnansweredRefusal))
+        XCTAssertEqual(DemoModePolicy.startStep(liveLinkOpen: false, liveLinkSwitchedOn: false, landAll: .failed),
+                       .refused(DemoModePolicy.landAllFailedRefusal))
+        // Flying drones are named first: they are the reason that matters most.
+        XCTAssertEqual(DemoModePolicy.startStep(liveLinkOpen: true, liveLinkSwitchedOn: true, flyingDrones: 3, landAll: .failed),
+                       .refused(DemoModePolicy.flyingRefusal(3, stale: false)))
+        XCTAssertEqual(DemoModePolicy.startStep(liveLinkOpen: true, liveLinkSwitchedOn: true, flyingDrones: 0, landAll: .settled), .confirmDisconnectFirst)
+    }
+
+    // MARK: Ids
+
+    /// Every id the demo sends starts with "demo-": the drones, the alert and its track, in every
+    /// event of the scenario and in every answer to a command.
+    func testEveryIdTheDemoSendsCarriesTheDemoPrefix() throws {
+        var g = makeGround()
+        var events = run(&g, until: DemoGround.Moment.finished + 2).map(\.event)
+        // Then every command, answered by the demo.
+        let t = g.now
+        for command: GroundCommand in [
+            .landAll, .landDrone(droneId: DemoGround.spotterDroneId), .resumeHeldDrone(droneId: DemoGround.cutDroneId),
+            .setDetectionProfile(droneId: DemoGround.spotterDroneId, profile: "top_down"),
+        ] + GroundCommand.stateRequests {
+            g.receive(command, at: t)
+        }
+        events += g.advance(to: t + 5)
+        var ids: [String] = []
+        var lockedReasons: [String] = []
+        for e in events {
+            switch e {
+            case let .fleetStatus(p):
+                for (key, r) in p.drones ?? [:] { ids += [key] + [r.droneId].compactMap { $0 } }
+            case let .fleetPlan(p):
+                ids += (p.zones ?? []).compactMap(\.droneId)
+            case let .detectionProfiles(p):
+                for (key, d) in p.drones ?? [:] { ids += [key] + [d.droneId].compactMap { $0 } }
+            case let .ceilingSettings(p):
+                ids += (p.drones ?? []).compactMap(\.droneId)
+                if let r = p.lockedReason { lockedReasons.append(r) }
+            case let .manualStatus(p):
+                ids += (p.drones ?? [:]).keys
+                if let c = p.controlled { ids.append(c) }
+            case let .frame(f):
+                ids += [f.droneId].compactMap { $0 }
+            case let .fleetDetection(d):
+                ids += [d.droneId].compactMap { $0 } + (d.droneIds ?? [])
+            case let .fleetEvent(ev):
+                ids += [ev.droneId].compactMap { $0 }
+            case let .matchAlert(a):
+                ids += [a.alertId, a.trackId].compactMap { $0 }
+            case let .reasoningResult(r):
+                ids += [r.alertId, r.trackId].compactMap { $0 }
+            case let .alertUpgrade(u):
+                ids += [u.alertId, u.trackId].compactMap { $0 }
+            case let .matchAlertResolved(r):
+                ids += [r.alertId].compactMap { $0 }
+            case let .manualAck(r), let .manualResult(r):
+                ids += [r.droneId].compactMap { $0 }
+            default:
+                break
+            }
+        }
+        XCTAssertGreaterThan(ids.count, 50)
+        for id in ids { XCTAssertTrue(id.hasPrefix(DemoGround.idPrefix), "\(id) has no demo prefix") }
+        XCTAssertEqual(Set(ids.filter { $0.contains("drone") }), ["demo-drone-1", "demo-drone-2"])
+        XCTAssertTrue(ids.contains("demo-alert-1"))
+        XCTAssertTrue(ids.contains("demo-track-1"))
+        XCTAssertFalse(lockedReasons.isEmpty)
+        for r in lockedReasons {
+            XCTAssertTrue(r.contains("(demo-drone-1 reported flying)"), r)
+        }
+        XCTAssertEqual(g.droneIds, ["demo-drone-1", "demo-drone-2"])
     }
 
     func testThePlaceholderIsAFlatDrawingNotAPhoto() throws {

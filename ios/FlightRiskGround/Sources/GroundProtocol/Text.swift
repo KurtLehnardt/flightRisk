@@ -105,15 +105,35 @@ public enum GroundText {
 
     /// The dashboard's `laneBlockedText`: "OBSTACLE drone-2: lane 0 stopped at (250, 210) cm,
     /// 190 cm not searched". A cut for a person adds that it is re-flown only if the operator
-    /// confirms it on the laptop.
+    /// confirms it on the laptop. A cut for any reason other than an obstacle or a person adds the
+    /// reason ("(obstacle sensor down)"), because no obstacle was seen.
     public static func laneBlocked(_ ev: FleetEvent) -> String {
         let lane = ev.laneIndex.map { "lane \($0)" } ?? "a lane"
         let at = " stopped at (\(number(ev.xCm)), \(number(ev.yCm))) cm"
         let left = ev.unflownCm.map { ", \(number($0)) cm not searched" } ?? ""
-        let person = ev.reason == "person" ? "; a person: re-flown only if the operator confirms it on the laptop" : ""
+        var why = ""
+        if ev.reason == "person" {
+            why = "; a person: re-flown only if the operator confirms it on the laptop"
+        } else if let text = laneBlockedReason(ev.reason) {
+            why = " (\(text))"
+        }
         var who = "a drone"
         if let id = ev.droneId, !id.isEmpty { who = id }
-        return "OBSTACLE \(who): \(lane)\(at)\(left)\(person)"
+        return "OBSTACLE \(who): \(lane)\(at)\(left)\(why)"
+    }
+
+    /// The reason of a lane cut that was not an obstacle or a person, as words; nil for
+    /// `obstacle`, `person` and no reason. The cut reasons are the ground's `CUT_REASONS`
+    /// (`flightrisk/drone/obstacle_sensor.py`); an unknown one is shown by name.
+    public static func laneBlockedReason(_ reason: String?) -> String? {
+        guard let reason, !reason.isEmpty else { return nil }
+        switch reason {
+        case "obstacle", "person": return nil
+        case "sensor_down": return "obstacle sensor down"
+        case "sensor_stale": return "obstacle sensor could not look"
+        case "autopilot": return "stopped by the autopilot's obstacle avoidance"
+        default: return "reason: " + AlertVerdictText.clip(reason, max: 40)
+        }
     }
 
     /// The error line for a refused plan or start, as the dashboard words it; nil for other kinds.
