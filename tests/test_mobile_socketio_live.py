@@ -16,15 +16,22 @@ protocol frame by frame and record every frame. They check that:
   fixtures, in both the simulated (no fleet) and the fleet configuration;
 * unknown event names are ignored and the connection stays up;
 * acks, pings and pongs follow the frames in ``socketio_frames.json``;
-* no Origin header is needed, and a foreign Origin is refused.
+* no Origin header is needed, and a foreign Origin is refused;
+* the reasoning verdict on a match alert (``reasoning_result`` and
+  ``alert_upgrade``) reaches a phone with the shapes of the fixtures, with no
+  image and no key in it.
 
 Only throwaway loopback ports and temporary files are used: never the live
 ground on 5555/9000, no edge, no drone and no packet to 192.168.10.1.
 """
 from __future__ import annotations
 
+import base64
 import contextlib
+import hashlib
 import json
+import queue
+import socket
 import threading
 import time
 from pathlib import Path
@@ -37,7 +44,7 @@ from werkzeug.serving import make_server
 
 from flightrisk.dashboard import app as app_module
 from flightrisk.dashboard.app import FleetSupervisor
-from flightrisk.dashboard.state import app_state
+from flightrisk.dashboard.state import app_state, gemma_queue
 from flightrisk.drone.fake import FakeDrone
 from flightrisk.drone.fleet import DroneFleet
 from tests.test_fleet_dashboard import FakeClock, FakeGroundTransport
@@ -63,12 +70,28 @@ def _payload(name: str, case: str):
 # ---------------------------------------------------------------------------
 
 
+class _WebSocket(simple_websocket.Client):
+    """A ``simple_websocket.Client`` that does not lose the frames that arrive with the handshake response.
+
+    ``simple_websocket.Client.handshake`` reads the HTTP 101 response with one ``recv`` and takes only the
+    first wsproto event from it. The server sends the Engine.IO open packet right after the 101, so when this
+    thread is slow to read (a loaded machine), both arrive in that one read and the open packet stays unprocessed
+    inside wsproto. The server sends nothing more until the client answers the open packet, so ``receive`` timed
+    out and ``_read_open`` failed with ``None``. Handling the pending events here, before the reader thread
+    starts, delivers that packet.
+    """
+
+    def handshake(self):
+        super().handshake()
+        self.connected = self._handle_events()
+
+
 class RawClient:
     """The protocol subset a phone implements, over one WebSocket, with every frame recorded."""
 
     def __init__(self, port: int, *, headers: dict | None = None, answer_pings: bool = True):
         url = f"ws://127.0.0.1:{port}/socket.io/?EIO=4&transport=websocket"
-        self.ws = simple_websocket.Client.connect(url, headers=headers)
+        self.ws = _WebSocket.connect(url, headers=headers)
         self.frames: list[tuple[str, str]] = []
         self.events: list[tuple[str, object]] = []
         self.acks: list[tuple[int, object]] = []
@@ -144,6 +167,35 @@ class RawClient:
         self.connect({"api_key": KEY})
         assert self.wait_for(lambda: self.sid is not None), self.frames
         self.wait_event("status")
+
+
+def test_a_frame_sent_with_the_handshake_response_is_not_lost():
+    """The open frame can share a TCP read with the 101 response; the client must still deliver it at once."""
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+
+    def serve() -> None:
+        conn, _ = listener.accept()
+        with conn:
+            request = b""
+            while b"\r\n\r\n" not in request:
+                request += conn.recv(4096)
+            key = next(line.split(b":", 1)[1].strip() for line in request.split(b"\r\n") if line.lower().startswith(b"sec-websocket-key"))
+            accept = base64.b64encode(hashlib.sha1(key + b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest())
+            response = (b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                        b"Sec-WebSocket-Accept: " + accept + b"\r\n\r\n")
+            conn.sendall(response + b"\x81\x030{}")  # the 101 response and one text frame in a single write
+            time.sleep(WAIT_S)
+
+    thread = threading.Thread(target=serve, name="coalesced-handshake-server", daemon=True)
+    thread.start()
+    client = _WebSocket.connect(f"ws://127.0.0.1:{listener.getsockname()[1]}/")
+    try:
+        assert client.receive(timeout=2.0) == "0{}"
+    finally:
+        client.close()
+        listener.close()
 
 
 # ---------------------------------------------------------------------------
@@ -406,6 +458,120 @@ def test_fleet_ground_answers_the_allowed_events(fleet_ground):
     assert ack == _payload("land_all_ack.json", "fleet_reached_all")
     event = client.wait_event("fleet_event", after=after)
     assert event == _payload("fleet_event.json", "land_all")
+
+
+# ---------------------------------------------------------------------------
+# The reasoning verdict reaches a phone (reasoning_result, alert_upgrade)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def reasoning_ground(server, tmp_path):
+    """The live server with reasoning on: a scripted Claude agent, a reference photo, an empty reasoning queue."""
+    import cv2
+    import numpy as np
+
+    from flightrisk.dashboard.alert_latch import alert_latch
+    from flightrisk.dashboard.state import gemma_last_call
+    from flightrisk.vision.scorer import MatchScorer
+
+    def drain():
+        while True:
+            try:
+                gemma_queue.get_nowait()
+            except queue.Empty:
+                return
+            gemma_queue.task_done()
+
+    class Agent:
+        provider = "claude"
+        label = "Claude"
+        model = "scripted"
+
+        def __init__(self):
+            self.last_usage = {}
+
+        def analyze_match(self, reference, candidate):
+            return {"match": True, "confidence": "high", "reasoning": "Same red jacket and grey backpack."}
+
+    reference = tmp_path / "reference.jpg"
+    cv2.imwrite(str(reference), np.full((50, 30, 3), 200, dtype=np.uint8))
+    drain()
+    gemma_last_call.clear()
+    alert_latch.reset()
+    app_state.reasoning = Agent()
+    app_state.target_photo_path = str(reference)
+    app_state.scorer = MatchScorer()
+    app_state.db = None
+    app_state.session_id = None
+    app_state.match_history = []
+    app_state.running = False
+    try:
+        yield server
+    finally:
+        app_state.running = False
+        drain()
+        gemma_last_call.clear()
+        alert_latch.reset()
+
+
+def _run_reasoning_worker() -> None:
+    from flightrisk.dashboard.alerts import _gemma_worker
+
+    app_state.running = True
+    worker = threading.Thread(target=_gemma_worker, args=(app_module.socketio,), name="live-reasoning", daemon=True)
+    worker.start()
+    deadline = time.monotonic() + WAIT_S
+    while gemma_queue.unfinished_tasks and time.monotonic() < deadline:
+        time.sleep(0.02)
+    app_state.running = False
+    worker.join(timeout=5)
+    assert gemma_queue.unfinished_tasks == 0, "the reasoning worker did not finish its job"
+
+
+def test_the_reasoning_verdict_reaches_a_phone(reasoning_ground):
+    import cv2
+    import numpy as np
+
+    client = reasoning_ground()
+    client.connect_ok()
+    after = len(client.events)
+
+    ok, crop = cv2.imencode(".jpg", np.full((40, 20, 3), 128, dtype=np.uint8))
+    assert ok
+    det = type("Det", (), {"crop_jpeg": crop.tobytes()})()
+    result = {"bbox": (400, 300, 460, 420), "reid_score": 0.86, "face_score": 0.0}
+    score_result = app_state.scorer.score(reid_score=0.86, face_score=0.0)
+    app_module._maybe_emit_edge_match(app_module.socketio, det, result, score_result, time.time())
+    alert = client.wait_event("match_alert", after=after)
+    assert alert["gemma_confidence"] == "pending" and alert["alert_level"] == "possible_match"
+    assert set(alert) == set(_payload("match_alert.json", "edge_match_awaiting_reasoning"))
+
+    _run_reasoning_worker()
+    verdict = client.wait_event("reasoning_result", after=after)
+    upgrade = client.wait_event("alert_upgrade", after=after)
+
+    fixture_verdict = _payload("reasoning_result.json", "match")
+    assert set(verdict) == set(fixture_verdict)
+    assert set(verdict["result"]) == set(fixture_verdict["result"])
+    assert verdict["alert_id"] == alert["alert_id"] and verdict["type"] == "analyze"
+    assert verdict["result"] == {"match": True, "confidence": "high", "reasoning": "Same red jacket and grey backpack."}
+    assert set(upgrade) == set(_payload("alert_upgrade.json", "confirmed_match"))
+    assert upgrade["alert_id"] == alert["alert_id"] and upgrade["new_level"] == "confirmed_match"
+
+    # Privacy: the verdict events carry no image bytes and no key, on the wire itself.
+    frames = [text for direction, text in client.frames
+              if direction == "server_to_client" and ('"reasoning_result"' in text or '"alert_upgrade"' in text)]
+    assert len(frames) == 2
+    for text in frames:
+        assert "/9j/" not in text and "snapshot" not in text and KEY not in text
+
+    # A phone that connects afterwards gets the verdict in the reminder (the ground's stored copy).
+    late = reasoning_ground()
+    late.connect_ok()
+    reminder = late.wait_event("match_alert_reminder")
+    assert reminder["alert_id"] == alert["alert_id"]
+    assert (reminder["gemma_confidence"], reminder["alert_level"]) == ("high", "confirmed_match")
 
 
 # ---------------------------------------------------------------------------

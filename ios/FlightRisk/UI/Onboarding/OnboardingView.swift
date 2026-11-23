@@ -9,6 +9,10 @@ import SwiftUI
 /// 3. Photo selection (inline ``TargetPickerView``)
 /// 4. Quality check with retry
 ///
+/// "Try the demo" sits above every step. The demo uses no camera, no photo and no photo
+/// picker (the Search and Target tabs show a drawn placeholder while it runs), so it can start
+/// before the privacy notice is acknowledged; the notice still shows before the camera starts.
+///
 /// Persists completion via `@AppStorage` so the flow is only shown
 /// once. The key matches the one read by ``ContentView``. Acknowledging the
 /// privacy notice is stored separately (see ``PrivacyNotice``), so a person who
@@ -20,6 +24,8 @@ struct OnboardingView: View {
     @State private var qualityReport: QualityReport?
 
     var onPhotoSelected: ((CGImage, QualityReport?) -> Void)?
+    /// "Try the demo", at the top of every step: simulated drones, no photo, no ground station.
+    var onTryDemo: (() -> Void)?
 
     var body: some View {
         ZStack {
@@ -61,6 +67,25 @@ struct OnboardingView: View {
                 }
             }
             .animation(.easeInOut(duration: 0.35), value: currentStep)
+        }
+        // On every step, above the content, so a reviewer finds the demo without choosing a photo.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let onTryDemo {
+                Button(action: onTryDemo) {
+                    Label(DemoUIText.tryDemo, systemImage: "play.rectangle")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityHint(DemoUIText.tryDemoHint)
+                .accessibilityIdentifier("onboarding.tryDemo")
+                .padding(.horizontal, 24)
+                .padding(.vertical, 8)
+                .background(.bar)
+                // Above every step, the 911 screen included: it stops growing at `accessibility2`
+                // so it never crowds the step below it.
+                .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+            }
         }
     }
 

@@ -80,7 +80,12 @@ class ServerEventsTest {
             "land_all_failed" to FleetEvent.LandAll::class,
             "profile_switch_pending" to FleetEvent.ProfileSwitchPending::class,
         )
-        assertEquals(expected.keys, Fixtures.cases("fleet_event.json").keys)
+        // The app does not know this kind: it is shown by name, with its detail, and offers no confirm control.
+        val unknownKind = "retask_needs_confirmation"
+        assertEquals(expected.keys + unknownKind, Fixtures.cases("fleet_event.json").keys)
+        val unknown = Fixtures.eventAs<FleetEvent>("fleet_event.json", unknownKind)
+        assertEquals(FleetEvent.Unknown::class, unknown::class)
+        assertEquals(unknownKind, unknown.kind)
         for ((case, cls) in expected) {
             val e = Fixtures.eventAs<FleetEvent>("fleet_event.json", case)
             assertEquals(case, cls, e::class)

@@ -20,9 +20,14 @@ import time
 import pytest
 
 from flightrisk.launcher.commands import EdgeToken, Redactor
-from flightrisk.launcher.netinfo import Adapter
+from flightrisk.launcher.netinfo import Adapter, DefaultRoute
 from flightrisk.launcher.preflight import PreflightEnv, TelloProbe
-from flightrisk.launcher.processes import ProcessManager
+from flightrisk.launcher.processes import (
+    WINDOWS_EDGE_RESTART_REFUSED,
+    Managed,
+    ProcessManager,
+    ProcessSpec,
+)
 from flightrisk.launcher.server import STATIC_DIR, LauncherApp, make_server
 from flightrisk.launcher.settings import PresetStore, builtin_presets
 
@@ -43,6 +48,7 @@ def _preflight_env(probe=None) -> PreflightEnv:
         port_free=lambda host, port: True,
         tcp_reachable=lambda host, port: True,
         adapters=lambda: [Adapter("lo0", "127.0.0.1", 1), Adapter("en0", "192.168.10.2", 14)],
+        default_route=lambda: DefaultRoute("en7", 15),
         weights=lambda: [
             {"name": "default", "label": "Default", "weights": "yolo11n.pt", "required": False, "found": "yolo11n.pt", "fallback": None},
             {"name": "top_down", "label": "Top", "weights": "models/heridal_yolo11s.pt", "required": True, "found": None, "fallback": "level"},
@@ -201,6 +207,7 @@ def test_start_logs_and_stop_through_the_api(launcher):
     assert TOKEN not in json.dumps(client.get("/api/state")[1])
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Exercises the POSIX spawn and stop path; Windows refuses an edge restart by design")
 def test_restart_through_the_api(launcher):
     client, app, _ = launcher
     app.manager.windows = False  # this exercises the POSIX restart; Windows refuses to restart an edge
@@ -217,6 +224,19 @@ def test_restart_through_the_api(launcher):
     assert client.post("/api/restart", {"name": "someone-else"})[0] == 404
 
 
+def test_restart_of_an_edge_is_refused_on_windows(launcher):
+    """Runs on every platform: nothing is spawned, the manager only believes it is on Windows."""
+    client, app, _ = launcher
+    spec = ProcessSpec(name="edge-drone-1", kind="edge", argv=(sys.executable, "-c", "pass"), env={})
+    app.manager.windows = True
+    app.manager._procs["edge-drone-1"] = Managed(spec=spec, log_path=app.manager.log_dir / "edge-drone-1.log")
+    app.manager._order.append("edge-drone-1")
+    assert app.manager.can_restart(app.manager._procs["edge-drone-1"]) is False
+    status, data = client.post("/api/restart", {"name": "edge-drone-1"})
+    assert status == 409
+    assert data["error"] == WINDOWS_EDGE_RESTART_REFUSED
+
+
 def test_start_refused_on_errors_or_failed_checks(launcher):
     client, app, _ = launcher
     _, data = client.post("/api/start", {"settings": {**REHEARSAL, "ceiling_cm": 100}})
@@ -231,10 +251,25 @@ def test_start_refused_on_errors_or_failed_checks(launcher):
 def test_preflight_shows_battery_from_the_probe(launcher):
     client, _, _ = launcher
     single = builtin_presets()["Single drone"].to_json()
-    status, data = client.post("/api/preflight", {"settings": single, "probe_drones": True})
+    # The adapter the launcher proposes for it (en0); with obstacle sensing required a Tello edge needs it.
+    picked = {**single, "drones": [{**single["drones"][0], "local_ip": "192.168.10.2"}]}
+    status, data = client.post("/api/preflight", {"settings": picked, "probe_drones": True})
     assert status == 200 and data["ok"] is True
     row = next(c for c in data["checks"] if c["name"] == "Drone drone-1")
     assert row["data"]["battery"] == 77 and "battery 77%" in row["detail"]
+
+
+def test_a_single_tello_without_a_local_ip_is_not_started_while_sensing_is_required(launcher):
+    """The edge would refuse to start (#186); the launcher says so before anything starts."""
+    client, _, _ = launcher
+    single = builtin_presets()["Single drone"].to_json()
+    status, data = client.post("/api/preflight", {"settings": single, "probe_drones": True})
+    assert status == 200 and data["ok"] is False
+    row = next(c for c in data["checks"] if c["name"] == "Adapter for drone-1")
+    assert row["status"] == "FAIL" and "en0 192.168.10.2" in row["detail"]
+    _, data = client.post("/api/start", {"settings": single})
+    assert data["started"] is False
+    assert client.get("/api/state")[1]["processes"] == []
 
 
 def test_presets_save_and_delete_and_never_store_the_token(launcher, tmp_path):

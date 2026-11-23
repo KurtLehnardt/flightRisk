@@ -31,10 +31,21 @@ FAKE_KEY = "sk-ant-test-not-a-real-key"
 MATCH_TEXT = "MATCH: yes\nCONFIDENCE: high\nREASONING: same red jacket"
 
 
+def _report_real_headers(module):
+    """Make the mocked client report the headers a real one sends for its key."""
+    def build(**kwargs):
+        client = module.Anthropic.return_value
+        client.default_headers = {"Authorization": f"Bearer {kwargs.get('api_key')}",
+                                  "anthropic-version": "2026-10-21"}
+        return client
+    module.Anthropic.side_effect = build
+
+
 @contextmanager
 def fake_anthropic():
     """Stand in for the anthropic SDK, installed or not; yields the client class mock."""
     module = MagicMock(name="anthropic")
+    _report_real_headers(module)
     with patch.dict(sys.modules, {"anthropic": module}):
         yield module.Anthropic
 
@@ -53,6 +64,7 @@ _ENV_VARS = (
     "FLIGHTRISK_REASONING_PROVIDER",
     "ANTHROPIC_API_KEY",
     "CLAUDE_API_KEY",
+    "FLIGHTRISK_CLAUDE_BASE_URL",
 )
 
 
@@ -79,6 +91,12 @@ def _ollama_with_gemma():
     return client
 
 
+def _set_final_message(client, response):
+    """Make ``client.beta.messages.stream(...)`` end with ``response`` as its final message."""
+    stream = client.beta.messages.stream.return_value.__enter__.return_value
+    stream.get_final_message.return_value = response
+
+
 @pytest.fixture
 def make_agent(allow_cloud):
     """Build a ClaudeReasoningAgent whose Anthropic client is a MagicMock."""
@@ -86,7 +104,7 @@ def make_agent(allow_cloud):
     def _make(response=None, **kwargs):
         with fake_anthropic() as mock_cls:
             client = mock_cls.return_value
-            client.beta.messages.create.return_value = response or _response()
+            _set_final_message(client, response or _response())
             agent = ClaudeReasoningAgent(api_key=FAKE_KEY, **kwargs)
         return agent, client
 
@@ -250,7 +268,7 @@ class TestRequestShape:
         agent, client = make_agent()
         agent.analyze_match(img, img)
 
-        kwargs = client.beta.messages.create.call_args.kwargs
+        kwargs = client.beta.messages.stream.call_args.kwargs
         content = kwargs["messages"][0]["content"]
         assert [b["type"] for b in content] == ["image", "image", "text"]
         for block in content[:2]:
@@ -262,25 +280,25 @@ class TestRequestShape:
         agent, client = make_agent()
         agent.match_description(img, "red jacket")
 
-        kwargs = client.beta.messages.create.call_args.kwargs
-        assert kwargs["model"] == "claude-opus-5-5"
-        assert kwargs["output_config"] == {"effort": "medium"}
+        kwargs = client.beta.messages.stream.call_args.kwargs
+        assert kwargs["model"] == "claude-sonnet-5-5"
+        assert kwargs["output_config"] == {"effort": "high"}
         assert "thinking" not in kwargs  # always-on adaptive; must not be sent
         assert "temperature" not in kwargs
 
     def test_model_and_effort_overridable(self, make_agent, img):
-        agent, client = make_agent(model="claude-sonnet-5-5", effort="low")
+        agent, client = make_agent(model="claude-opus-5-5", effort="low")
         agent.match_description(img, "red jacket")
 
-        kwargs = client.beta.messages.create.call_args.kwargs
-        assert kwargs["model"] == "claude-sonnet-5-5"
+        kwargs = client.beta.messages.stream.call_args.kwargs
+        assert kwargs["model"] == "claude-opus-5-5"
         assert kwargs["output_config"] == {"effort": "low"}
 
     def test_refusal_fallback_enabled_for_supported_model(self, make_agent, img):
         agent, client = make_agent()
         agent.analyze_match(img, img)
 
-        kwargs = client.beta.messages.create.call_args.kwargs
+        kwargs = client.beta.messages.stream.call_args.kwargs
         assert kwargs["fallbacks"] == "default"
         assert kwargs["betas"] == ["server-side-fallback-2026-07-01"]
 
@@ -288,7 +306,7 @@ class TestRequestShape:
         agent, client = make_agent(model="claude-haiku-5-5")
         agent.analyze_match(img, img)
 
-        kwargs = client.beta.messages.create.call_args.kwargs
+        kwargs = client.beta.messages.stream.call_args.kwargs
         assert "fallbacks" not in kwargs
         assert "betas" not in kwargs
 
@@ -323,9 +341,10 @@ class TestResults:
 
     def test_api_exception_becomes_error_result(self, make_agent, img):
         agent, client = make_agent()
-        client.beta.messages.create.side_effect = RuntimeError("boom")
+        client.beta.messages.stream.side_effect = RuntimeError("boom")
         result = agent.analyze_match(img, img)
-        assert result == {"match": False, "confidence": "error", "reasoning": "boom"}
+        assert result == {"match": False, "confidence": "error",
+                          "reasoning": "AI check failed (Claude error: RuntimeError)."}
 
     def test_describe_person_returns_text(self, make_agent, img):
         agent, _ = make_agent(response=_response("A child in a red jacket."))
@@ -336,13 +355,14 @@ class TestConfigEnv:
     def test_env_overrides(self, monkeypatch):
         monkeypatch.setenv("FLIGHTRISK_REASONING_PROVIDER", "claude")
         monkeypatch.setenv("FLIGHTRISK_ALLOW_CLOUD_LLM", "1")
-        monkeypatch.setenv("FLIGHTRISK_CLAUDE_MODEL", "claude-sonnet-5-5")
-        monkeypatch.setenv("FLIGHTRISK_CLAUDE_EFFORT", "high")
+        # Non-default values, so the test fails if the env is ignored.
+        monkeypatch.setenv("FLIGHTRISK_CLAUDE_MODEL", "claude-opus-5-5")
+        monkeypatch.setenv("FLIGHTRISK_CLAUDE_EFFORT", "low")
         cfg = FlightRiskConfig.from_env()
         assert cfg.reasoning.provider == "claude"
         assert cfg.reasoning.allow_cloud is True
-        assert cfg.reasoning.claude_model == "claude-sonnet-5-5"
-        assert cfg.reasoning.claude_effort == "high"
+        assert cfg.reasoning.claude_model == "claude-opus-5-5"
+        assert cfg.reasoning.claude_effort == "low"
 
 
 class TestRuntimeSwitch:

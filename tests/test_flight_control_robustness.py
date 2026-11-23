@@ -54,6 +54,7 @@ from flightrisk.drone.obstacle_sensor import (
 from flightrisk.drone.tello import FakeTelloController, TelloController
 from tests import test_lane_executor_obstacle as obstacle_tests
 from tests.lane_executor_support import FENCE, LANES, reply_for, send, takeoff, wait_for
+from tests.single_drone_doubles import ready_single_drone
 from tests.test_coordinator import make_fleet
 from tests.test_coordinator_reflight import LANES as REFLIGHT_PLAN_LANES
 from tests.test_coordinator_reflight import REFLIGHT, TRANSIT, Fleet
@@ -301,7 +302,9 @@ def test_f2_the_dashboard_offers_a_re_fly_button_only_for_a_person_cut_waiting_f
     js = app_module.Path(app_module.__file__).with_name("static").joinpath("ui", "ui.js").read_text()
     render = js[js.index("function renderUncovered()"):js.index("socket.on('reflight_confirm_result'")]
     assert "e.status === 'needs_confirmation'" in render and "reflightConfirmButton(e)" in render
-    assert "window.confirm(" in render and "socket.emit('confirm_reflight', { drone_id:" in render
+    # Confirmed inline with a second click on the same button: a window.confirm dialog would block LAND ALL.
+    assert "window.confirm(" not in render and "twoStepConfirmButton(" in render
+    assert "socket.emit('confirm_reflight', { drone_id:" in render
     assert "cut_seq: e.cut_seq" in render
 
 
@@ -601,6 +604,7 @@ def test_f6_the_single_drone_search_checks_a_tellos_frame_in_bgr(clean_app_state
     drone.state.is_flying = True
     drone.get_frame.return_value = _rgb()
     drone.move.return_value = True
+    ready_single_drone(drone)
     app_state.fleet = MagicMock(primary=drone)
     app_state.fleet_supervisor = None
     seen: list = []

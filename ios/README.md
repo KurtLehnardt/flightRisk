@@ -27,6 +27,7 @@ ios/
 │   ├── Sources/SocketIOMini     # Engine.IO 4 / Socket.IO 5 client, LAN address policy
 │   └── Tests/
 ├── FlightRiskTests/             # the app's unit tests
+├── FlightRiskUITests/           # UI tests of the demo (LAND ALL never covered)
 └── scripts/check.sh
 ```
 
@@ -81,6 +82,8 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
   -skipPackageUpdates -onlyUsePackageVersionsFromResolvedFile \
   -only-testing:FlightRiskTests -collect-test-diagnostics never test
 ```
+
+The demo's UI tests (`FlightRiskUITests`) run the same way with `-only-testing:FlightRiskUITests`. They start the demo from onboarding and check that LAND ALL stays visible and tappable at the default and the largest accessibility text size; they take a few minutes.
 
 The MLX package needs the Metal Toolchain component of Xcode. If `xcode-select` points at an Xcode where it is not installed, the build fails with "missing Metal Toolchain"; install it with `xcodebuild -downloadComponent MetalToolchain` (no administrator password needed), or select another Xcode with `DEVELOPER_DIR`. The three live interop tests in the package are skipped unless `FLIGHTRISK_LIVE_TEST_URL` names a throwaway dashboard. Never point them at a real ground.
 

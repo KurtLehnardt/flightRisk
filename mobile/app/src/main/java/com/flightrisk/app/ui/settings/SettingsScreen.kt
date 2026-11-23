@@ -1,6 +1,7 @@
 package com.flightrisk.app.ui.settings
 
 import androidx.compose.animation.AnimatedVisibility
+import com.flightrisk.app.ui.demo.DemoModeSection
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -124,6 +125,8 @@ fun SettingsScreen(
     searchActive: Boolean = false,
     droneState: TelloState? = null,
     frameSourceMode: FrameSourceMode = FrameSourceMode.CAMERA,
+    demoActive: Boolean = false,
+    onDemoToggle: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Scaffold(modifier = modifier) { innerPadding ->
@@ -144,6 +147,13 @@ fun SettingsScreen(
                 modifier = Modifier.semantics { heading() },
             )
 
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // ----- Demo mode (for app reviewers and first-time users) -----
+            DemoModeSection(active = demoActive, onToggle = onDemoToggle)
+
+            Spacer(modifier = Modifier.height(24.dp))
+            HorizontalDivider()
             Spacer(modifier = Modifier.height(24.dp))
 
             // ----- Sensitivity section -----

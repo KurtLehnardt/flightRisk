@@ -83,6 +83,22 @@ enum GroundIngest {
             if let id = answer.alertId, id.count > GroundIngest.maxAlertIdLength { answer.alertId = nil }
             if case let .unknown(raw)? = answer.action { answer.action = .unknown(GroundText.shorten(raw, max: 40)) }
             return .matchAlertResolved(answer)
+        case var .reasoningResult(result):
+            if let id = result.alertId, id.count > GroundIngest.maxAlertIdLength { result.alertId = nil }
+            result.trackId = result.trackId.map { GroundText.shortId($0) }
+            result.type = result.type.map { GroundText.shorten($0, max: 40) }
+            if var body = result.result {
+                body.confidence = body.confidence.map { GroundText.shorten($0, max: 40) }
+                body.reasoning = body.reasoning.map { GroundText.shorten($0, max: AlertVerdictText.maxStoredRationale) }
+                result.result = body
+            }
+            return .reasoningResult(result)
+        case var .alertUpgrade(upgrade):
+            if let id = upgrade.alertId, id.count > GroundIngest.maxAlertIdLength { upgrade.alertId = nil }
+            upgrade.trackId = upgrade.trackId.map { GroundText.shortId($0) }
+            if case let .unknown(raw)? = upgrade.newLevel { upgrade.newLevel = .unknown(GroundText.shorten(raw, max: 40)) }
+            upgrade.reasoning = upgrade.reasoning.map { GroundText.shorten($0, max: AlertVerdictText.maxStoredRationale) }
+            return .alertUpgrade(upgrade)
         case let .manualAck(reply):
             return .manualAck(sanitized(reply))
         case let .manualResult(reply):
@@ -106,6 +122,7 @@ enum GroundIngest {
         copy.detail = event.detail.map { GroundText.shorten($0) }
         copy.droneId = event.droneId.map { GroundText.shortId($0) }
         copy.droneIds = event.droneIds.map { Array($0.prefix(100)).map { GroundText.shortId($0) } }
+        copy.reason = event.reason.map { GroundText.shorten($0, max: 60) }
         return copy
     }
 

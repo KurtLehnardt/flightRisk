@@ -1,5 +1,6 @@
 package com.flightrisk.app.ui.ground
 
+import com.flightrisk.app.demo.DemoText
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -55,6 +56,9 @@ fun ConnectionCard(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text("Connection", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        if (state.demo) {
+            Text(DemoText.CONNECTION_NOTE, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("ground.connection.demoNote"))
+        }
         Text(GroundText.PRIVACY_NOTE, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
         OutlinedTextField(

@@ -150,6 +150,8 @@ Include the following in the "Notes" field during submission:
 > Cloud reasoning is off by default. It sends the cropped image of a detected person, the reference photo and the typed description to Anthropic only after the user turns on "Allow cloud reasoning" and confirms the consent dialog, saves a Claude API key and selects Cloud Claude. Reviewers can leave it off; all other features work without it.
 >
 > The first-launch privacy notice is shown before the camera starts.
+>
+> Demo mode (no drones, no photo and no ground station needed): tap "Try the demo (no drones, no photo)" at the top of any onboarding screen, or later turn on Settings > Demo > "Demo mode". A purple "DEMO – no real drones" banner then stays above every tab, never over a tab's content, until you tap "Exit demo". The Ground tab shows a simulated ground station with two simulated drones, demo-drone-1 and demo-drone-2, that replays a scenario of about 40 seconds: the drones take off and fly their search lanes, one stops at an obstacle, a person match alert appears and later receives an AI verdict ("AI check: match (high confidence)", with a short explanation under "AI check details"), the operator confirms it on the simulated laptop, and the drones land. You can tap "LAND ALL (demo)" or a drone's Land button at any time; the simulated ground answers on the phone, and every result starts with "DEMO:". VoiceOver announces when the demo starts and stops. In demo mode every command is answered on the device and nothing is sent to any network; the camera, the photo library and the photo picker are not used, and the Search and Target tabs show a drawn placeholder figure instead of a photo. Because the demo collects and sends nothing, it can start before the privacy notice is acknowledged; the notice is still shown before the camera starts. The demo never runs beside a real ground station link: if one is set up, the app asks before it disconnects and switches that link off, and after the demo the Ground tab says that the link is off. The demo does not start at all while the real ground reports drones in the air or a LAND ALL is unanswered or failed; the app says why. Exiting the demo clears everything it showed. "Play the demo again" in Settings restarts it.
 
 ### iOS store checklist (needs the owner)
 
@@ -293,6 +295,26 @@ Include in the app description or "About this app" section, after the owner and 
 
 The earlier recommended text ("No biometric data is collected, transmitted, or stored") is withdrawn because it conflicts with the cloud path.
 
+### App review notes
+
+A reviewer has no drones and no ground station, so the Android app has a built-in demo mode. Paste this into the Play Console "App access" instructions (and adapt it for App Store Connect once the iOS app has the same mode):
+
+> To see the app without drones or a ground station, use demo mode. After the privacy notice, tap "Try demo" on the first screen. No photo, account, drone or network is needed. You can also turn demo mode on or off at any time under Settings > Demo mode.
+>
+> While demo mode is on, a yellow "DEMO – no real drones" banner shows at the top of every screen. The Ground tab replays a recorded search of about a minute by two simulated drones, demo-drone-1 and demo-drone-2: the fleet status, the search plan, the drones flying their lanes, an obstacle that cuts one lane short, a possible person match that an AI check later rates as a strong match, demo-drone-2 left hovering ("HELD") when the simulated laptop's operator lets go of it, and the landing. Tap a match alert to see the AI check's details. "LAND ALL (demo)", Land and Resume search are answered as a ground station would answer them, but on the phone: nothing is sent anywhere, and every result starts with "DEMO:". To try Resume search, tap it on demo-drone-2's card while the card says HELD (from about 34 s to 54 s into the demo). The Search tab shows a drawn scene and a drawn placeholder target instead of the camera and a photo, and the Target tab shows that placeholder with "Leave demo mode to choose a photo." instead of the photo picker.
+>
+> Turning demo mode off in Settings clears everything the demo showed.
+
+What the code guarantees (checked by unit tests in `mobile/app/src/test/java/com/flightrisk/app/demo/`):
+
+- The demo itself opens no network connection. The demo ground (`DemoGroundPort`) is an in-process stand-in for the dashboard's Socket.IO link; the demo package contains no network code, and a test that makes every real client and health probe fail shows that no command, setting change or reconnect in demo mode reaches them.
+- Demo mode does not start at all while the real ground's state needs the operator: a real drone reads as flying, a LAND ALL or a Land waits for its answer or failed, a failure banner or drone alert shows, or the ground link is on but the ground has not reported its drones yet. The app says why in a dialog and clears nothing, and it checks again right before the demo starts. It does not start either while a search runs or a Tello drone is connected on the Search tab.
+- When any real ground state exists (a connection, the ground link switched on, or anything a ground reported), demo mode starts only after the user confirms. It then switches the ground link off and saves that, so a restart during the demo does not reconnect, and closes the connection. After the demo the link stays off, and the Ground tab says "Demo ended. The ground link is off; turn it on to reconnect to <host>."
+- Leaving demo mode clears every drone, alert, video tile, banner and command result it produced, and restores the user's own target photo. Demo data never appears next to real alerts; every demo drone, alert and track id starts with "demo-", and LAND ALL reads "LAND ALL (demo)" (TalkBack: "LAND ALL (demo). Demo: lands only the simulated drones on this phone. Nothing is sent.").
+- The camera is not opened in demo mode, and the camera pipeline, the phone-as-edge link and cloud reasoning do not run. The Target tab shows the drawn placeholder and no photo picker or camera button, and a photo result that arrives during the demo is ignored.
+- The demo mission is `tests/fixtures/mobile_contract/demo_scenario.json`, produced by the real ground code (`scripts/export_mobile_contract_fixtures.py`) and copied to `mobile/app/src/main/assets/demo/demo_scenario.json`. Its only picture is the contract fixtures' 8 by 8 grey JPEG. The placeholder target and the search scene are drawn in code from a few solid colours; the repository contains no photo of a person.
+- Demo mode is not saved: after the app restarts it is off, and the onboarding screens show again if they were never finished.
+
 ### Store checklist (Android): what still needs the owner
 
 The Android app is not ready to submit. Two functional gaps remain in code, and further steps cannot be done in code:
@@ -370,6 +392,7 @@ Off by default, and not available on iOS. When the user turns on "Send detection
 - [ ] Data Safety section completed in Google Play Console (Android)
 - [ ] Age rating set to 17+ on both platforms
 - [ ] App Review Notes prepared (iOS)
+- [ ] Android demo mode instructions (see "App review notes" above) pasted into the Play Console "App access" section
 - [ ] Cloud LLM opt-in disclosure implemented in-app
 - [ ] App Review notes for the local network permission and the ATS exception pasted into App Store Connect
 - [ ] Owner confirmation of the App Privacy questionnaire answers for the ground link and the cloud opt-in
