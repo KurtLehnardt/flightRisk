@@ -97,6 +97,33 @@ class _DroneProfile:
     last_seen: float | None = None
 
 
+_FLAT_PROFILE_KEYS = {
+    "switchable": "detection_profile_switchable",
+    "fallback": "detection_profile_fallback",
+    "fallback_reason": "detection_profile_fallback_reason",
+    "requested": "detection_profile_requested",
+}
+
+
+def _read_telemetry_profile(msg: Mapping[str, Any]) -> tuple[Any, dict[str, Any]]:
+    """Return ``(profile name, other fields)`` from a telemetry message in either shape.
+
+    The current edge sends one ``detection_profile`` object
+    (``name``, ``fallback``, ``switchable``, ``fallback_reason``, ``requested``).
+    An older edge sends the name as ``detection_profile`` and the rest as four
+    flat ``detection_profile_*`` fields. The ground reads both so that two
+    laptops on different versions keep working.
+
+    TODO(removal): drop the flat branch one release after the grouped shape
+    ships. Remove ``_FLAT_PROFILE_KEYS`` and the ``else`` below, keep only the
+    object, and delete the flat-shape tests in tests/test_detection_profiles_ground.py.
+    """
+    value = msg.get("detection_profile")
+    if isinstance(value, Mapping):
+        return value.get("name"), {key: value.get(key) for key in _FLAT_PROFILE_KEYS}
+    return value, {key: msg.get(flat) for key, flat in _FLAT_PROFILE_KEYS.items()}
+
+
 def _spawn_thread(fn: Callable[..., None], *args: Any) -> None:
     threading.Thread(target=fn, args=args, daemon=True, name="detection-profile-send").start()
 
@@ -290,14 +317,14 @@ class ProfileBoard:
             state.refusal_detail = detail if isinstance(detail, str) else None
 
     def _observe_telemetry(self, drone_id: str, msg: Mapping[str, Any]) -> None:
-        profile = msg.get("detection_profile")
+        profile, grouped = _read_telemetry_profile(msg)
         flying = msg.get("is_flying") if isinstance(msg.get("is_flying"), bool) else None
         with self._lock:
             state = self._drone(drone_id)
             if state is None:
                 return
             reconnected = self._note_seen_locked(state)
-            switchable = msg.get("detection_profile_switchable")
+            switchable = grouped["switchable"]
             if isinstance(switchable, bool):
                 allowed_again = state.switchable is False and switchable
                 changed = state.switchable != switchable
@@ -313,13 +340,13 @@ class ProfileBoard:
                 state.detector_ok, changed = detector_ok, True
             appeared = False
             if fp.is_profile_name(profile):
-                fallback = msg.get("detection_profile_fallback") is True
-                reason = msg.get("detection_profile_fallback_reason")
+                fallback = grouped["fallback"] is True
+                reason = grouped["fallback_reason"]
                 reason = reason if fallback and isinstance(reason, str) and fp.is_profile_name(reason) else (
                     "weights_missing" if fallback else None)
                 if state.fallback != fallback or state.fallback_reason != reason:
                     state.fallback, state.fallback_reason, changed = fallback, reason, True
-                requested = msg.get("detection_profile_requested")
+                requested = grouped["requested"]
                 state.edge_requested = requested if fp.is_profile_name(requested) else profile
                 active_changed, appeared = self._note_active_locked(state, profile)
                 changed = changed or active_changed
