@@ -35,6 +35,7 @@ import functools
 import logging
 import math
 import os
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -45,10 +46,15 @@ import numpy as np
 
 from flightrisk.config import get_config
 from flightrisk.obs_log import notice
+from flightrisk.obs_redact import redact_text
 from flightrisk.reasoning.agent import (
+    KEY_REJECTED_TEXT,
+    PAUSED_TEXT,
+    RATE_CAP_TEXT,
     FlightRiskAgent,
     ReasoningCallSkipped,
     ReasoningUnavailable,
+    safe_type_name,
 )
 from flightrisk.vision.resize import downscale_long_edge
 
@@ -100,10 +106,34 @@ DEFAULT_BASE_URL = "https://api.anthropic.com"
 BASE_URL_ENV = "FLIGHTRISK_CLAUDE_BASE_URL"
 API_KEY_ENV = "FLIGHTRISK_CLAUDE_API_KEY"
 
-RATE_CAP_MESSAGE = "AI check skipped (rate cap)."
-BREAKER_OPEN_MESSAGE = "AI check paused (Claude unavailable, retrying in {seconds} s)."
-KEY_REJECTED_MESSAGE = "AI check off (Claude rejected the API key)."
+# Result texts (see agent.py): fixed wording plus status codes, short codes
+# and integers only, never an exception's message.
+RATE_CAP_MESSAGE = RATE_CAP_TEXT
+BREAKER_OPEN_MESSAGE = PAUSED_TEXT.replace("{label}", "Claude")
+KEY_REJECTED_MESSAGE = KEY_REJECTED_TEXT.format(label="Claude")
 DEADLINE_MESSAGE = "AI check timed out (no answer from Claude within {seconds} s)."
+DECLINED_MESSAGE = "AI check failed (Claude declined the request: {category})."
+NO_TEXT_MESSAGE = "AI check failed (Claude returned no text: {stop_reason})."
+STATUS_ERROR_MESSAGE = "AI check failed (Claude error {status}: {label})."
+STREAM_ERROR_MESSAGE = "AI check failed (Claude stream error: {label})."
+STALLED_MESSAGE = "AI check failed (Claude sent no data for {seconds} s)."
+UNREACHABLE_MESSAGE = "AI check failed (cannot reach Claude)."
+
+_STATUS_LABELS = {
+    400: "bad request", 401: "key rejected", 403: "access denied", 404: "not found",
+    408: "timed out", 409: "conflict", 413: "request too large", 422: "invalid request",
+    429: "rate limited", 500: "server error", 502: "bad gateway", 503: "unavailable",
+    504: "timed out", 529: "overloaded",
+}
+_BODY_TYPE_LABELS = {
+    "overloaded_error": "overloaded", "api_error": "server error", "rate_limit_error": "rate limited",
+    "invalid_request_error": "bad request", "authentication_error": "key rejected",
+    "permission_error": "access denied", "not_found_error": "not found",
+    "request_too_large": "request too large",
+}
+# API-provided codes (a refusal category, a stop reason) are shown only if they
+# look like a short code.
+_CODE_RE = re.compile(r"[a-z][a-z0-9_]{0,31}")
 
 # Error types an SSE ``error`` event can carry mid-stream that mean the API is unhealthy.
 _OUTAGE_BODY_TYPES = {"overloaded_error", "api_error", "rate_limit_error"}
@@ -118,11 +148,23 @@ class ClaudeKeyRejected(ReasoningUnavailable):
 
 
 class ClaudeDeadlineExceeded(RuntimeError):
-    """The call ran past its wall-clock deadline and the stream was closed."""
+    """The call ran past its wall-clock deadline of ``seconds`` and the stream was closed."""
+
+    def __init__(self, seconds: int):
+        super().__init__(f"deadline of {seconds} s passed")
+        self.seconds = seconds
 
 
 class ClaudeNoVerdict(RuntimeError):
-    """The API answered, but with a refusal or without any text."""
+    """The API answered, but with a refusal (``kind="refusal"``) or without text (``"no_text"``).
+
+    ``detail`` is the refusal category or stop reason when it is a short code, else None.
+    """
+
+    def __init__(self, kind: str, detail: Any = None):
+        self.kind = kind
+        self.detail = detail if isinstance(detail, str) and _CODE_RE.fullmatch(detail) else None
+        super().__init__(f"{kind} ({self.detail or 'unknown'})")
 
 
 def _type_names(exc: BaseException) -> set[str]:
@@ -263,11 +305,11 @@ def _deadline_body_type() -> type:
         case too. It follows the same pattern as the SDK's own tracing wrapper.
         """
 
-        def __init__(self, body, deadline: float, clock: Callable[[], float], message: str):
+        def __init__(self, body, deadline: float, clock: Callable[[], float], seconds: int):
             self._body = body
             self._deadline = deadline
             self._clock = clock
-            self._message = message
+            self._seconds = seconds
             observer = getattr(body, "stream_observer", None)
             if observer is not None:
                 # The SDK finds its tracing observer on response.stream.
@@ -280,7 +322,7 @@ def _deadline_body_type() -> type:
         def __iter__(self):
             for chunk in self._body:
                 if self._clock() >= self._deadline:
-                    raise ClaudeDeadlineExceeded(self._message)
+                    raise ClaudeDeadlineExceeded(self._seconds)
                 yield chunk
 
         def close(self) -> None:
@@ -289,7 +331,7 @@ def _deadline_body_type() -> type:
     return DeadlineBody
 
 
-def _install_deadline(stream: Any, deadline: float, clock: Callable[[], float], message: str) -> bool:
+def _install_deadline(stream: Any, deadline: float, clock: Callable[[], float], seconds: int) -> bool:
     """Wrap the stream's response body so every chunk read checks the deadline.
 
     Returns False (and changes nothing) when the stream has no real httpx2
@@ -303,7 +345,7 @@ def _install_deadline(stream: Any, deadline: float, clock: Callable[[], float], 
     body = getattr(response, "stream", None)
     if not isinstance(body, httpx2.SyncByteStream):
         return False
-    response.stream = _deadline_body_type()(body, deadline, clock, message)
+    response.stream = _deadline_body_type()(body, deadline, clock, seconds)
     return True
 
 
@@ -399,7 +441,13 @@ class ClaudeReasoningAgent(FlightRiskAgent):
         self._clock = clock
         self._sleep = sleep
         self._key_source = key_source
-        self._client = _build_client(anthropic, key, base_url)
+        try:
+            self._client = _build_client(anthropic, key, base_url)
+        except Exception as e:
+            # The message goes to the dashboard's provider switch; keep the
+            # SDK's text (which may carry request details) in the redacted log.
+            _log.warning("claude_client_setup_failed error_type=%s error=%s", safe_type_name(e), redact_text(e))
+            raise RuntimeError(f"Could not set up the Claude client ({safe_type_name(e)}).") from None
         self._breaker_threshold = int(_clamped(
             "FLIGHTRISK_CLAUDE_BREAKER_THRESHOLD", cfg.claude_breaker_threshold, 1, None, 3))
         self._breaker_cooloff = _clamped(
@@ -457,7 +505,7 @@ class ClaudeReasoningAgent(FlightRiskAgent):
         now = self._clock()
         with self._guard:
             if now < self._open_until:
-                raise ClaudeCallSkipped(BREAKER_OPEN_MESSAGE.format(seconds=math.ceil(self._open_until - now)))
+                raise ClaudeCallSkipped("paused", retry_in_s=math.ceil(self._open_until - now))
             # After the cool-off the next call goes out as the probe. There is
             # no strict half-open state limiting it to one probe at a time,
             # because one serial reasoning worker makes every call, so only one
@@ -465,7 +513,7 @@ class ClaudeReasoningAgent(FlightRiskAgent):
             # failed probe reopens the breaker at once.
             self._call_times = [t for t in self._call_times if now - t < _RATE_WINDOW_S]
             if len(self._call_times) >= self._max_calls_per_minute:
-                raise ClaudeCallSkipped(RATE_CAP_MESSAGE)
+                raise ClaudeCallSkipped("rate_cap")
             self._call_times.append(now)
 
     def _record_failure(self, exc: Exception) -> None:
@@ -532,7 +580,7 @@ class ClaudeReasoningAgent(FlightRiskAgent):
             if _is_auth_rejection(e):
                 self._reject_key(e)
                 # The SDK error carries the response, never the key; drop it anyway.
-                raise ClaudeKeyRejected(KEY_REJECTED_MESSAGE) from None
+                raise ClaudeKeyRejected("key_rejected") from None
             self._record_failure(e)
             raise
         self._record_success()
@@ -560,14 +608,14 @@ class ClaudeReasoningAgent(FlightRiskAgent):
             kwargs["betas"] = [_FALLBACK_BETA]
             kwargs["fallbacks"] = "default"
 
-        message = DEADLINE_MESSAGE.format(seconds=round(self._deadline_s))
+        seconds = round(self._deadline_s)
         # Leaving the with block (normally or by an exception) closes the stream.
         with self._client.beta.messages.stream(**kwargs) as stream:
             started[0] = True
-            _install_deadline(stream, deadline, self._clock, message)
+            _install_deadline(stream, deadline, self._clock, seconds)
             for _event in stream:
                 if self._clock() >= deadline:
-                    raise ClaudeDeadlineExceeded(message)
+                    raise ClaudeDeadlineExceeded(seconds)
             response = stream.get_final_message()
 
         usage = getattr(response, "usage", None)
@@ -577,10 +625,30 @@ class ClaudeReasoningAgent(FlightRiskAgent):
         }
 
         if response.stop_reason == "refusal":
-            category = getattr(response.stop_details, "category", None)
-            raise ClaudeNoVerdict(f"Claude declined this request ({category or 'policy'})")
+            raise ClaudeNoVerdict("refusal", getattr(response.stop_details, "category", None))
 
         text = _verdict_text(response.content)
         if not text:
-            raise ClaudeNoVerdict(f"Claude returned no text (stop_reason={response.stop_reason})")
+            raise ClaudeNoVerdict("no_text", response.stop_reason)
         return text
+
+    def _error_text(self, exc: Exception) -> str:
+        """Operator text for a failed Claude call, from codes and fixed labels only (never ``str(exc)``)."""
+        if isinstance(exc, ClaudeDeadlineExceeded):
+            return DEADLINE_MESSAGE.format(seconds=exc.seconds)
+        if isinstance(exc, ClaudeNoVerdict):
+            if exc.kind == "refusal":
+                return DECLINED_MESSAGE.format(category=exc.detail or "policy")
+            return NO_TEXT_MESSAGE.format(stop_reason=exc.detail or "unknown")
+        status = _status(exc)
+        if status is not None and status >= 400:
+            label = _STATUS_LABELS.get(status) or ("server error" if status >= 500 else "request error")
+            return STATUS_ERROR_MESSAGE.format(status=status, label=label)
+        body_type = _body_error_type(exc)
+        if body_type is not None:
+            return STREAM_ERROR_MESSAGE.format(label=_BODY_TYPE_LABELS.get(body_type, "error"))
+        if _is_read_timeout(exc):
+            return STALLED_MESSAGE.format(seconds=round(_READ_TIMEOUT_S))
+        if _type_names(exc) & {"APIConnectionError", "TransportError", "ConnectionError"}:
+            return UNREACHABLE_MESSAGE
+        return super()._error_text(exc)

@@ -449,6 +449,92 @@ def iter_raising(exc):
 
 
 # ---------------------------------------------------------------------------
+# Result text never carries exception text
+# ---------------------------------------------------------------------------
+
+LEAK = "sk-ant-api03-LEAKLEAKLEAKLEAK0123456789"
+
+
+def _sse_error(error_type):
+    body = {"type": "error", "error": {"type": error_type, "message": LEAK}}
+    return anthropic.APIStatusError(f"{body}", response=httpx2.Response(200, request=_request()), body=body)
+
+
+class TestNoExceptionTextInResults:
+    """Results go to every dashboard client, phones included: fixed text only."""
+
+    @pytest.mark.parametrize("make_exc,expected", [
+        (lambda: RuntimeError(f"anthropic.APIError: 401 key {LEAK}"),
+         "AI check failed (Claude error: RuntimeError)."),
+        (lambda: anthropic.APIStatusError(f"Error code: 418 - {LEAK}", body={"error": {"type": LEAK}},
+                                          response=httpx2.Response(418, request=_request())),
+         "AI check failed (Claude error 418: request error)."),
+        (lambda: anthropic.BadRequestError(f"invalid header x-api-key: {LEAK}", body=None,
+                                           response=httpx2.Response(400, request=_request())),
+         "AI check failed (Claude error 400: bad request)."),
+        (lambda: _status_error(anthropic.OverloadedError, 529),
+         "AI check failed (Claude error 529: overloaded)."),
+        (lambda: _sse_error("overloaded_error"), "AI check failed (Claude stream error: overloaded)."),
+        (lambda: _sse_error(LEAK), "AI check failed (Claude stream error: error)."),
+        (lambda: anthropic.APIConnectionError(message=f"proxy https://u:{LEAK}@proxy.local", request=_request()),
+         "AI check failed (cannot reach Claude)."),
+        (lambda: anthropic.APITimeoutError(request=_request()), "AI check failed (Claude sent no data for 20 s)."),
+        (lambda: httpx2.ReadTimeout(f"read timed out {LEAK}"), "AI check failed (Claude sent no data for 20 s)."),
+    ])
+    def test_result_text_is_fixed(self, make_agent, img, caplog, make_exc, expected):
+        agent, client, *_ = make_agent()
+        client.beta.messages.stream.side_effect = make_exc()
+        with caplog.at_level(logging.WARNING, logger="flightrisk.reasoning"):
+            results = [
+                agent.analyze_match(img, img),
+                agent.match_description(img, "red jacket"),
+                {"reasoning": agent.describe_person(img)},
+            ]
+        assert [r["reasoning"] for r in results] == [expected] * 3
+        assert LEAK not in json.dumps(results) and "sk-ant" not in json.dumps(results)
+        # The server-side log keeps the detail, through the redactor.
+        logged = [r.getMessage() for r in caplog.records if "reasoning_call_failed" in r.getMessage()]
+        assert logged
+        assert all(LEAK not in m for m in logged)
+
+    @pytest.mark.parametrize("message,expected", [
+        (lambda: _message(text=None, content=[], stop_reason="refusal",
+                          stop_details=SimpleNamespace(category="cyber")),
+         "AI check failed (Claude declined the request: cyber)."),
+        (lambda: _message(text=None, content=[], stop_reason="refusal",
+                          stop_details=SimpleNamespace(category=LEAK)),
+         "AI check failed (Claude declined the request: policy)."),
+        (lambda: _message(content=[], stop_reason="max_tokens"),
+         "AI check failed (Claude returned no text: max_tokens)."),
+        (lambda: _message(content=[], stop_reason=f"weird {LEAK}"),
+         "AI check failed (Claude returned no text: unknown)."),
+    ])
+    def test_api_codes_are_shown_only_when_they_look_like_codes(self, make_agent, img, message, expected):
+        agent, client, *_ = make_agent()
+        _set_final_message(client, message())
+        assert agent.analyze_match(img, img)["reasoning"] == expected
+
+    def test_skip_and_key_texts_come_from_fixed_templates(self, make_agent, img, clock):
+        agent, client, *_ = make_agent()
+        client.beta.messages.stream.side_effect = anthropic.AuthenticationError(
+            f"invalid x-api-key {LEAK}", response=httpx2.Response(401, request=_request()), body={"x": LEAK})
+        assert agent.analyze_match(img, img)["reasoning"] == "AI check off (Claude rejected the API key)."
+        fresh, client, *_ = make_agent()
+        fresh._open_until = clock.now + 12.2
+        assert fresh.analyze_match(img, img)["reasoning"] == "AI check paused (Claude unavailable, retrying in 13 s)."
+
+    def test_client_setup_error_text_is_fixed(self, monkeypatch):
+        def broken(*a, **k):
+            raise ValueError(f"bad option {LEAK}")
+
+        monkeypatch.setattr(claude_agent, "_build_client", broken)
+        with pytest.raises(RuntimeError) as exc:
+            ClaudeReasoningAgent(api_key=FAKE_KEY)
+        assert str(exc.value) == "Could not set up the Claude client (ValueError)."
+        assert exc.value.__cause__ is None
+
+
+# ---------------------------------------------------------------------------
 # Deadline
 # ---------------------------------------------------------------------------
 

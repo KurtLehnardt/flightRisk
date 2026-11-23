@@ -332,7 +332,8 @@ class TestResults:
         agent, client = make_agent()
         client.beta.messages.stream.side_effect = RuntimeError("boom")
         result = agent.analyze_match(img, img)
-        assert result == {"match": False, "confidence": "error", "reasoning": "boom"}
+        assert result == {"match": False, "confidence": "error",
+                          "reasoning": "AI check failed (Claude error: RuntimeError)."}
 
     def test_describe_person_returns_text(self, make_agent, img):
         agent, _ = make_agent(response=_response("A child in a red jacket."))

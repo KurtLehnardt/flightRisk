@@ -16,6 +16,7 @@ Usage:
 import base64
 import logging
 import os
+import re
 from typing import Any
 
 import cv2
@@ -23,6 +24,7 @@ import numpy as np
 
 from flightrisk.config import get_config
 from flightrisk.obs_log import notice
+from flightrisk.obs_redact import redact_text
 
 _log = logging.getLogger(__name__)
 
@@ -33,20 +35,53 @@ except ImportError:
     HAS_OLLAMA = False
 
 
+# Operator texts for results that carry no verdict. They are built only from
+# these fixed templates, the backend's label, status codes, short codes and
+# integers, never from an exception's message: results go to every dashboard
+# client, phones included, and exception text can carry request details such
+# as a URL, a header or a key. The full exception is logged server-side only,
+# redacted (``_call_failed``).
+PAUSED_TEXT = "AI check paused ({label} unavailable, retrying in {seconds} s)."
+RATE_CAP_TEXT = "AI check skipped (rate cap)."
+SKIPPED_TEXT = "AI check skipped."
+KEY_REJECTED_TEXT = "AI check off ({label} rejected the API key)."
+UNAVAILABLE_TEXT = "AI check off ({label} unavailable)."
+FAILED_STATUS_TEXT = "AI check failed ({label} error {status})."
+FAILED_TYPE_TEXT = "AI check failed ({label} error: {error_type})."
+FAILED_TEXT = "AI check failed."
+
+_TYPE_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
+
+
+def safe_type_name(exc: BaseException) -> str:
+    """The exception's class name if it is a plain identifier, else ``Exception``."""
+    name = type(exc).__name__
+    return name if _TYPE_NAME_RE.fullmatch(name) else "Exception"
+
+
 class ReasoningCallSkipped(RuntimeError):
     """The backend chose not to send this call, for example while a cloud API is paused.
 
-    Nothing was sent. ``str(exc)`` is plain operator text; the result carries
-    ``confidence="skipped"`` so a skip never reads as a failure.
+    Nothing was sent. ``reason`` is ``"paused"`` (with ``retry_in_s``) or
+    ``"rate_cap"``; the result text is built from these fields and carries
+    ``confidence="skipped"``, so a skip never reads as a failure.
     """
+
+    def __init__(self, reason: str, retry_in_s: int | None = None):
+        super().__init__(reason)
+        self.reason = reason
+        self.retry_in_s = retry_in_s
 
 
 class ReasoningUnavailable(RuntimeError):
-    """The backend can no longer answer (for example its API key was rejected).
+    """The backend can no longer answer; ``reason`` is a short code such as ``"key_rejected"``.
 
-    ``str(exc)`` is plain operator text; the result carries
-    ``confidence="unavailable"``.
+    The result carries ``confidence="unavailable"`` and a text built from ``reason``.
     """
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
 
 
 class FlightRiskAgent:
@@ -143,16 +178,50 @@ class FlightRiskAgent:
         return response.message.content.strip()
 
     def _call_failed(self, kind: str, exc: Exception) -> None:
-        """Log a reasoning call that failed (type and redacted message, never the prompt)."""
-        self.last_usage = {"error_type": type(exc).__name__}
+        """Log a failed call server-side: type and redacted message, never the prompt."""
+        self.last_usage = {"error_type": safe_type_name(exc)}
         _log.warning("reasoning_call_failed provider=%s kind=%s error_type=%s error=%s",
-                     self.provider, kind, type(exc).__name__, exc)
+                     self.provider, kind, safe_type_name(exc), redact_text(exc))
 
-    def _call_skipped(self, kind: str, exc: ReasoningCallSkipped) -> dict[str, Any]:
-        """Log a skipped call at INFO (it is expected, not a fault) and return its result."""
-        self.last_usage = {}
-        _log.info("reasoning_call_skipped provider=%s kind=%s reason=%s", self.provider, kind, exc)
-        return {"match": False, "confidence": "skipped", "reasoning": str(exc)}
+    def _skip_text(self, exc: ReasoningCallSkipped) -> str:
+        if exc.reason == "paused" and isinstance(exc.retry_in_s, int):
+            return PAUSED_TEXT.format(label=self.label, seconds=max(0, exc.retry_in_s))
+        if exc.reason == "rate_cap":
+            return RATE_CAP_TEXT
+        return SKIPPED_TEXT
+
+    def _unavailable_text(self, exc: ReasoningUnavailable) -> str:
+        if exc.reason == "key_rejected":
+            return KEY_REJECTED_TEXT.format(label=self.label)
+        return UNAVAILABLE_TEXT.format(label=self.label)
+
+    def _error_text(self, exc: Exception) -> str:
+        """Operator text for a failed call, from its status code or class name only.
+
+        Backends may override this with a finer mapping; it must never return
+        any part of ``str(exc)``.
+        """
+        status = getattr(exc, "status_code", None)
+        if isinstance(status, int) and not isinstance(status, bool):
+            return FAILED_STATUS_TEXT.format(label=self.label, status=status)
+        return FAILED_TYPE_TEXT.format(label=self.label, error_type=safe_type_name(exc))
+
+    def _failure_result(self, kind: str, exc: Exception) -> dict[str, Any]:
+        """The result for a call that produced no verdict; it never carries the exception's message."""
+        if isinstance(exc, ReasoningCallSkipped):
+            # Expected, not a fault: INFO, and the reason is a fixed code.
+            self.last_usage = {}
+            _log.info("reasoning_call_skipped provider=%s kind=%s reason=%s",
+                      self.provider, kind, redact_text(exc.reason, 64))
+            return {"match": False, "confidence": "skipped", "reasoning": self._skip_text(exc)}
+        self._call_failed(kind, exc)
+        if isinstance(exc, ReasoningUnavailable):
+            return {"match": False, "confidence": "unavailable", "reasoning": self._unavailable_text(exc)}
+        try:
+            text = self._error_text(exc)
+        except Exception:  # noqa: BLE001 - the result must always be built
+            text = FAILED_TEXT
+        return {"match": False, "confidence": "error", "reasoning": text}
 
     def _unavailable_result(self) -> dict[str, Any]:
         return {"match": False, "confidence": "unavailable", "reasoning": self._unavailable_reason}
@@ -190,14 +259,8 @@ class FlightRiskAgent:
             images = [self._reference_b64(reference), self._image_to_base64(candidate)]
             text = self._ask(prompt, images)
             return self._parse_match_response(text)
-        except ReasoningCallSkipped as e:
-            return self._call_skipped("analyze", e)
-        except ReasoningUnavailable as e:
-            self._call_failed("analyze", e)
-            return {"match": False, "confidence": "unavailable", "reasoning": str(e)}
         except Exception as e:
-            self._call_failed("analyze", e)
-            return {"match": False, "confidence": "error", "reasoning": str(e)}
+            return self._failure_result("analyze", e)
 
     def describe_person(self, image: np.ndarray) -> str:
         """Generate a text description of a detected person."""
@@ -212,10 +275,8 @@ class FlightRiskAgent:
                 "and any visible accessories (backpack, hat, etc).",
                 [self._image_to_base64(image)],
             )
-        except (ReasoningCallSkipped, ReasoningUnavailable) as e:
-            return str(e)
         except Exception as e:
-            return f"Error: {e}"
+            return self._failure_result("describe_person", e)["reasoning"]
 
     def analyze_scene(self, image: np.ndarray) -> str:
         """Analyze the scene for search planning."""
@@ -231,10 +292,8 @@ class FlightRiskAgent:
                 "One short paragraph.",
                 [self._image_to_base64(image)],
             )
-        except (ReasoningCallSkipped, ReasoningUnavailable) as e:
-            return str(e)
         except Exception as e:
-            return f"Error: {e}"
+            return self._failure_result("scene", e)["reasoning"]
 
     def match_description(
         self, image: np.ndarray, description: str
@@ -265,14 +324,8 @@ class FlightRiskAgent:
             self._admit()
             text = self._ask(prompt, [self._image_to_base64(image)])
             return self._parse_match_response(text)
-        except ReasoningCallSkipped as e:
-            return self._call_skipped("describe", e)
-        except ReasoningUnavailable as e:
-            self._call_failed("describe", e)
-            return {"match": False, "confidence": "unavailable", "reasoning": str(e)}
         except Exception as e:
-            self._call_failed("describe", e)
-            return {"match": False, "confidence": "error", "reasoning": str(e)}
+            return self._failure_result("describe", e)
 
     def _parse_match_response(self, text: str) -> dict[str, Any]:
         """Parse the structured response from analyze_match."""
