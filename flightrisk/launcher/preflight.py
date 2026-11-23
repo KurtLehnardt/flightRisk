@@ -24,6 +24,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from flightrisk.drone.obstacle_sensor import (
+    ENV_OBSTACLE_FLOOR_RATIO_MAX,
+    ENV_OBSTACLE_METRIC,
+    OBSTACLE_METRIC,
+    obstacle_metric_settings,
+)
 from flightrisk.launcher import claude_uplink as uplink
 from flightrisk.launcher.commands import EdgeToken
 from flightrisk.launcher.netinfo import Adapter, address_owners, list_adapters
@@ -400,6 +406,12 @@ def run_preflight(
             status = WARN if row.status == uplink.FAIL else row.status
             checks.append(Check(f"Claude: {row.name}", status, row.detail))
 
+    # The opt-in obstacle metric the edges started here inherit, when one is selected.
+    if local:
+        metric_check = obstacle_metric_check(env.environ)
+        if metric_check is not None:
+            checks.append(metric_check)
+
     # Ceiling: the dashboard's saved settings are what the ground enforces.
     checks.append(_ceiling_check(settings, env))
 
@@ -479,3 +491,32 @@ def _ceiling_check(settings: LauncherSettings, env: PreflightEnv) -> Check:
             f"drones' slots to that file before the ground station starts",
         )
     return Check("Ceiling", PASS, f"{ceiling} cm, margin {margin} cm, slots up to {ceiling - margin} cm")
+
+
+OBSTACLE_METRIC_CHECK = "Obstacle metric"
+#: The start of the WARN row's detail while the opt-in floor ratio metric is selected.
+OBSTACLE_METRIC_WARNING = "Opt-in metric; threshold not validated indoors (H1)"
+
+
+def obstacle_metric_check(environ: Mapping[str, str]) -> Check | None:
+    """The depth metric the edges started here inherit, or None for the default score.
+
+    WARN while ``FLIGHTRISK_OBSTACLE_METRIC`` selects an opt-in metric: its
+    threshold was fitted on outdoor recordings at one height and is not
+    validated indoors. It never blocks the start. A value the edge would refuse
+    is a FAIL (``settings.validate`` reports it as an error too).
+    """
+    try:
+        metric, ratio_max = obstacle_metric_settings(environ)
+    except ValueError as exc:
+        return Check(OBSTACLE_METRIC_CHECK, FAIL, f"{exc} The edges would refuse to start.")
+    if metric == OBSTACLE_METRIC:
+        return None
+    return Check(
+        OBSTACLE_METRIC_CHECK, WARN,
+        f"{OBSTACLE_METRIC_WARNING}. {ENV_OBSTACLE_METRIC}={metric}: the edges started here block a step when the "
+        f"centre's floor ratio is above {ratio_max:g} ({ENV_OBSTACLE_FLOOR_RATIO_MAX}) or the view has no floor "
+        f"reference. Refit it at flight height for this site (docs/obstacle-sensing.md), and keep an observer at "
+        f"LAND ALL",
+        {"metric": metric, "floor_ratio_max": ratio_max},
+    )

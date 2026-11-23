@@ -99,6 +99,7 @@ from flightrisk.drone.obstacle_sensor import (
     TELEMETRY_SENSOR_OK,
     TELEMETRY_SEQ,
     TELEMETRY_STATE,
+    depth_metric_fields,
 )
 from flightrisk.drone.plan_paths import closest_approach
 from flightrisk.drone.search import split_parallel_track_zones
@@ -571,13 +572,16 @@ def _person_cue(value: Any) -> dict | None:
 
     ``{"person_cue_down": bool, "detection_age_s": seconds or None}``: whether the
     camera sensor's person cue has been ``unknown`` for several gates in a row,
-    and how old the view of its newest detection result is. Anything else in
-    the field is dropped, and a value that is not that shape is None.
+    and how old the view of its newest detection result is. Under the opt-in
+    depth metric it also keeps that metric's keys, cleaned by
+    ``obstacle_sensor.depth_metric_fields``. Anything else in the field is
+    dropped, and a value that is not that shape is None.
     """
     if not isinstance(value, dict) or not isinstance(value.get(PERSON_CUE_DOWN_KEY), bool):
         return None
     age = _number(value.get(PERSON_CUE_AGE_KEY))
-    return {PERSON_CUE_DOWN_KEY: value[PERSON_CUE_DOWN_KEY], PERSON_CUE_AGE_KEY: age if age is None or age >= 0 else None}
+    return {PERSON_CUE_DOWN_KEY: value[PERSON_CUE_DOWN_KEY], PERSON_CUE_AGE_KEY: age if age is None or age >= 0 else None,
+            **depth_metric_fields(value)}
 
 
 def _obstacle_sensor_refusal(msg: dict) -> str:

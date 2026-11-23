@@ -15,6 +15,16 @@ import numpy as np
 import torch
 
 from flightrisk.drone import midas_model
+from flightrisk.drone.obstacle_sensor import (
+    ACTION_NO_FLOOR_REFERENCE,
+    DEPTH_STATE_BLOCKED,
+    DEPTH_STATE_CLEAR,
+    DEPTH_STATE_NO_FLOOR_REFERENCE,
+    OBSTACLE_FLOOR_RATIO_MAX,
+    OBSTACLE_METRIC_FLOOR_RATIO,
+    OBSTACLE_METRIC_SCORE,
+    OBSTACLE_METRICS,
+)
 
 
 class ObstacleGuard:
@@ -44,6 +54,19 @@ class ObstacleGuard:
     of high inverse depth is still ``reverse`` with depths of 1.0, flagged
     degenerate. A valid map gives the same numbers and decision as before,
     with ``degenerate`` False and an empty reason.
+
+    ``metric`` chooses what decides the centre. ``"score"`` (the default) is
+    everything above, and its results are exactly what they were before the
+    option existed. ``"floor_ratio"`` is the opt-in candidate
+    (``FLIGHTRISK_OBSTACLE_METRIC``): on a map that passed every degenerate
+    check, the centre is blocked when ``centre_floor_ratio`` of the raw map is
+    above ``floor_ratio_max``, and when that ratio is None (no usable floor
+    reference). Such a result adds ``metric``, ``floor_ratio`` (the ratio or
+    None), ``floor_ratio_max`` and ``depth_state`` (``clear``, ``blocked`` or
+    ``no_floor_reference``); its action is ``no_floor_reference`` for a view
+    without a floor reference and is otherwise chosen from the sides as
+    before. ``center_depth`` stays the score, so the score can still be
+    compared. A degenerate map is handled as above under either metric.
     """
 
     CENTER_STATS = ("mean", "p90")
@@ -60,12 +83,20 @@ class ObstacleGuard:
         min_safe_depth: float = 0.35,
         check_interval: float = 0.5,
         center_stat: str = "mean",
+        metric: str = OBSTACLE_METRIC_SCORE,
+        floor_ratio_max: float = OBSTACLE_FLOOR_RATIO_MAX,
     ):
         if center_stat not in self.CENTER_STATS:
             raise ValueError(f"center_stat must be one of {self.CENTER_STATS}, got {center_stat!r}")
+        if metric not in OBSTACLE_METRICS:
+            raise ValueError(f"metric must be one of {OBSTACLE_METRICS}, got {metric!r}")
+        if isinstance(floor_ratio_max, bool) or not np.isfinite(floor_ratio_max) or not floor_ratio_max > 0:
+            raise ValueError(f"floor_ratio_max must be a positive number, got {floor_ratio_max!r}")
         self.min_safe_depth = min_safe_depth
         self.check_interval = check_interval
         self.center_stat = center_stat
+        self.metric = metric
+        self.floor_ratio_max = float(floor_ratio_max)
 
         # Select device: MPS > CPU (no CUDA on Tello laptop)
         if torch.backends.mps.is_available():
@@ -190,6 +221,9 @@ class ObstacleGuard:
         if not all(np.isfinite(v) for v in (left_depth, center_mean, center_p90, right_depth)):
             return self._degenerate(self.DEGENERATE_NON_FINITE_SCORE), depth_map
 
+        if self.metric == OBSTACLE_METRIC_FLOOR_RATIO:
+            return self._floor_ratio_result(depth_map, center_depth, left_depth, right_depth, center_p90), depth_map
+
         # Determine if center is blocked
         center_blocked = center_depth > self.min_safe_depth
         left_blocked = left_depth > self.min_safe_depth
@@ -233,6 +267,52 @@ class ObstacleGuard:
             "degenerate": False,
             "degenerate_reason": "",
         }, depth_map
+
+    def _floor_ratio_result(
+        self, depth_map: np.ndarray, center_depth: float, left_depth: float, right_depth: float, center_p90: float,
+    ) -> dict:
+        """The result of the opt-in ``floor_ratio`` metric for a map that passed every degenerate check.
+
+        The ratio is ``centre_floor_ratio`` of the raw map, the same call on the
+        same map that ``scripts/obstacle_replay.py --metrics-report`` makes, so a
+        threshold fitted there means the same here. None (no usable floor
+        reference) is blocked and never clear. The sides are judged as before,
+        against ``min_safe_depth``, only to choose the action of a blocked view.
+        """
+        ratio = centre_floor_ratio(depth_map)
+        limit = self.floor_ratio_max
+        if ratio is None:
+            safe, action, state, confidence = False, ACTION_NO_FLOOR_REFERENCE, DEPTH_STATE_NO_FLOOR_REFERENCE, 0.0
+        elif ratio <= limit:
+            safe, action, state = True, "clear", DEPTH_STATE_CLEAR
+            confidence = min(1.0, (limit - ratio) / limit)
+        else:
+            safe, state = False, DEPTH_STATE_BLOCKED
+            confidence = min(1.0, (ratio - limit) / limit)
+            left_blocked = left_depth > self.min_safe_depth
+            right_blocked = right_depth > self.min_safe_depth
+            if left_blocked and right_blocked:
+                action = "reverse"
+            elif left_depth < right_depth:
+                action = "go_left"
+            else:
+                action = "go_right"
+        return {
+            "safe": safe,
+            "center_depth": center_depth,
+            "left_depth": left_depth,
+            "right_depth": right_depth,
+            "action": action,
+            "confidence": round(max(0.0, confidence), 3),
+            "center_p90": center_p90,
+            "center_stat": self.center_stat,
+            "degenerate": False,
+            "degenerate_reason": "",
+            "metric": OBSTACLE_METRIC_FLOOR_RATIO,
+            "floor_ratio": ratio,
+            "floor_ratio_max": limit,
+            "depth_state": state,
+        }
 
     def _degenerate(self, reason: str) -> dict:
         """The result for a depth map that cannot be judged: never safe, and no move suggested."""
@@ -294,13 +374,14 @@ class ObstacleGuard:
 
 
 # ---------------------------------------------------------------------------
-# Candidate obstacle metrics, for offline evaluation only.
+# Candidate obstacle metrics.
 #
 # These are pure functions of a raw MiDaS inverse-depth map (higher = closer).
-# Nothing in the flight path calls them: the decision still uses the p95
-# normalised centre score computed in ObstacleGuard. They exist so that
-# scripts/obstacle_replay.py --metrics-report can compare candidates on
-# recorded flights before any of them is considered for a decision.
+# scripts/obstacle_replay.py --metrics-report compares them on recorded
+# flights. By default the flight path calls none of them: the decision uses the
+# p95 normalised centre score computed in ObstacleGuard. Only an ObstacleGuard
+# built with metric="floor_ratio" (the opt-in FLIGHTRISK_OBSTACLE_METRIC)
+# decides with centre_floor_ratio; that threshold is not validated.
 # ---------------------------------------------------------------------------
 
 #: Rows of the floor band: the bottom fifth of the map.

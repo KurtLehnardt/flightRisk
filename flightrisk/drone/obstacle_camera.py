@@ -34,6 +34,15 @@ call. While a timed-out inference is still running, later calls report
 fresh frame, the inference and the wait for a fresh person result share that
 one budget, so the executor, which abandons a call shortly after
 ``timeout_s``, never gives up on a call that was still within its time.
+
+``metric`` chooses what decides the depth cue: ``score`` (the default, the
+guard's p90 centre score against ``min_safe_depth``, unchanged) or the opt-in
+``floor_ratio`` (``obstacle.centre_floor_ratio`` against ``floor_ratio_max``,
+``FLIGHTRISK_OBSTACLE_METRIC``). Under ``floor_ratio`` a view without a usable
+floor reference is ``blocked`` by the depth cue (cut reason ``obstacle``, depth
+state ``no_floor_reference``), never ``clear`` and never ``unavailable``. Every
+failure to look above stays ``unavailable`` under either metric, and the person
+cue is the same.
 """
 from __future__ import annotations
 
@@ -56,10 +65,23 @@ from flightrisk.drone.obstacle_sensor import (
     CAUSE_BLANK_FRAME,
     CUE_DEPTH,
     CUE_PERSON,
+    DEPTH_METRIC_KEY,
+    DEPTH_METRIC_MAX_KEY,
+    DEPTH_METRIC_VALUE_KEY,
+    DEPTH_STATE_BLOCKED,
+    DEPTH_STATE_CLEAR,
+    DEPTH_STATE_KEY,
+    DEPTH_STATE_NO_FLOOR_REFERENCE,
+    EVENT_OBSTACLE_METRIC,
     EVENT_PERSON_CUE_DOWN,
     EVENT_SENSOR_ERROR,
     OBSTACLE_DETECTION_WAIT_S,
+    OBSTACLE_FLOOR_RATIO_MAX,
     OBSTACLE_FRAME_WAIT_S,
+    OBSTACLE_METRIC,
+    OBSTACLE_METRIC_FLOOR_RATIO,
+    OBSTACLE_METRIC_SCORE,
+    OBSTACLE_METRICS,
     OBSTACLE_MIN_SAFE_DEPTH,
     OBSTACLE_PERSON_CENTRAL_FRACTION,
     OBSTACLE_PERSON_CUE_DOWN_AFTER,
@@ -222,6 +244,11 @@ class ForwardCameraSensor:
     ``unknown``. A detection result already there is still read, because that
     costs no time and can only add a ``blocked``: the person cue never clears
     a step.
+
+    ``metric`` and ``floor_ratio_max`` choose the depth cue's decision (see the
+    module docstring). A guard built here gets them; an injected guard must
+    report the same metric in its results, and a result that does not is a
+    failure to look (``unavailable``), never a decision by the other metric.
     """
 
     def __init__(
@@ -232,6 +259,8 @@ class ForwardCameraSensor:
         guard: Any = None,
         min_safe_depth: float = OBSTACLE_MIN_SAFE_DEPTH,
         person_fraction: float = OBSTACLE_PERSON_FRACTION,
+        metric: str = OBSTACLE_METRIC,
+        floor_ratio_max: float = OBSTACLE_FLOOR_RATIO_MAX,
         settle_s: float = OBSTACLE_SETTLE_S,
         frame_wait_s: float = OBSTACLE_FRAME_WAIT_S,
         detection_wait_s: float = OBSTACLE_DETECTION_WAIT_S,
@@ -241,10 +270,14 @@ class ForwardCameraSensor:
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ):
+        if metric not in OBSTACLE_METRICS:
+            raise ValueError(f"metric must be one of {OBSTACLE_METRICS}, got {metric!r}")
         self._frames = frames
         self._runner = runner
         self.min_safe_depth = float(min_safe_depth)
         self.person_fraction = float(person_fraction)
+        self.metric = metric
+        self.floor_ratio_max = float(floor_ratio_max)
         self.settle_s = settle_s
         self.frame_wait_s = frame_wait_s
         self.detection_wait_s = detection_wait_s
@@ -256,8 +289,12 @@ class ForwardCameraSensor:
         if guard is None:
             from flightrisk.drone.obstacle import ObstacleGuard
 
+            # The default builds the guard exactly as before the metric option existed.
+            opt_in = {} if metric == OBSTACLE_METRIC_SCORE else {
+                "metric": metric, "floor_ratio_max": self.floor_ratio_max,
+            }
             guard = ObstacleGuard(
-                min_safe_depth=self.min_safe_depth, check_interval=0.0, center_stat="p90",
+                min_safe_depth=self.min_safe_depth, check_interval=0.0, center_stat="p90", **opt_in,
             )
         self._guard = guard
         if warm:
@@ -271,6 +308,9 @@ class ForwardCameraSensor:
         self._last_error_key: str | None = None
         self._unknown_streak = 0
         self._person_down_logged = False
+        # The opt-in metric at the latest gate (``status``): its value and the depth state.
+        self._last_metric_value: float | None = None
+        self._last_depth_state: str | None = None
 
     # -- protocol -----------------------------------------------------------
 
@@ -340,6 +380,29 @@ class ForwardCameraSensor:
         if problem is not None:
             detail = {"degenerate": check.get("degenerate_reason")} if check.get("degenerate") else None
             return self._failed(REASON_ERROR, latency(), problem, detail=detail)
+        metric_detail: dict[str, Any] = {}
+        if self.metric == OBSTACLE_METRIC_FLOOR_RATIO:
+            try:
+                ratio, problem = self._floor_ratio_of(check)
+            except Exception as exc:
+                return self._failed(REASON_ERROR, latency(), exc)
+            if problem is not None:
+                return self._failed(REASON_ERROR, latency(), problem)
+            # Blocked when either the guard or this sensor's limit says so; no floor reference is blocked.
+            depth_blocked = depth_blocked or ratio is None or ratio > self.floor_ratio_max
+            if ratio is None:
+                depth_state = DEPTH_STATE_NO_FLOOR_REFERENCE
+            else:
+                depth_state = DEPTH_STATE_BLOCKED if depth_blocked else DEPTH_STATE_CLEAR
+            metric_detail = {
+                "metric": self.metric,
+                "floor_ratio": ratio,
+                "floor_ratio_max": self.floor_ratio_max,
+                "depth_state": depth_state,
+                "score": depth_score,
+            }
+            # The statistic compared with the limit (``SenseResult.depth_score``) is the ratio.
+            depth_score = ratio
 
         person = self._person_cue(after, wait=not depth_blocked, budget_end=budget_end)
         self._note_person_cue(person)
@@ -348,6 +411,7 @@ class ForwardCameraSensor:
             "depth_confidence": check.get("confidence"),
             "center_stat": check.get("center_stat"),
             "min_safe_depth": self.min_safe_depth,
+            **metric_detail,
         }
         score = {"person_cue": person, "depth_score": depth_score, "detail": detail}
         if person == PERSON_CUE_BLOCKED:
@@ -359,7 +423,41 @@ class ForwardCameraSensor:
         else:
             result = SenseResult.make_clear(cue=CUE_DEPTH, latency_ms=latency(), **score)
             action = ACTION_PERSON_UNKNOWN if person == PERSON_CUE_UNKNOWN else None
+        if metric_detail:
+            self._log_metric(result, metric_detail)
         return self._finish(result, check, action)
+
+    @staticmethod
+    def _floor_ratio_of(check: dict) -> tuple[float | None, str | None]:
+        """``(ratio, problem)``: the guard's floor ratio, and why the result cannot be used (None when it can).
+
+        A result that was not judged with the floor ratio (a guard built for the
+        other metric) and a ratio that is not a finite number are failures to
+        look. A ratio of None is a usable answer: the view has no floor reference.
+        """
+        if check.get("metric") != OBSTACLE_METRIC_FLOOR_RATIO:
+            return None, f"the depth guard did not judge with the {OBSTACLE_METRIC_FLOOR_RATIO} metric"
+        ratio = check.get("floor_ratio")
+        if ratio is None:
+            return None, None
+        if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not math.isfinite(ratio):
+            return None, f"floor_ratio is not a finite number: {ratio!r}"
+        return float(ratio), None
+
+    def _log_metric(self, result: SenseResult, metric_detail: dict[str, Any]) -> None:
+        """Log the opt-in metric of one gate (``EVENT_OBSTACLE_METRIC``) and keep it for ``status``."""
+        with self._lock:
+            self._last_metric_value = metric_detail["floor_ratio"]
+            self._last_depth_state = metric_detail["depth_state"]
+        ratio = metric_detail["floor_ratio"]
+        log_event(
+            logger, logging.INFO, EVENT_OBSTACLE_METRIC,
+            f"{self.metric} {'none' if ratio is None else f'{ratio:.4f}'} against {self.floor_ratio_max:g}: "
+            f"{metric_detail['depth_state']}",
+            component="edge", drone_id=self.drone_id,
+            metric=self.metric, value=metric_detail["floor_ratio"], limit=self.floor_ratio_max,
+            depth_state=metric_detail["depth_state"], state=result.state, score=metric_detail["score"],
+        )
 
     @staticmethod
     def _unusable_check(check: dict, depth_score: float) -> str | None:
@@ -393,12 +491,20 @@ class ForwardCameraSensor:
         executor puts both in telemetry (``obstacle_person_cue``).
         ``stale_frames`` counts frames refused because their decoder marked
         them stale, and ``settle_s`` is the settle time in force.
+
+        Under the opt-in ``floor_ratio`` metric it also has ``depth_metric``,
+        ``depth_metric_value`` (the ratio at the latest gate, None when that
+        gate had no floor reference or could not look), ``depth_metric_max``
+        and ``depth_state``, which the executor adds to ``obstacle_person_cue``.
+        Under the default score none of them is present.
         """
         with self._lock:
             state = self._last_state
             latency = self._last_latency_ms
             reason = self._last_reason
-        return {
+            metric_value = self._last_metric_value
+            depth_state = self._last_depth_state
+        status = {
             "sensor": "forward_camera",
             "mode": SENSING_STEPPED,
             "calibrated": self.calibrated,
@@ -417,6 +523,14 @@ class ForwardCameraSensor:
             TELEMETRY_LATENCY_MS: latency,
             TELEMETRY_SENSOR_OK: state != OBSTACLE_STATE_UNAVAILABLE,
         }
+        if self.metric != OBSTACLE_METRIC_SCORE:
+            status.update({
+                DEPTH_METRIC_KEY: self.metric,
+                DEPTH_METRIC_VALUE_KEY: metric_value,
+                DEPTH_METRIC_MAX_KEY: self.floor_ratio_max,
+                DEPTH_STATE_KEY: depth_state,
+            })
+        return status
 
     def person_detection_age_s(self) -> float | None:
         """Seconds since the frame of the runner's newest detection result was captured, or None.
@@ -441,6 +555,8 @@ class ForwardCameraSensor:
             changed["min_safe_depth"] = self.min_safe_depth
         if self.person_fraction != OBSTACLE_PERSON_FRACTION:
             changed["person_fraction"] = self.person_fraction
+        if self.floor_ratio_max != OBSTACLE_FLOOR_RATIO_MAX:
+            changed["floor_ratio_max"] = self.floor_ratio_max
         return changed
 
     def close(self) -> None:
@@ -530,7 +646,13 @@ class ForwardCameraSensor:
             self._last_state = result.state
             self._last_latency_ms = result.latency_ms
             self._last_reason = result.reason
+            if self.metric != OBSTACLE_METRIC_SCORE and DEPTH_STATE_KEY not in result.detail:
+                # A gate that did not judge a view (stale, timeout, error) has no metric value.
+                self._last_metric_value = None
+                self._last_depth_state = None
+        # The score-to-threshold histogram is recorded only while the score decides.
         obs_events.obstacle_check(
-            check, action=action, min_safe_depth=self.min_safe_depth, drone_id=self.drone_id,
+            check, action=action, drone_id=self.drone_id,
+            min_safe_depth=self.min_safe_depth if self.metric == OBSTACLE_METRIC_SCORE else None,
         )
         return result

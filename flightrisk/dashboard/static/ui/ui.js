@@ -155,6 +155,20 @@ const socket = io();
     // Text and badges for the per-lane obstacle sensing (docs/obstacle-sensing.md). These helpers only choose
     // text and classes from the telemetry and event fields, and cope with any of them being absent.
     function roundMs(v) { return Math.round(v * 10) / 10; }
+    // The opt-in depth metric (FLIGHTRISK_OBSTACLE_METRIC=floor_ratio) as a short note for the SENSE badge, with a
+    // sentence for its title; null for the default score or a drone that reports no metric.
+    function depthMetricNote(d) {
+        const cue = d && d.obstacle_person_cue;
+        if (!cue || typeof cue !== 'object' || cue.depth_metric !== 'floor_ratio') return null;
+        const max = typeof cue.depth_metric_max === 'number' ? Math.round(cue.depth_metric_max * 1000) / 1000 : null;
+        let value;
+        if (cue.depth_state === 'no_floor_reference') value = 'no floor';
+        else if (typeof cue.depth_metric_value === 'number') value = String(Math.round(cue.depth_metric_value * 1000) / 1000);
+        else value = '--';
+        return { text: ', floor ratio ' + value + (max !== null ? ' / ' + max : ''),
+            title: ' Depth metric: floor ratio (opt-in), blocked above ' + (max !== null ? max : 'its limit')
+                + ' and when the view has no floor reference. Its threshold is not validated indoors (H1).' };
+    }
     // The SENSE badge of a drone card, or null when the drone reported no obstacle sensing mode.
     function senseBadge(d) {
         const mode = d && d.obstacle_sensing;
@@ -162,13 +176,14 @@ const socket = io();
         if (mode === 'off') return { text: 'SENSE OFF', cls: 'held', title: 'This drone flies its lanes without obstacle sensing.' };
         if (mode === 'autopilot') return { text: 'SENSE AUTOPILOT', cls: '', title: 'The autopilot avoids obstacles on its own.' };
         const label = mode === 'forward_only' ? 'SENSE forward only' : 'SENSE';
+        const note = depthMetricNote(d) || { text: '', title: '' };
         if (d.obstacle_sensor_ok === false || d.obstacle_state === 'unavailable') {
-            return { text: label + ' STALE', cls: 'held', title: 'The obstacle sensor is not answering.' };
+            return { text: label + ' STALE' + note.text, cls: 'held', title: 'The obstacle sensor is not answering.' + note.title };
         }
         const ms = typeof d.obstacle_latency_ms === 'number' ? ' ' + roundMs(d.obstacle_latency_ms) + ' ms' : '';
         const cls = mode === 'forward_only' ? 'held' : '';
-        return { text: label + ' ok' + ms, cls: cls, title: mode === 'forward_only'
-            ? 'Only lanes that fly forward are sensed; the other lanes fly unsensed.' : 'The obstacle sensor works.' };
+        return { text: label + ' ok' + ms + note.text, cls: cls, title: (mode === 'forward_only'
+            ? 'Only lanes that fly forward are sensed; the other lanes fly unsensed.' : 'The obstacle sensor works.') + note.title };
     }
     // A person detection older than this many seconds leaves the obstacle sensor's person cue stale.
     const PERSON_CUE_STALE_S = 2;

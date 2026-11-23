@@ -178,6 +178,7 @@ All checks are read-only; any FAIL blocks Start.
 | Edge token | set, when the cable address is bound or a non-loopback ground is dialled; only "set" or "missing" is shown |
 | Network adapters | lists the adapters with their IPv4 addresses and indexes |
 | Adapter for each drone | its local IP is on exactly one adapter, with the interface index given. A real drone with no local IP fails ("choose the adapter") when more than one adapter has an address in its Tello host's network, because a packet sent from all addresses could reach another drone; that drone is then not probed |
+| Obstacle metric | shown only when an edge runs here and the launcher's environment sets `FLIGHTRISK_OBSTACLE_METRIC=floor_ratio`: always a warning, "Opt-in metric; threshold not validated indoors (H1)", with the limit (`FLIGHTRISK_OBSTACLE_FLOOR_RATIO_MAX`). A value the edges would refuse fails here and is an error in Setup (`docs/obstacle-sensing.md`, "Opt-in floor ratio metric") |
 | Ceiling | the dashboard's saved ceiling and margin match the launcher's (otherwise a warning that Start will write the launcher's values) |
 | Drone (each real Tello here) | it answers `command`, `battery?` and `temp?`; its battery is shown, and below 30 % is a warning |
 

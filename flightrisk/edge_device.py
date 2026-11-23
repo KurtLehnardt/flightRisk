@@ -127,6 +127,8 @@ from flightrisk.drone.obstacle_sensor import (
     CHANNEL_ORDER_RGB,
     ENV_FAKE_OBSTACLE_Y_CM,
     ENV_MAX_DECODE_LAG_S,
+    ENV_OBSTACLE_FLOOR_RATIO_MAX,
+    ENV_OBSTACLE_METRIC,
     ENV_OBSTACLE_MIN_SAFE_DEPTH,
     ENV_OBSTACLE_PERSON_FRACTION,
     ENV_OBSTACLE_SENSING,
@@ -136,6 +138,8 @@ from flightrisk.drone.obstacle_sensor import (
     EVENT_SETTING_NON_DEFAULT,
     MAX_DECODE_LAG_RANGE_S,
     MAX_DECODE_LAG_S,
+    OBSTACLE_FLOOR_RATIO_MAX,
+    OBSTACLE_METRIC,
     OBSTACLE_MIN_SAFE_DEPTH,
     OBSTACLE_MIN_SAFE_DEPTH_RANGE,
     OBSTACLE_PERSON_FRACTION,
@@ -160,6 +164,7 @@ from flightrisk.drone.obstacle_sensor import (
     FrameStamp,
     LatestFrame,
     NullSensor,
+    obstacle_metric_settings,
     to_sensor_frame,
 )
 from flightrisk.drone.safety import (
@@ -1818,8 +1823,10 @@ class ObstacleSettings:
 
     ``FLIGHTRISK_OBSTACLE_SENSING``, ``_STEP_CM``, ``_TURN``, ``_MIN_SAFE_DEPTH``,
     ``_PERSON_FRACTION``, ``_SETTLE_S``, ``FLIGHTRISK_MAX_DECODE_LAG_S`` (the bound Tello
-    decoder reads it itself, ``tello_bound.max_decode_lag_s``) and
-    ``FLIGHTRISK_FAKE_OBSTACLE_Y_CM`` are all read
+    decoder reads it itself, ``tello_bound.max_decode_lag_s``),
+    ``FLIGHTRISK_FAKE_OBSTACLE_Y_CM`` and the opt-in depth metric
+    (``FLIGHTRISK_OBSTACLE_METRIC``, ``_FLOOR_RATIO_MAX``; parsed by
+    ``obstacle_sensor.obstacle_metric_settings``, as the launcher does) are all read
     whatever the mode, the drone kind or the video source, so a malformed value
     refuses to start even when the edge would not use it (under ``off``, on the
     fake drone, or on a MAVLink edge without a camera). The step's range and
@@ -1850,6 +1857,10 @@ class ObstacleSettings:
             ENV_MAX_DECODE_LAG_S, MAX_DECODE_LAG_S, *MAX_DECODE_LAG_RANGE_S, environ,
         )
         self.fake_obstacle_y_cm = _obstacle_number(ENV_FAKE_OBSTACLE_Y_CM, None, -100000.0, 100000.0, environ)
+        try:
+            self.metric, self.floor_ratio_max = obstacle_metric_settings(environ)
+        except ValueError as exc:
+            raise SystemExit(f"edge_device: {exc} Refusing to start.") from None
         self.non_default: list[tuple[str, Any, Any]] = [
             (name, value, default)
             for name, value, default in (
@@ -1861,6 +1872,8 @@ class ObstacleSettings:
                 (ENV_OBSTACLE_SETTLE_S, self.settle_s, OBSTACLE_SETTLE_S),
                 (ENV_MAX_DECODE_LAG_S, self.max_decode_lag_s, MAX_DECODE_LAG_S),
                 (ENV_FAKE_OBSTACLE_Y_CM, self.fake_obstacle_y_cm, None),
+                (ENV_OBSTACLE_METRIC, self.metric, OBSTACLE_METRIC),
+                (ENV_OBSTACLE_FLOOR_RATIO_MAX, self.floor_ratio_max, OBSTACLE_FLOOR_RATIO_MAX),
             )
             if value != default
         ]
@@ -2007,6 +2020,10 @@ def _build_obstacle_wiring(
         )
 
     min_safe_depth, person_fraction = settings.min_safe_depth, settings.person_fraction
+    # The opt-in depth metric reaches the sensor only when it is chosen, so the default builds it as before.
+    metric_kwargs: dict[str, Any] = {} if settings.metric == OBSTACLE_METRIC else {
+        "metric": settings.metric, "floor_ratio_max": settings.floor_ratio_max,
+    }
     holder = LatestFrame(time.monotonic)
     try:
         if kind != "mavlink":
@@ -2016,7 +2033,7 @@ def _build_obstacle_wiring(
 
         sensor = obstacle_camera.ForwardCameraSensor(
             holder, runner, drone_id=drone_id, min_safe_depth=min_safe_depth, person_fraction=person_fraction,
-            settle_s=settle_s, clock=time.monotonic,
+            settle_s=settle_s, clock=time.monotonic, **metric_kwargs,
         )
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
