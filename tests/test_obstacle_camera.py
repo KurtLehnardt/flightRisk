@@ -399,6 +399,57 @@ class TestPersonCue:
         assert sensor.sense(_after() + 0.9).blocked
         assert time.monotonic() - start < 5.0
 
+    def test_person_wait_waits_for_a_fresh_result_on_a_depth_block(self, frames):
+        # The re-look and the sidestep need the person cue of a blocked view: they ask the sensor to wait.
+        runner = _runner([], at=time.monotonic() - 5.0)
+        guard = FakeGuard(_check(safe=False, depth=0.9))
+        sensor = _sensor(frames, runner, guard, detection_wait_s=3.0)
+
+        def publish():
+            runner.last_detections = ([], FRAME_W, FRAME_H)
+            runner.last_detections_at = time.monotonic()
+
+        timer = threading.Timer(0.15, publish)
+        timer.start()
+        try:
+            result = sensor.sense(_after() + 0.9, person_wait=True)
+        finally:
+            timer.join()
+        assert result.blocked and result.cue == CUE_DEPTH
+        assert result.person_cue == PERSON_CUE_CLEAR
+
+    def test_person_wait_sees_a_person_behind_a_depth_block(self, frames):
+        runner = _runner([], at=time.monotonic() - 5.0)
+        guard = FakeGuard(_check(safe=False, depth=0.9))
+        sensor = _sensor(frames, runner, guard, detection_wait_s=3.0)
+
+        def publish():
+            runner.last_detections = ([CLOSE_CENTRE], FRAME_W, FRAME_H)
+            runner.last_detections_at = time.monotonic()
+
+        timer = threading.Timer(0.15, publish)
+        timer.start()
+        try:
+            result = sensor.sense(_after() + 0.9, person_wait=True)
+        finally:
+            timer.join()
+        assert result.blocked and result.cue == CUE_PERSON and result.cut_reason == "person"
+
+    def test_person_wait_is_bounded_by_the_detection_wait_and_the_budget(self, frames):
+        runner = _runner([], at=time.monotonic() - 5.0)
+        guard = FakeGuard(_check(safe=False, depth=0.9))
+        sensor = _sensor(frames, runner, guard, detection_wait_s=0.2)
+        start = time.monotonic()
+        result = sensor.sense(_after() + 0.9, person_wait=True)
+        assert result.blocked and result.person_cue == PERSON_CUE_UNKNOWN
+        assert 0.15 <= time.monotonic() - start < 2.0
+        # The call's own budget caps the wait too.
+        sensor = _sensor(frames, runner, guard, detection_wait_s=30.0)
+        start = time.monotonic()
+        result = sensor.sense(_after() + 0.9, timeout_s=0.5, person_wait=True)
+        assert result.person_cue == PERSON_CUE_UNKNOWN
+        assert time.monotonic() - start < 2.0
+
     def test_person_cue_down_is_logged_once(self, frames, caplog):
         old = _runner([], at=time.monotonic() - 5.0)
         sensor = _sensor(frames, old, detection_wait_s=0.0)

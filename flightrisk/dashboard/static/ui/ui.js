@@ -1623,12 +1623,18 @@ const socket = io();
         button.type = 'button';
         button.title = 'Offer this segment to another drone once ' + e.lost_id + ' has finished its lanes';
         button.addEventListener('click', () => {
-            const question = 'A person stopped ' + e.lost_id + ' on lane ' + e.index + '. Another drone would fly this '
-                + 'segment from the far side, toward where the person was. Re-fly it only if the person has moved away. '
-                + 'Re-fly it?';
+            const offset = e.reason === 'offset';
+            const question = (offset
+                ? 'A person was seen while ' + e.lost_id + ' flew beside lane ' + e.index + ' to pass an obstacle. '
+                : 'A person stopped ' + e.lost_id + ' on lane ' + e.index + '. ')
+                + 'Another drone would fly this segment from the far side, toward where the person was. Re-fly it only '
+                + 'if the person has moved away. Re-fly it?';
             if (!window.confirm(question)) return;
             button.disabled = true;
-            socket.emit('confirm_reflight', { drone_id: e.drone_id || e.lost_id, cut_seq: e.cut_seq });
+            // An offset segment held for its own sighting has no cut: it is named by its lane and start.
+            const own = offset && (e.cut_seq === null || e.cut_seq === undefined);
+            socket.emit('confirm_reflight', { drone_id: e.drone_id || e.lost_id, cut_seq: e.cut_seq,
+                offset: own ? [e.index, e.offset_from_cm] : null });
         });
         return button;
     }
@@ -1662,6 +1668,16 @@ const socket = io();
         }
         if (kind === 'lane_blocked') {
             showFleetBanner(laneBlockedText(ev), 15000);
+            return;
+        }
+        if (kind === 'sidestep_held') {
+            // The drone could not get back to its lane after a sidestep: it hovers under manual control.
+            showFleetBanner('SIDESTEP HELD: ' + (ev.detail || ev.drone_id || ''), 30000);
+            return;
+        }
+        if (kind === 'lane_offset') {
+            // The detail already names the drone.
+            showFleetBanner('LANE FLOWN BESIDE: ' + (ev.detail || ev.drone_id || ''), 15000);
             return;
         }
         if (kind && kind.indexOf('reflight_') === 0 && reflightBannerText(kind, ev)) {
