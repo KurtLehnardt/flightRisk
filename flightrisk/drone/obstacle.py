@@ -24,6 +24,7 @@ from flightrisk.drone.obstacle_sensor import (
     OBSTACLE_METRIC_FLOOR_RATIO,
     OBSTACLE_METRIC_SCORE,
     OBSTACLE_METRICS,
+    valid_floor_ratio_max,
 )
 
 
@@ -90,8 +91,8 @@ class ObstacleGuard:
             raise ValueError(f"center_stat must be one of {self.CENTER_STATS}, got {center_stat!r}")
         if metric not in OBSTACLE_METRICS:
             raise ValueError(f"metric must be one of {OBSTACLE_METRICS}, got {metric!r}")
-        if isinstance(floor_ratio_max, bool) or not np.isfinite(floor_ratio_max) or not floor_ratio_max > 0:
-            raise ValueError(f"floor_ratio_max must be a positive number, got {floor_ratio_max!r}")
+        if not valid_floor_ratio_max(floor_ratio_max):
+            raise ValueError(f"floor_ratio_max must be a positive finite number, got {floor_ratio_max!r}")
         self.min_safe_depth = min_safe_depth
         self.check_interval = check_interval
         self.center_stat = center_stat
@@ -112,6 +113,10 @@ class ObstacleGuard:
         self._model, self._transform = midas_model.load_midas_small()
         self._model.to(self._device)
         self._model.eval()
+        #: The compute device the depth model runs on (``mps``, ``cpu``, ``cuda``). The
+        #: same frame can give a slightly different map on another device, so the
+        #: floor ratio's log and the replay report name it.
+        self.device_name = self._device.type
 
         # Thread safety
         self._lock = threading.Lock()

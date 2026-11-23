@@ -134,13 +134,20 @@ OBSTACLE_METRIC_FLOOR_RATIO = "floor_ratio"
 OBSTACLE_METRICS = (OBSTACLE_METRIC_SCORE, OBSTACLE_METRIC_FLOOR_RATIO)
 #: The depth cue's metric unless ``FLIGHTRISK_OBSTACLE_METRIC`` says otherwise.
 OBSTACLE_METRIC = OBSTACLE_METRIC_SCORE
+#: The field fit behind the default limit (110 cm, outdoors, 1 clear and 2 wall
+#: recordings): the highest floor ratio seen on the clear recording and the
+#: lowest seen on the wall recordings. The margin between them is only 0.0016.
+FLOOR_RATIO_FIELD_HIGHEST_CLEAR = 0.7978
+FLOOR_RATIO_FIELD_LOWEST_WALL = 0.7994
 #: Under ``floor_ratio``, a centre whose floor ratio is above this is blocked.
-#: The outdoor fit at 110 cm was 0.7978 with a margin of only +0.0016.
-OBSTACLE_FLOOR_RATIO_MAX = 0.80
-#: Allowed ``FLIGHTRISK_OBSTACLE_FLOOR_RATIO_MAX``. A ratio near 1 means the
-#: centre is about as close as the floor band, so a limit far above that would
-#: hardly ever block and one far below it would block almost every view.
-OBSTACLE_FLOOR_RATIO_MAX_RANGE = (0.5, 1.5)
+#: It is the midpoint of the field fit above, so it lies strictly between the
+#: highest clear value and the lowest wall value. Not validated.
+OBSTACLE_FLOOR_RATIO_MAX = 0.7986
+#: Allowed ``FLIGHTRISK_OBSTACLE_FLOOR_RATIO_MAX``. A ratio of 1 means the
+#: centre is as close as the floor band; a limit above that would let a centre
+#: nearer than the ground ahead pass. The upper bound stays at 1.0 until indoor
+#: data exists.
+OBSTACLE_FLOOR_RATIO_MAX_RANGE = (0.5, 1.0)
 ENV_OBSTACLE_METRIC = "FLIGHTRISK_OBSTACLE_METRIC"
 ENV_OBSTACLE_FLOOR_RATIO_MAX = "FLIGHTRISK_OBSTACLE_FLOOR_RATIO_MAX"
 
@@ -167,8 +174,16 @@ DEPTH_METRIC_MAX_KEY = "depth_metric_max"
 DEPTH_STATE_KEY = "depth_state"
 
 #: Logged once per gate by the camera sensor while an opt-in metric decides
-#: (INFO: ``metric``, ``value``, ``limit``, ``depth_state``, ``state``, ``score``).
+#: (INFO: ``metric``, ``value``, ``limit``, ``depth_state``, ``state``, ``score``,
+#: ``device``, the depth model's compute device).
 EVENT_OBSTACLE_METRIC = "edge_obstacle_metric"
+#: Logged once at the edge's start, at warning level, while the opt-in metric is
+#: selected: its threshold rests on ``FLOOR_RATIO_FIELD_BASIS`` and nothing more.
+EVENT_OBSTACLE_METRIC_UNVALIDATED = "edge_obstacle_metric_unvalidated"
+#: What the floor ratio's threshold rests on, for every warning that names it.
+FLOOR_RATIO_FIELD_BASIS = "3 outdoor recordings at one height"
+#: The edge's startup warning while ``floor_ratio`` is selected.
+FLOOR_RATIO_UNVALIDATED = f"floor_ratio is unvalidated: {FLOOR_RATIO_FIELD_BASIS}"
 
 #: A plain ASCII decimal, as every obstacle setting is read (``edge_device``): no
 #: ``5_0``, non-ASCII digits, ``nan`` or ``inf``.
@@ -206,6 +221,16 @@ def obstacle_metric_settings(environ: Any) -> tuple[str, float]:
     if value is None or not math.isfinite(value) or not lo <= value <= hi:
         raise ValueError(f"{ENV_OBSTACLE_FLOOR_RATIO_MAX}={raw_max!r} must be a number from {lo:g} to {hi:g}.")
     return metric, value
+
+
+def valid_floor_ratio_max(value: Any) -> bool:
+    """Whether ``value`` can be a floor ratio limit: a real, finite, positive number (not a bool or a string)."""
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(value)
+        and value > 0
+    )
 
 
 def _finite_or_none(value: Any) -> float | None:

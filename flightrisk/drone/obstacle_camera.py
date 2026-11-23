@@ -101,6 +101,7 @@ from flightrisk.drone.obstacle_sensor import (
     TELEMETRY_STATE,
     LatestFrame,
     SenseResult,
+    valid_floor_ratio_max,
 )
 from flightrisk.obs_log import log_event
 
@@ -272,6 +273,8 @@ class ForwardCameraSensor:
     ):
         if metric not in OBSTACLE_METRICS:
             raise ValueError(f"metric must be one of {OBSTACLE_METRICS}, got {metric!r}")
+        if not valid_floor_ratio_max(floor_ratio_max):
+            raise ValueError(f"floor_ratio_max must be a positive finite number, got {floor_ratio_max!r}")
         self._frames = frames
         self._runner = runner
         self.min_safe_depth = float(min_safe_depth)
@@ -445,19 +448,23 @@ class ForwardCameraSensor:
         return float(ratio), None
 
     def _log_metric(self, result: SenseResult, metric_detail: dict[str, Any]) -> None:
-        """Log the opt-in metric of one gate (``EVENT_OBSTACLE_METRIC``) and keep it for ``status``."""
-        with self._lock:
-            self._last_metric_value = metric_detail["floor_ratio"]
-            self._last_depth_state = metric_detail["depth_state"]
+        """Log the opt-in metric of one gate (``EVENT_OBSTACLE_METRIC``) and record its histogram.
+
+        ``_finish`` keeps the value for ``status``. ``device`` is the depth
+        model's compute device: the same frame can give a slightly different
+        map on another device, which matters for a limit this close to the data.
+        """
         ratio = metric_detail["floor_ratio"]
         log_event(
             logger, logging.INFO, EVENT_OBSTACLE_METRIC,
             f"{self.metric} {'none' if ratio is None else f'{ratio:.4f}'} against {self.floor_ratio_max:g}: "
             f"{metric_detail['depth_state']}",
             component="edge", drone_id=self.drone_id,
-            metric=self.metric, value=metric_detail["floor_ratio"], limit=self.floor_ratio_max,
+            metric=self.metric, value=ratio, limit=self.floor_ratio_max,
             depth_state=metric_detail["depth_state"], state=result.state, score=metric_detail["score"],
+            device=getattr(self._guard, "device_name", None),
         )
+        obs_events.obstacle_floor_ratio(ratio, depth_state=metric_detail["depth_state"])
 
     @staticmethod
     def _unusable_check(check: dict, depth_score: float) -> str | None:
@@ -646,10 +653,11 @@ class ForwardCameraSensor:
             self._last_state = result.state
             self._last_latency_ms = result.latency_ms
             self._last_reason = result.reason
-            if self.metric != OBSTACLE_METRIC_SCORE and DEPTH_STATE_KEY not in result.detail:
-                # A gate that did not judge a view (stale, timeout, error) has no metric value.
-                self._last_metric_value = None
-                self._last_depth_state = None
+            if self.metric != OBSTACLE_METRIC_SCORE:
+                # A gate that did not judge a view (stale, timeout, error) leaves no metric value.
+                judged = DEPTH_STATE_KEY in result.detail
+                self._last_metric_value = result.detail.get("floor_ratio") if judged else None
+                self._last_depth_state = result.detail.get(DEPTH_STATE_KEY) if judged else None
         # The score-to-threshold histogram is recorded only while the score decides.
         obs_events.obstacle_check(
             check, action=action, drone_id=self.drone_id,

@@ -156,18 +156,21 @@ const socket = io();
     // text and classes from the telemetry and event fields, and cope with any of them being absent.
     function roundMs(v) { return Math.round(v * 10) / 10; }
     // The opt-in depth metric (FLIGHTRISK_OBSTACLE_METRIC=floor_ratio) as a short note for the SENSE badge, with a
-    // sentence for its title; null for the default score or a drone that reports no metric.
+    // sentence for its title; null for the default score or a drone that reports no metric. Four decimals: the
+    // field margin around the default limit was only 0.0016.
     function depthMetricNote(d) {
         const cue = d && d.obstacle_person_cue;
         if (!cue || typeof cue !== 'object' || cue.depth_metric !== 'floor_ratio') return null;
-        const max = typeof cue.depth_metric_max === 'number' ? Math.round(cue.depth_metric_max * 1000) / 1000 : null;
+        const round4 = (v) => Math.round(v * 10000) / 10000;
+        const max = typeof cue.depth_metric_max === 'number' ? round4(cue.depth_metric_max) : null;
         let value;
         if (cue.depth_state === 'no_floor_reference') value = 'no floor';
-        else if (typeof cue.depth_metric_value === 'number') value = String(Math.round(cue.depth_metric_value * 1000) / 1000);
+        else if (typeof cue.depth_metric_value === 'number') value = String(round4(cue.depth_metric_value));
         else value = '--';
-        return { text: ', floor ratio ' + value + (max !== null ? ' / ' + max : ''),
+        return { text: ', floor ratio (unvalidated) ' + value + (max !== null ? ' / ' + max : ''),
             title: ' Depth metric: floor ratio (opt-in), blocked above ' + (max !== null ? max : 'its limit')
-                + ' and when the view has no floor reference. Its threshold is not validated indoors (H1).' };
+                + ' and when the view has no floor reference. Unvalidated: its threshold rests on 3 outdoor'
+                + ' recordings at one height, none indoors (H1).' };
     }
     // The SENSE badge of a drone card, or null when the drone reported no obstacle sensing mode.
     function senseBadge(d) {

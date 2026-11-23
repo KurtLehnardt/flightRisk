@@ -27,7 +27,10 @@ from typing import Any
 from flightrisk.drone.obstacle_sensor import (
     ENV_OBSTACLE_FLOOR_RATIO_MAX,
     ENV_OBSTACLE_METRIC,
+    ENV_OBSTACLE_SENSING,
+    FLOOR_RATIO_FIELD_BASIS,
     OBSTACLE_METRIC,
+    SENSING_ENV_OFF,
     obstacle_metric_settings,
 )
 from flightrisk.launcher import claude_uplink as uplink
@@ -502,9 +505,11 @@ def obstacle_metric_check(environ: Mapping[str, str]) -> Check | None:
     """The depth metric the edges started here inherit, or None for the default score.
 
     WARN while ``FLIGHTRISK_OBSTACLE_METRIC`` selects an opt-in metric: its
-    threshold was fitted on outdoor recordings at one height and is not
-    validated indoors. It never blocks the start. A value the edge would refuse
-    is a FAIL (``settings.validate`` reports it as an error too).
+    threshold rests on 3 outdoor recordings at one height and is not validated
+    indoors. It never blocks the start. INFO instead while the inherited
+    ``FLIGHTRISK_OBSTACLE_SENSING`` is ``off``, because no edge then uses it.
+    A value the edge would refuse is a FAIL (``settings.validate`` reports it
+    as an error too).
     """
     try:
         metric, ratio_max = obstacle_metric_settings(environ)
@@ -512,11 +517,19 @@ def obstacle_metric_check(environ: Mapping[str, str]) -> Check | None:
         return Check(OBSTACLE_METRIC_CHECK, FAIL, f"{exc} The edges would refuse to start.")
     if metric == OBSTACLE_METRIC:
         return None
+    data = {"metric": metric, "floor_ratio_max": ratio_max}
+    if (environ.get(ENV_OBSTACLE_SENSING) or "").strip().lower() == SENSING_ENV_OFF:
+        return Check(
+            OBSTACLE_METRIC_CHECK, INFO,
+            f"{ENV_OBSTACLE_METRIC}={metric} is set but not used: {ENV_OBSTACLE_SENSING}=off, so the edges started "
+            f"here fly with no obstacle sensing at all",
+            data,
+        )
     return Check(
         OBSTACLE_METRIC_CHECK, WARN,
-        f"{OBSTACLE_METRIC_WARNING}. {ENV_OBSTACLE_METRIC}={metric}: the edges started here block a step when the "
-        f"centre's floor ratio is above {ratio_max:g} ({ENV_OBSTACLE_FLOOR_RATIO_MAX}) or the view has no floor "
-        f"reference. Refit it at flight height for this site (docs/obstacle-sensing.md), and keep an observer at "
-        f"LAND ALL",
-        {"metric": metric, "floor_ratio_max": ratio_max},
+        f"{OBSTACLE_METRIC_WARNING}: fitted on {FLOOR_RATIO_FIELD_BASIS}. {ENV_OBSTACLE_METRIC}={metric}: the "
+        f"edges started here block a step when the centre's floor ratio is above {ratio_max:g} "
+        f"({ENV_OBSTACLE_FLOOR_RATIO_MAX}) or the view has no floor reference. Refit it at flight height for this "
+        f"site (docs/obstacle-sensing.md), and keep an observer at LAND ALL",
+        data,
     )

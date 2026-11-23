@@ -22,6 +22,7 @@ from flightrisk.drone.obstacle import ObstacleGuard, centre_floor_ratio
 from flightrisk.drone.obstacle_camera import ForwardCameraSensor
 from flightrisk.drone.obstacle_sensor import (
     ACTION_NO_FLOOR_REFERENCE,
+    CUT_OBSTACLE,
     CUE_DEPTH,
     CUE_PERSON,
     DEPTH_METRIC_KEY,
@@ -34,12 +35,20 @@ from flightrisk.drone.obstacle_sensor import (
     ENV_OBSTACLE_FLOOR_RATIO_MAX,
     ENV_OBSTACLE_METRIC,
     ENV_OBSTACLE_SENSING,
+    EVENT_LANES_ENDED_SENSOR_DOWN,
+    EVENT_OBSTACLE_GATE,
     EVENT_OBSTACLE_METRIC,
+    EVENT_OBSTACLE_METRIC_UNVALIDATED,
+    EVENT_SETTING_NON_DEFAULT,
+    FLOOR_RATIO_FIELD_HIGHEST_CLEAR,
+    FLOOR_RATIO_FIELD_LOWEST_WALL,
+    FLOOR_RATIO_UNVALIDATED,
     OBSTACLE_FLOOR_RATIO_MAX,
     OBSTACLE_FLOOR_RATIO_MAX_RANGE,
     OBSTACLE_METRIC,
     OBSTACLE_METRIC_FLOOR_RATIO,
     OBSTACLE_METRIC_SCORE,
+    OBSTACLE_SENSOR_DOWN_S,
     PERSON_CUE_AGE_KEY,
     PERSON_CUE_BLOCKED,
     PERSON_CUE_DOWN_KEY,
@@ -47,13 +56,16 @@ from flightrisk.drone.obstacle_sensor import (
     REASON_STALE,
     REASON_TIMEOUT,
     TELEMETRY_PERSON_CUE,
+    TELEMETRY_SENSOR_OK,
     LatestFrame,
     depth_metric_fields,
     obstacle_metric_settings,
 )
 from flightrisk.launcher.commands import EdgeToken
+from flightrisk import obs_events, obs_metrics
 from flightrisk.launcher.preflight import (
     FAIL,
+    INFO,
     OBSTACLE_METRIC_CHECK,
     OBSTACLE_METRIC_WARNING,
     WARN,
@@ -67,6 +79,17 @@ from tests.test_fleet_dashboard_obstacle import _run as run_js
 from tests.test_fleet_dashboard_obstacle import _sensing
 from tests.test_launcher_preflight import _env as preflight_env
 from tests.test_obstacle_h6_fixes import _CueSensor, _executor
+from tests import test_lane_executor_obstacle as lane_tests
+from tests.test_lane_executor_obstacle import (
+    TimelineSensor,
+    assert_invariants,
+    events,
+    finished,
+    lane_moves,
+    lanes_of,
+    start,
+)
+from tests.lane_executor_support import wait_for
 from tests.test_review177_sensor import KINDS, _StubCameraSensor, _wire
 
 SIZE = 256
@@ -80,16 +103,17 @@ SCORE_RESULT_KEYS = {
 SCORE_DETAIL_KEYS = {"depth_action", "depth_confidence", "center_stat", "min_safe_depth"}
 
 
-def make_map(centre=0.7, floor=1.0, top=0.1, rest=0.2, left=None, size=SIZE):
-    """A raw inverse-depth map with the given centre region, floor band, top band and, optionally, left side."""
-    m = np.full((size, size), rest, dtype=np.float32)
-    band = int(round(size * 0.2))
+def make_map(centre=0.7, floor=1.0, top=0.1, rest=0.2, left=None, size=SIZE, width=None):
+    """A raw inverse-depth map (``size`` rows, ``width`` columns) with the given centre, floor band, top band and left side."""
+    h, w = size, width or size
+    m = np.full((h, w), rest, dtype=np.float32)
+    band = int(round(h * 0.2))
     m[:band, :] = top
     if left is not None:
-        m[size // 3:2 * size // 3, : size // 3] = left
-    m[size // 3:2 * size // 3, size // 3:2 * size // 3] = centre
-    col = int(size * 0.2)
-    m[size - band:, col:size - col] = floor
+        m[h // 3:2 * h // 3, : w // 3] = left
+    m[h // 3:2 * h // 3, w // 3:2 * w // 3] = centre
+    col = int(w * 0.2)
+    m[h - band:, col:w - col] = floor
     return m
 
 
@@ -144,6 +168,19 @@ def checks(monkeypatch):
     return seen
 
 
+@pytest.fixture
+def ratios(monkeypatch):
+    """The floor ratio histogram's recordings."""
+    seen = []
+
+    class Recorder:
+        def record(self, value, attributes=None):
+            seen.append((value, dict(attributes or {})))
+
+    monkeypatch.setattr(obs_events.M, "obstacle_floor_ratio", Recorder())
+    return seen
+
+
 def _after():
     return time.monotonic() - 1.0
 
@@ -175,9 +212,25 @@ def _runner(detections=()):
 class TestDefaultUnchanged:
     def test_the_defaults(self):
         assert OBSTACLE_METRIC == OBSTACLE_METRIC_SCORE == "score"
-        assert OBSTACLE_FLOOR_RATIO_MAX == 0.80
-        assert OBSTACLE_FLOOR_RATIO_MAX_RANGE == (0.5, 1.5)
+        assert OBSTACLE_FLOOR_RATIO_MAX == 0.7986
+        assert OBSTACLE_FLOOR_RATIO_MAX_RANGE == (0.5, 1.0)
         assert ObstacleGuard.__init__.__defaults__[-2:] == (OBSTACLE_METRIC_SCORE, OBSTACLE_FLOOR_RATIO_MAX)
+        assert ForwardCameraSensor.__init__.__kwdefaults__["floor_ratio_max"] == OBSTACLE_FLOOR_RATIO_MAX
+        assert FLOOR_RATIO_UNVALIDATED == "floor_ratio is unvalidated: 3 outdoor recordings at one height"
+
+    def test_the_default_limit_lies_strictly_between_the_recorded_clear_and_wall_values(self):
+        """Review of #206: a limit above the lowest wall value would have called that wall clear."""
+        assert FLOOR_RATIO_FIELD_HIGHEST_CLEAR == 0.7978
+        assert FLOOR_RATIO_FIELD_LOWEST_WALL == 0.7994
+        assert FLOOR_RATIO_FIELD_HIGHEST_CLEAR < OBSTACLE_FLOOR_RATIO_MAX < FLOOR_RATIO_FIELD_LOWEST_WALL
+        assert OBSTACLE_FLOOR_RATIO_MAX == pytest.approx(
+            (FLOOR_RATIO_FIELD_HIGHEST_CLEAR + FLOOR_RATIO_FIELD_LOWEST_WALL) / 2, abs=1e-12)
+        assert FLOOR_RATIO_FIELD_LOWEST_WALL - FLOOR_RATIO_FIELD_HIGHEST_CLEAR == pytest.approx(0.0016, abs=1e-12)
+        # The replay's reading at the default limit: the highest clear value is clear, the lowest wall blocked.
+        assert replay.is_clear(FLOOR_RATIO_FIELD_HIGHEST_CLEAR, OBSTACLE_FLOOR_RATIO_MAX)
+        assert not replay.is_clear(FLOOR_RATIO_FIELD_LOWEST_WALL, OBSTACLE_FLOOR_RATIO_MAX)
+        lo, hi = OBSTACLE_FLOOR_RATIO_MAX_RANGE
+        assert lo < OBSTACLE_FLOOR_RATIO_MAX < hi
 
     @pytest.mark.parametrize("depth", [RATIO_CLEAR, RATIO_BLOCKED, SCORE_CLEAR_RATIO_BLOCKED, NO_FLOOR])
     def test_a_default_guard_result_has_the_old_keys_and_the_scores_decision(self, model, depth):
@@ -300,7 +353,7 @@ class TestGuardFloorRatio:
         monkeypatch.setattr("flightrisk.drone.midas_model.load_midas_small", no_model)
         with pytest.raises(ValueError):
             ObstacleGuard(metric="ratio")
-        for bad in (0.0, -1.0, float("nan"), float("inf"), True):
+        for bad in (0.0, -1.0, float("nan"), float("inf"), True, "0.8", None):
             with pytest.raises(ValueError):
                 ObstacleGuard(metric=OBSTACLE_METRIC_FLOOR_RATIO, floor_ratio_max=bad)
 
@@ -314,7 +367,7 @@ class TestSensorFloorRatio:
     def _floor_sensor(self, frames, **kw):
         return _sensor(frames, metric=OBSTACLE_METRIC_FLOOR_RATIO, **kw)
 
-    def test_below_the_limit_is_clear(self, model, frames, checks, caplog):
+    def test_below_the_limit_is_clear(self, model, frames, checks, caplog, ratios):
         model.depth = RATIO_CLEAR
         sensor = self._floor_sensor(frames, runner=_runner())
         with caplog.at_level(logging.INFO, logger="flightrisk.drone.obstacle_camera"):
@@ -332,6 +385,9 @@ class TestSensorFloorRatio:
         assert event.fr_fields["value"] == result.depth_score
         assert event.fr_fields["limit"] == OBSTACLE_FLOOR_RATIO_MAX
         assert event.fr_fields["state"] == "clear" and event.fr_fields["depth_state"] == DEPTH_STATE_CLEAR
+        assert event.fr_fields["device"] == sensor._guard.device_name
+        assert event.fr_fields["device"] in ("mps", "cpu", "cuda")
+        assert ratios == [(pytest.approx(0.7, abs=1e-6), {"depth_state": "clear"})]
 
     def test_above_the_limit_is_blocked_with_the_cut_reason_obstacle(self, model, frames, checks):
         model.depth = SCORE_CLEAR_RATIO_BLOCKED
@@ -346,7 +402,7 @@ class TestSensorFloorRatio:
         result = self._floor_sensor(frames, floor_ratio_max=0.6).sense(_after())
         assert result.blocked and result.detail["floor_ratio_max"] == 0.6
 
-    def test_no_floor_reference_is_blocked_never_clear_or_unavailable(self, model, frames, checks, caplog):
+    def test_no_floor_reference_is_blocked_never_clear_or_unavailable(self, model, frames, checks, caplog, ratios):
         model.depth = NO_FLOOR
         sensor = self._floor_sensor(frames, runner=_runner())
         with caplog.at_level(logging.INFO, logger="flightrisk.drone.obstacle_camera"):
@@ -361,6 +417,7 @@ class TestSensorFloorRatio:
         events = [r for r in caplog.records if getattr(r, "fr_event", None) == EVENT_OBSTACLE_METRIC]
         assert events[-1].fr_fields["depth_state"] == DEPTH_STATE_NO_FLOOR_REFERENCE
         assert events[-1].fr_fields["state"] == "blocked"
+        assert ratios == []  # counted as the action no_floor_reference instead
 
     def test_a_close_person_still_blocks_and_names_the_person(self, model, frames):
         from types import SimpleNamespace
@@ -440,17 +497,22 @@ class TestSensorFloorRatio:
         sensor.sense(_after())
         assert sensor.status()[DEPTH_METRIC_VALUE_KEY] is None
         assert sensor.status()[DEPTH_STATE_KEY] == DEPTH_STATE_NO_FLOOR_REFERENCE
-        # A gate that could not look leaves no value behind.
+        # A gate that could not look (no frame captured after its settle time) leaves no value behind.
         model.depth = RATIO_CLEAR
         sensor.sense(_after())
-        holder_without_frame = LatestFrame()
-        sensor._frames = holder_without_frame
-        assert sensor.sense(_after()).unavailable
+        assert sensor.status()[DEPTH_METRIC_VALUE_KEY] is not None
+        stale = sensor.sense(time.monotonic() + 10.0, timeout_s=0.1)
+        assert stale.unavailable and stale.reason == REASON_STALE
         assert sensor.status()[DEPTH_METRIC_VALUE_KEY] is None and sensor.status()[DEPTH_STATE_KEY] is None
 
     def test_an_unknown_metric_is_refused(self, frames):
         with pytest.raises(ValueError):
             _sensor(frames, guard=object(), metric="ratio")
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), 0.0, -0.8, "0.8", True, None])
+    def test_a_bad_limit_is_refused(self, frames, bad):
+        with pytest.raises(ValueError):
+            _sensor(frames, guard=object(), metric=OBSTACLE_METRIC_FLOOR_RATIO, floor_ratio_max=bad)
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +535,126 @@ class TestReplayParity:
         # The replay's reading of the same value and the live decision agree.
         assert replay.is_clear(offline, OBSTACLE_FLOOR_RATIO_MAX) == live.clear
 
+    @staticmethod
+    def _offline(model, depth):
+        model.depth = depth
+        guard = replay.build_guard(0.35)
+        return replay.frame_metrics(guard.check_path(_view()), replay.depth_map_of(guard))
+
+    def test_a_192_by_256_map_gives_the_same_ratio(self, model, frames):
+        depth = make_map(centre=0.74, floor=0.95, top=0.08, rest=0.27, size=192, width=256)
+        offline = self._offline(model, depth)["centre_floor_ratio"]
+        assert offline == centre_floor_ratio(depth)
+        live = _sensor(frames, metric=OBSTACLE_METRIC_FLOOR_RATIO).sense(_after())
+        assert live.depth_score == offline and live.clear == replay.is_clear(offline, OBSTACLE_FLOOR_RATIO_MAX)
+
+    def test_a_ratio_exactly_at_the_limit_is_clear_in_both(self, model, frames):
+        depth = make_map(centre=0.7891, floor=0.9883, top=0.1, rest=0.25)
+        offline = self._offline(model, depth)["centre_floor_ratio"]
+        at_limit = _sensor(frames, metric=OBSTACLE_METRIC_FLOOR_RATIO, floor_ratio_max=offline).sense(_after())
+        assert at_limit.clear and replay.is_clear(offline, offline)
+        just_below = float(np.nextafter(offline, 0.0))
+        under = _sensor(frames, metric=OBSTACLE_METRIC_FLOOR_RATIO, floor_ratio_max=just_below).sense(_after())
+        assert under.blocked and not replay.is_clear(offline, just_below)
+        assert under.depth_score == at_limit.depth_score == offline
+
+    def test_a_degenerate_map_is_unavailable_live_but_still_has_a_ratio_offline(self, model, frames):
+        """The intended difference: the replay reports a ratio for every map; the gate never judges a degenerate one."""
+        depth = np.full((SIZE, SIZE), 0.3, dtype=np.float32)
+        offline = self._offline(model, depth)
+        assert offline["score"] is None
+        assert offline["centre_floor_ratio"] == pytest.approx(1.0)
+        live = _sensor(frames, metric=OBSTACLE_METRIC_FLOOR_RATIO).sense(_after())
+        assert live.unavailable and live.reason == REASON_ERROR
+        assert live.depth_score is None and "floor_ratio" not in live.detail
+
+
+# ---------------------------------------------------------------------------
+# The replay report and the histogram name the things a limit this close depends on
+# ---------------------------------------------------------------------------
+
+
+class TestDeviceAndHistogram:
+    def test_the_guard_names_its_compute_device(self, model):
+        guard = _guard(OBSTACLE_METRIC_FLOOR_RATIO)
+        assert guard.device_name == guard._device.type
+        assert guard.device_name in ("mps", "cpu", "cuda")
+
+    def test_the_replay_report_names_the_compute_device(self, model, tmp_path):
+        from tests.test_obstacle_metrics import write_recording
+
+        write_recording(tmp_path / "a", [30, 40, 50])
+        guard = replay.build_guard(0.35)
+        out = __import__("io").StringIO()
+        report = replay.run_metrics_report([("a", str(tmp_path / "a"))], 1, 0.35, guard=guard, out=out)
+        assert report["device"] == guard.device_name
+        assert f"Depth model device: {guard.device_name}" in out.getvalue()
+        assert "replay one recording on both laptops" in out.getvalue()
+
+    def test_a_guard_without_a_device_is_reported_as_unknown(self, tmp_path):
+        from tests.test_obstacle_metrics import FakeGuard, write_recording
+
+        write_recording(tmp_path / "a", [30, 40, 50])
+        report = replay.run_metrics_report([("a", str(tmp_path / "a"))], 1, 0.35, guard=FakeGuard(),
+                                           out=__import__("io").StringIO())
+        assert report["device"] == "unknown"
+
+    def test_the_histogram_has_fine_buckets_around_the_default_limit(self):
+        buckets = obs_metrics.HISTOGRAM_BUCKETS["flightrisk.obstacle.floor_ratio"]
+        assert buckets == sorted(buckets)
+        assert OBSTACLE_FLOOR_RATIO_MAX in buckets
+        assert [b for b in buckets if FLOOR_RATIO_FIELD_HIGHEST_CLEAR - 0.01 <= b <= FLOOR_RATIO_FIELD_LOWEST_WALL + 0.01]
+
+    def test_the_histogram_skips_what_is_not_a_finite_ratio(self, ratios):
+        for value in (None, float("nan"), float("inf"), True, "0.7"):
+            obs_events.obstacle_floor_ratio(value, depth_state="blocked")
+        obs_events.obstacle_floor_ratio(0.81, depth_state="blocked")
+        assert ratios == [(0.81, {"depth_state": "blocked"})]
+
+
+# ---------------------------------------------------------------------------
+# On the lane executor: views without a floor reference are obstacles, never a sensor that is down
+# ---------------------------------------------------------------------------
+
+
+#: The lane executor rig of ``tests/test_lane_executor_obstacle.py``, as a fixture of this module.
+rigs = lane_tests.rigs
+
+
+class _ReplayedSensor(TimelineSensor):
+    """Returns a result the real camera sensor gave, each call taking ``call_s`` on the fake clock."""
+
+    def __init__(self, timeline, pose_provider, clock, call_s, result):
+        super().__init__(timeline, pose_provider)
+        self.clock, self.call_s, self.result = clock, call_s, result
+
+    def sense(self, after, timeout_s=2.0):
+        self.clock.advance(self.call_s)
+        self.queue(self.result)
+        return super().sense(after, timeout_s)
+
+
+def test_views_without_a_floor_reference_for_longer_than_sensor_down_cut_lanes_as_obstacles(model, frames, rigs):
+    model.depth = NO_FLOOR
+    no_floor = _sensor(frames, metric=OBSTACLE_METRIC_FLOOR_RATIO).sense(_after())
+    assert no_floor.blocked and no_floor.detail["depth_state"] == DEPTH_STATE_NO_FLOOR_REFERENCE
+
+    rig = rigs(sensor=lambda timeline, envelope, clock: _ReplayedSensor(
+        timeline, envelope.pose_snapshot, clock, 4.0, no_floor))
+    lanes = lanes_of(("forward", 200), ("right", 100), ("back", 200), ("right", 100), ("forward", 200))
+    started = rig.clock()
+    start(rig, lanes)
+    assert wait_for(lambda: finished(rig)), rig.timeline
+    gates = events(rig, EVENT_OBSTACLE_GATE)
+    assert len(gates) >= 3 and all(g["state"] == "blocked" for g in gates)
+    assert rig.clock() - started > OBSTACLE_SENSOR_DOWN_S
+    cuts = rig.executor.obstacle_cuts
+    assert len(cuts) >= 3 and all(c.reason == CUT_OBSTACLE for c in cuts)
+    assert events(rig, EVENT_LANES_ENDED_SENSOR_DOWN) == []
+    assert rig.executor.obstacle_status()[TELEMETRY_SENSOR_OK] is True
+    assert lane_moves(rig) == []
+    assert_invariants(rig)
+
 
 # ---------------------------------------------------------------------------
 # Environment validation: the edge and the launcher
@@ -484,7 +666,7 @@ GOOD = [
     ({ENV_OBSTACLE_METRIC: "score"}, (OBSTACLE_METRIC_SCORE, OBSTACLE_FLOOR_RATIO_MAX)),
     ({ENV_OBSTACLE_METRIC: " Floor_Ratio "}, (OBSTACLE_METRIC_FLOOR_RATIO, OBSTACLE_FLOOR_RATIO_MAX)),
     ({ENV_OBSTACLE_METRIC: "floor_ratio", ENV_OBSTACLE_FLOOR_RATIO_MAX: "0.5"}, (OBSTACLE_METRIC_FLOOR_RATIO, 0.5)),
-    ({ENV_OBSTACLE_METRIC: "floor_ratio", ENV_OBSTACLE_FLOOR_RATIO_MAX: "1.5"}, (OBSTACLE_METRIC_FLOOR_RATIO, 1.5)),
+    ({ENV_OBSTACLE_METRIC: "floor_ratio", ENV_OBSTACLE_FLOOR_RATIO_MAX: "1.0"}, (OBSTACLE_METRIC_FLOOR_RATIO, 1.0)),
     ({ENV_OBSTACLE_FLOOR_RATIO_MAX: "7.978e-1"}, (OBSTACLE_METRIC_SCORE, 0.7978)),
 ]
 BAD = [
@@ -492,7 +674,8 @@ BAD = [
     {ENV_OBSTACLE_METRIC: "floor-ratio"},
     {ENV_OBSTACLE_METRIC: "centre_floor_ratio"},
     {ENV_OBSTACLE_FLOOR_RATIO_MAX: "0.49"},
-    {ENV_OBSTACLE_FLOOR_RATIO_MAX: "1.51"},
+    {ENV_OBSTACLE_FLOOR_RATIO_MAX: "1.01"},
+    {ENV_OBSTACLE_FLOOR_RATIO_MAX: "1.5"},
     {ENV_OBSTACLE_FLOOR_RATIO_MAX: "0"},
     {ENV_OBSTACLE_FLOOR_RATIO_MAX: "-0.8"},
     {ENV_OBSTACLE_FLOOR_RATIO_MAX: "0.8_0"},
@@ -538,6 +721,31 @@ class TestEnvironment:
         wiring, log = _wire("tello", {ENV_OBSTACLE_METRIC: "floor_ratio"})
         assert wiring.sensor.kwargs["floor_ratio_max"] == OBSTACLE_FLOOR_RATIO_MAX
         assert log.settings() == {ENV_OBSTACLE_METRIC: OBSTACLE_METRIC_FLOOR_RATIO}
+
+    def test_the_edge_warns_once_at_startup_that_floor_ratio_is_unvalidated(self, monkeypatch):
+        monkeypatch.setattr(obstacle_camera, "ForwardCameraSensor", _StubCameraSensor)
+        _wiring, log = _wire("tello", {ENV_OBSTACLE_METRIC: "floor_ratio"})
+        (warning,) = [(lv, f) for lv, e, f in log.records if e == EVENT_OBSTACLE_METRIC_UNVALIDATED]
+        assert warning[0] == "warning"
+        assert warning[1]["detail"].startswith(FLOOR_RATIO_UNVALIDATED)
+        assert warning[1]["floor_ratio_max"] == OBSTACLE_FLOOR_RATIO_MAX
+        assert "no effect" not in warning[1]["detail"]
+        _wiring, log = _wire("tello", {ENV_OBSTACLE_METRIC: "floor_ratio", ENV_OBSTACLE_SENSING: "off"})
+        (warning,) = [f for lv, e, f in log.records if e == EVENT_OBSTACLE_METRIC_UNVALIDATED]
+        assert "no effect while obstacle sensing is off" in warning["detail"]
+        for environ in ({}, {ENV_OBSTACLE_METRIC: "score"}, {ENV_OBSTACLE_FLOOR_RATIO_MAX: "0.9"}):
+            _wiring, log = _wire("tello", environ)
+            assert not [e for _lv, e, _f in log.records if e == EVENT_OBSTACLE_METRIC_UNVALIDATED]
+
+    def test_a_limit_set_under_the_score_is_named_as_having_no_effect(self, monkeypatch):
+        monkeypatch.setattr(obstacle_camera, "ForwardCameraSensor", _StubCameraSensor)
+        _wiring, log = _wire("tello", {ENV_OBSTACLE_FLOOR_RATIO_MAX: "0.9"})
+        (fields,) = [f for _lv, e, f in log.records if e == EVENT_SETTING_NON_DEFAULT]
+        assert fields["variable"] == ENV_OBSTACLE_FLOOR_RATIO_MAX
+        assert "no effect while FLIGHTRISK_OBSTACLE_METRIC is 'score'" in fields["detail"]
+        _wiring, log = _wire("tello", {ENV_OBSTACLE_METRIC: "floor_ratio", ENV_OBSTACLE_FLOOR_RATIO_MAX: "0.9"})
+        details = [f["detail"] for _lv, e, f in log.records if e == EVENT_SETTING_NON_DEFAULT]
+        assert len(details) == 2 and not any("no effect" in d for d in details)
 
     @pytest.mark.parametrize("environ", BAD)
     def test_the_launcher_refuses_what_the_edge_refuses(self, environ):
@@ -629,6 +837,7 @@ class TestLauncherWarning:
         (row,) = [c for c in checks if c.name == OBSTACLE_METRIC_CHECK]
         assert row.status == WARN
         assert row.detail.startswith("Opt-in metric; threshold not validated indoors (H1)")
+        assert "3 outdoor recordings at one height" in row.detail
         assert OBSTACLE_METRIC_WARNING == "Opt-in metric; threshold not validated indoors (H1)"
         assert "0.85" in row.detail and "LAND ALL" in row.detail
         assert row.data == {"metric": "floor_ratio", "floor_ratio_max": 0.85}
@@ -645,6 +854,12 @@ class TestLauncherWarning:
                                preflight_env(environ={ENV_OBSTACLE_METRIC: "floor_ratio"}), probe_drones=False)
         assert not [c for c in checks if c.name == OBSTACLE_METRIC_CHECK]
 
+    def test_sensing_off_makes_it_info(self):
+        env = preflight_env(environ={ENV_OBSTACLE_METRIC: "floor_ratio", ENV_OBSTACLE_SENSING: " OFF "})
+        checks = run_preflight(LauncherSettings(), EdgeToken(None, None), env, probe_drones=False)
+        (row,) = [c for c in checks if c.name == OBSTACLE_METRIC_CHECK]
+        assert row.status == INFO and "not used" in row.detail
+
     def test_a_value_the_edge_would_refuse_fails(self):
         row = obstacle_metric_check({ENV_OBSTACLE_METRIC: "ratio"})
         assert row.status == FAIL and ENV_OBSTACLE_METRIC in row.detail
@@ -659,20 +874,22 @@ class TestLauncherWarning:
 class TestDashboardNote:
     def test_the_sense_badge_names_the_opt_in_metric(self, tmp_path):
         cue = {"person_cue_down": False, "detection_age_s": 0.4}
-        value, no_floor, stale, default = run_js(tmp_path, [
-            ("senseBadge", [_sensing(obstacle_person_cue={**cue, "depth_metric": "floor_ratio",
-                                                          "depth_metric_value": 0.71234, "depth_metric_max": 0.8,
+        metric = {**cue, "depth_metric": "floor_ratio", "depth_metric_max": OBSTACLE_FLOOR_RATIO_MAX}
+        value, near, no_floor, stale, default = run_js(tmp_path, [
+            ("senseBadge", [_sensing(obstacle_person_cue={**metric, "depth_metric_value": 0.712,
+                                                          "depth_state": "clear"})]),
+            ("senseBadge", [_sensing(obstacle_person_cue={**metric, "depth_metric_value": 0.79834,
                                                           "depth_state": "clear"})]),
             ("senseBadge", [_sensing(obstacle_state="blocked", obstacle_person_cue={
-                **cue, "depth_metric": "floor_ratio", "depth_metric_value": None, "depth_metric_max": 0.8,
-                "depth_state": "no_floor_reference"})]),
+                **metric, "depth_metric_value": None, "depth_state": "no_floor_reference"})]),
             ("senseBadge", [_sensing(obstacle_sensor_ok=False, obstacle_person_cue={
-                **cue, "depth_metric": "floor_ratio", "depth_metric_value": None, "depth_metric_max": 0.8,
-                "depth_state": None})]),
+                **metric, "depth_metric_value": None, "depth_state": None})]),
             ("senseBadge", [_sensing(obstacle_person_cue=cue)]),
         ])
-        assert value["text"] == "SENSE ok 220 ms, floor ratio 0.712 / 0.8"
-        assert "not validated indoors (H1)" in value["title"]
-        assert no_floor["text"] == "SENSE ok 220 ms, floor ratio no floor / 0.8"
-        assert stale["text"] == "SENSE STALE, floor ratio -- / 0.8"
+        assert value["text"] == "SENSE ok 220 ms, floor ratio (unvalidated) 0.712 / 0.7986"
+        assert "3 outdoor recordings at one height" in value["title"]
+        # Four decimals: three would show 0.798 for values on both sides of the limit.
+        assert near["text"] == "SENSE ok 220 ms, floor ratio (unvalidated) 0.7983 / 0.7986"
+        assert no_floor["text"] == "SENSE ok 220 ms, floor ratio (unvalidated) no floor / 0.7986"
+        assert stale["text"] == "SENSE STALE, floor ratio (unvalidated) -- / 0.7986"
         assert default == {"text": "SENSE ok 220 ms", "cls": "", "title": "The obstacle sensor works."}

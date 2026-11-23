@@ -18,6 +18,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import logging
+import math
 import threading
 import time
 from collections.abc import Mapping
@@ -419,6 +420,18 @@ def obstacle_check(check: Mapping[str, Any] | None, *, action: str | None = None
         return
     flight_safety("obstacle", reason=act, drone_id=drone_id, center_depth=depth, margin=margin,
                   confidence=(check or {}).get("confidence"), waypoint=waypoint, retry=retry)
+
+
+@_safe
+def obstacle_floor_ratio(value: float | None, *, depth_state: str | None = None) -> None:
+    """One gate's floor ratio under the opt-in ``floor_ratio`` obstacle metric (``flightrisk_obstacle_floor_ratio``).
+
+    A view without a floor reference (``value`` None) is not recorded here; it is counted in
+    ``flightrisk_obstacle_checks`` as the action ``no_floor_reference``.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return
+    M.obstacle_floor_ratio.record(max(0.0, float(value)), {"depth_state": safe_token(depth_state or "unknown")})
 
 
 # ---------------------------------------------------------------------------

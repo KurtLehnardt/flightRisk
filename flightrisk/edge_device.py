@@ -135,11 +135,14 @@ from flightrisk.drone.obstacle_sensor import (
     ENV_OBSTACLE_SETTLE_S,
     ENV_OBSTACLE_STEP_CM,
     ENV_OBSTACLE_TURN,
+    EVENT_OBSTACLE_METRIC_UNVALIDATED,
     EVENT_SETTING_NON_DEFAULT,
+    FLOOR_RATIO_UNVALIDATED,
     MAX_DECODE_LAG_RANGE_S,
     MAX_DECODE_LAG_S,
     OBSTACLE_FLOOR_RATIO_MAX,
     OBSTACLE_METRIC,
+    OBSTACLE_METRIC_FLOOR_RATIO,
     OBSTACLE_MIN_SAFE_DEPTH,
     OBSTACLE_MIN_SAFE_DEPTH_RANGE,
     OBSTACLE_PERSON_FRACTION,
@@ -1879,11 +1882,28 @@ class ObstacleSettings:
         ]
 
     def warn_non_default(self, log: StructuredLogger, drone_id: str | None) -> None:
-        """Log every setting that is not its default once, at warning level, by name and value."""
+        """Log every setting that is not its default once, at warning level, by name and value.
+
+        While the opt-in ``floor_ratio`` metric is selected it also logs
+        ``edge_obstacle_metric_unvalidated`` once, at warning level. A floor
+        ratio limit set while the score decides is named as having no effect.
+        """
         for name, value, default in self.non_default:
+            detail = f"{name}={value!r} is not the default ({default!r})"
+            if name == ENV_OBSTACLE_FLOOR_RATIO_MAX and self.metric != OBSTACLE_METRIC_FLOOR_RATIO:
+                detail += f"; it has no effect while {ENV_OBSTACLE_METRIC} is {self.metric!r}"
             log.warning(
                 EVENT_SETTING_NON_DEFAULT, drone_id=drone_id, variable=name, value=value, default=default,
-                detail=f"{name}={value!r} is not the default ({default!r})",
+                detail=detail,
+            )
+        if self.metric == OBSTACLE_METRIC_FLOOR_RATIO:
+            unused = "; it has no effect while obstacle sensing is off" if self.mode == SENSING_ENV_OFF else ""
+            log.warning(
+                EVENT_OBSTACLE_METRIC_UNVALIDATED, drone_id=drone_id, metric=self.metric,
+                floor_ratio_max=self.floor_ratio_max,
+                detail=f"{FLOOR_RATIO_UNVALIDATED}. The depth cue blocks above {self.floor_ratio_max:g} and without "
+                       f"a floor reference; refit the limit at flight height for this site and keep an observer at "
+                       f"LAND ALL{unused}",
             )
 
 

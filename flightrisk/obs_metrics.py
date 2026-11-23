@@ -53,6 +53,9 @@ COUNT_BUCKETS = [0, 1, 2, 3, 5, 8, 13, 20, 50]
 RESPONSE_BUCKETS_S = [1, 2, 5, 10, 20, 30, 60, 120, 300, 600]
 #: Buckets for the obstacle depth ratio (centre depth / min_safe_depth; above 1 is blocked).
 DEPTH_RATIO_BUCKETS = [0.25, 0.5, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0, 3.0]
+#: Buckets for the opt-in floor ratio (centre p90 over the floor band's median). They are fine around
+#: the default limit 0.7986, whose field margin was only 0.0016.
+FLOOR_RATIO_BUCKETS = [0.5, 0.6, 0.7, 0.75, 0.78, 0.79, 0.795, 0.7986, 0.802, 0.81, 0.85, 0.9, 1.0, 1.25, 1.5, 2.0]
 
 #: Histogram name -> bucket boundaries, applied as SDK views in telemetry.py.
 HISTOGRAM_BUCKETS: dict[str, list[float]] = {
@@ -69,6 +72,7 @@ HISTOGRAM_BUCKETS: dict[str, list[float]] = {
     "flightrisk.detections.per_frame": COUNT_BUCKETS,
     "flightrisk.alert.response_s": RESPONSE_BUCKETS_S,
     "flightrisk.obstacle.depth_ratio": DEPTH_RATIO_BUCKETS,
+    "flightrisk.obstacle.floor_ratio": FLOOR_RATIO_BUCKETS,
 }
 
 _STARTED = time.time()
@@ -195,6 +199,7 @@ land_duration = _hist("flightrisk.drone.land_duration_ms", "ms", "Land command d
 flight_safety_events = _counter("flightrisk.flight_safety.events", description="Flight-safety events by kind and reason (battery, link loss, watchdog land, geofence, obstacle, land failures)")
 obstacle_checks = _counter("flightrisk.obstacle.checks", description="Obstacle guard checks by action (clear, go_left, go_right, reverse, unavailable, no_frame)")
 obstacle_depth_ratio = _hist("flightrisk.obstacle.depth_ratio", description="Obstacle guard centre depth over min_safe_depth (relative MiDaS units; above 1 the path is blocked)")
+obstacle_floor_ratio = _hist("flightrisk.obstacle.floor_ratio", description="Opt-in floor ratio of each judged view by depth_state (only under FLIGHTRISK_OBSTACLE_METRIC=floor_ratio; unvalidated)")
 
 # --- Drone communication and fleet link -------------------------------------
 comm_messages = _counter("flightrisk.comm.messages", description="Ground/edge messages by side, direction, type and drone")

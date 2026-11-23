@@ -168,7 +168,9 @@ All are environment variables read by `python -m flightrisk.edge_device`. Every 
 | `FLIGHTRISK_OBSTACLE_SENSING` | `required` | `required` or `off` | `required` builds the sensor and refuses to fly without it. `off` is the loud override above |
 | `FLIGHTRISK_OBSTACLE_STEP_CM` | 50 | 20 to 100 for a Tello or fake edge; a MAVLink camera edge defaults to 500 and accepts the field move limits | Longest sensed step in centimetres |
 | `FLIGHTRISK_OBSTACLE_TURN` | `1` | `0` or `1` (`true`, `false`, `yes`, `no`, `on`, `off` also read) | `0` is the kill switch for nose-first turns; lanes then report `forward_only` and sense only forward moves |
-| `FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH` | 0.35 | 0.05 to 0.9 | Depth score above which the centre counts as blocked. **Uncalibrated** until H1 is done |
+| `FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH` | 0.35 | 0.05 to 0.9 | Depth score above which the centre counts as blocked, under the default `score` metric. Under `FLIGHTRISK_OBSTACLE_METRIC=floor_ratio` it no longer decides the centre. **Uncalibrated** until H1 is done |
+| `FLIGHTRISK_OBSTACLE_METRIC` | `score` | `score` or `floor_ratio` | What decides the depth cue. `floor_ratio` is opt-in and **unvalidated: 3 outdoor recordings at one height** (see "Opt-in floor ratio metric (unvalidated)") |
+| `FLIGHTRISK_OBSTACLE_FLOOR_RATIO_MAX` | 0.7986 | 0.5 to 1.0 | Under `floor_ratio`, the floor ratio above which the centre counts as blocked. **Unvalidated**; refit it per height and site |
 | `FLIGHTRISK_OBSTACLE_PERSON_FRACTION` | 0.55 | 0.2 to 0.9 | Person box height, as a fraction of the frame height, above which a centred person blocks the step |
 | `FLIGHTRISK_OBSTACLE_SETTLE_S` | 0.3 | 0.1 to 3.0 | Seconds after the end of a move or turn before a frame's capture can count. **Must be at least the p95 video latency measured in H5** (capture to arrival). A longer settle lengthens each sense call's 2.0 s budget by the difference |
 | `FLIGHTRISK_MAX_DECODE_LAG_S` | 0.3 | 0.1 to 2.0 | Seconds after the first datagram of a frame's video data within which the bound Tello decoder (`--tello-local-ip`) must have decoded it; a frame decoded later is stale (`decoder backlog`) and never judged. Raise it only if H5 shows the ZBook's decoder steadily just above 0.3 s with frames that are otherwise current; every frame it lets through is that much older. The recorder (`scripts/obstacle_record.py`) reads it too and writes it to `meta.json` |
@@ -208,7 +210,7 @@ The default depth threshold, 0.35, is the old single-drone guard's value. It has
 
 ## Comparing obstacle metrics offline (metrics report)
 
-Field recordings show that no single threshold on the current score separates a wall at 150 cm from a clear yard. `scripts/obstacle_replay.py --metrics-report` compares the current score with three candidate metrics on existing recordings, without flying and without any image leaving the computer. The candidates are pure functions in `flightrisk/drone/obstacle.py`. By default none of them is used by a flight decision; `centre_floor_ratio` decides only on an edge that opts in (see "Opt-in floor ratio metric" below):
+Field recordings show that no single threshold on the current score separates a wall at 150 cm from a clear yard. `scripts/obstacle_replay.py --metrics-report` compares the current score with three candidate metrics on existing recordings, without flying and without any image leaving the computer. The candidates are pure functions in `flightrisk/drone/obstacle.py`. By default none of them is used by a flight decision; `centre_floor_ratio` decides only on an edge that opts in (see "Opt-in floor ratio metric (unvalidated)" below):
 
 - `centre_floor_ratio`: the centre's 90th percentile over the median of the bottom 20 percent of rows, middle 60 percent of columns; None when the floor is unusable.
 - `centre_sides_ratio`: the centre's 90th percentile over the mean of the two side thirds. It is expected to miss a wall as wide as the frame: such a wall fills the sides as well, so the ratio stays near 1.
@@ -237,11 +239,11 @@ Each folder is labelled by its name (or write `label=folder`). The output is tex
 
 `--json` also writes the numbers (no per-frame lists; it refuses a folder that does not exist, any path inside a listed recording folder and the names `frames.csv` and `meta.json`, and warns before overwriting a file); nothing else is written, and no image or crop is saved. Every recording is checked first (index present, at least one row, every listed frame file there), so a partial recording stops the run with a message before the depth model loads. Share the text or the JSON, never the frames.
 
-## Opt-in floor ratio metric (not validated)
+## Opt-in floor ratio metric (unvalidated)
 
 An edge can let `centre_floor_ratio` decide its depth cue instead of the score, so that field tests can fly it and compare it with the score. It is off by default: without `FLIGHTRISK_OBSTACLE_METRIC`, or with it set to `score`, the edge behaves exactly as before, and nothing below is sent or logged.
 
-**Its threshold is not validated.** It was fitted on one clear scene and two walls, outdoors, at one height. There is no indoor data yet, and the floor band sees the ground 1.9 to 3.1 times the camera height ahead of the drone, so the ratio of the same scene changes with the flight height. Indoor recordings are pending. It does not replace an observer at the dashboard's LAND ALL: keep one there for every flight with it, as for every flight with the score.
+**Its threshold is unvalidated: it rests on 3 outdoor recordings at one height.** They are one clear scene and two walls, outdoors, at 110 cm. There is no indoor data yet, and the floor band sees the ground 1.9 to 3.1 times the camera height ahead of the drone, so the ratio of the same scene changes with the flight height. Indoor recordings are pending. It does not replace an observer at the dashboard's LAND ALL: keep one there for every flight with it, as for every flight with the score.
 
 ### How to opt in
 
@@ -250,35 +252,37 @@ Set both variables in the environment of each edge that should use it. An edge s
 | Variable | Default | Range | Meaning |
 |---|---|---|---|
 | `FLIGHTRISK_OBSTACLE_METRIC` | `score` | `score` or `floor_ratio` (case is ignored) | What decides the depth cue. `score` is the p90 centre score against `FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH`. `floor_ratio` is the opt-in metric below |
-| `FLIGHTRISK_OBSTACLE_FLOOR_RATIO_MAX` | 0.80 | 0.5 to 1.5 | Under `floor_ratio`, a centre whose floor ratio is above this is blocked. **Not validated**; refit it for the height and the site |
+| `FLIGHTRISK_OBSTACLE_FLOOR_RATIO_MAX` | 0.7986 | 0.5 to 1.0 | Under `floor_ratio`, a centre whose floor ratio is above this is blocked. **Unvalidated** (3 outdoor recordings at one height); refit it for the height and the site. The range stops at 1.0 until indoor data exists |
 
 On the ZBook, in the window that then starts the launcher or the edge:
 
 ```
 set FLIGHTRISK_OBSTACLE_METRIC=floor_ratio
-set FLIGHTRISK_OBSTACLE_FLOOR_RATIO_MAX=0.80
+set FLIGHTRISK_OBSTACLE_FLOOR_RATIO_MAX=0.7986
 ```
 
 In PowerShell use `$env:FLIGHTRISK_OBSTACLE_METRIC = "floor_ratio"`, and on macOS or Linux `export FLIGHTRISK_OBSTACLE_METRIC=floor_ratio`. To go back to the score, unset the variable (or set it to `score`) and start the edges again; the setting is read once, at the edge's start.
 
-Both variables are validated like every obstacle setting (see "Settings"): whatever the metric, the sensing mode or the drone kind, an unknown metric or a limit that is not a plain number from 0.5 to 1.5 refuses to start the edge. The launcher's Setup reports the same values as an error before Start, through the same parser. A value that differs from its default is logged at startup as `edge_obstacle_setting_non_default`.
+Both variables are validated like every obstacle setting (see "Settings"): whatever the metric, the sensing mode or the drone kind, an unknown metric or a limit that is not a plain number from 0.5 to 1.0 refuses to start the edge. The launcher's Setup reports the same values as an error before Start, through the same parser. A value that differs from its default is logged at startup as `edge_obstacle_setting_non_default`; a floor ratio limit set while the metric is `score` says that it has no effect. While `floor_ratio` is selected the edge also logs `edge_obstacle_metric_unvalidated` once at startup, at warning level: "floor_ratio is unvalidated: 3 outdoor recordings at one height".
 
 ### What it decides
 
-The ratio is `centre_floor_ratio` of the raw depth map of the judged view: the centre's 90th percentile over the median of the floor band (see "Comparing obstacle metrics offline"). The live gate and `scripts/obstacle_replay.py --metrics-report` call the same function on the same raw map, so a threshold fitted with the report means the same in flight; a test checks that both give the same value for the same map.
+The ratio is `centre_floor_ratio` of the raw depth map of the judged view: the centre's 90th percentile over the median of the floor band (see "Comparing obstacle metrics offline"). The live gate and `scripts/obstacle_replay.py --metrics-report` call the same function on the same raw map, and tests check that both give the same value for the same map, a 192 x 256 map and a ratio exactly at the limit included. That holds for the same map only. The map comes from MiDaS on the computer's compute device (MPS on the Mac, the CPU on the ZBook), and the same frame can give a slightly different map on another device; with a field margin of 0.0016 that can matter. `edge_obstacle_metric` and the report both name the device. **Before fitting a limit, replay one recording on both laptops and compare the floor ratios**, and fit on the laptop that flies.
 
 - A ratio at or below `FLIGHTRISK_OBSTACLE_FLOOR_RATIO_MAX` is clear; above it, the depth cue blocks the step (cut reason `obstacle`).
-- **No floor reference** (the ratio is None: the floor band looks farther than the top band of the view, or its median is not positive) is **blocked**, with cut reason `obstacle` and depth state `no_floor_reference`. It never counts as clear, and it is not `unavailable`, which stays reserved for a sensor that failed to look.
-- A degenerate depth map, a blank frame, a missing fresh frame and a timeout are `unavailable` exactly as under the score.
+- **No floor reference** (the ratio is None: the floor band looks farther than the top band of the view, or its median is not positive) is **blocked**, with cut reason `obstacle` and depth state `no_floor_reference`. It never counts as clear, and it is not `unavailable`, which stays reserved for a sensor that failed to look. So a run of such views cuts lanes with `obstacle` and never ends them with `sensor_down`.
+- A degenerate depth map, a blank frame, a missing fresh frame and a timeout are `unavailable` exactly as under the score. Here the live gate and the replay differ on purpose: the replay still computes a ratio from a degenerate map (and its score is None), while the gate never judges such a map.
 - The person cue is unchanged: a close person still blocks, and an unknown cue neither blocks nor clears.
 - `FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH` no longer decides the centre. The score is still computed and logged next to the ratio, so the two can be compared on the same views.
 
 ### What it reports
 
-- **Launcher preflight.** A WARN row, "Obstacle metric", that starts "Opt-in metric; threshold not validated indoors (H1)" and names the limit. It never blocks a start.
-- **Drone card.** The `SENSE` badge ends with the ratio of the latest view and the limit, for example `SENSE ok 220 ms, floor ratio 0.712 / 0.8`, or `floor ratio no floor / 0.8` for a view without a floor reference.
+- **Edge startup.** `edge_obstacle_metric_unvalidated` (WARNING), above.
+- **Launcher preflight.** A WARN row, "Obstacle metric", that starts "Opt-in metric; threshold not validated indoors (H1): fitted on 3 outdoor recordings at one height" and names the limit. It never blocks a start. While the inherited `FLIGHTRISK_OBSTACLE_SENSING` is `off` the row is INFO instead, because no edge then uses the metric.
+- **Drone card.** The `SENSE` badge ends with the ratio of the latest view and the limit, to four decimals, for example `SENSE ok 220 ms, floor ratio (unvalidated) 0.712 / 0.7986`, or `floor ratio (unvalidated) no floor / 0.7986` for a view without a floor reference.
 - **Telemetry.** No new field. The existing `obstacle_person_cue` object also carries `depth_metric` (`floor_ratio`), `depth_metric_value` (the ratio of the latest gate; null when that gate had no floor reference or could not look), `depth_metric_max` and `depth_state` (`clear`, `blocked`, `no_floor_reference`, or null). The ground's fleet status keeps them for the dashboard.
-- **Logs.** One `edge_obstacle_metric` event (INFO) per judged view, with the metric, its value, the limit, the depth state, the gate's result and the score of the same view (`docs/observability-events.md`). In `edge_obstacle_gate` and `edge_obstacle_stop`, `depth_score` is the ratio, the statistic compared with the limit, and null for a view without a floor reference. `flightrisk_obstacle_checks` counts such a view as the action `no_floor_reference`.
+- **Logs.** One `edge_obstacle_metric` event (INFO) per judged view, with the metric, its value, the limit, the depth state, the gate's result, the score of the same view and the compute device (`docs/observability-events.md`). In `edge_obstacle_gate` and `edge_obstacle_stop`, `depth_score` is the ratio, the statistic compared with the limit, and null for a view without a floor reference.
+- **Metrics.** `flightrisk_obstacle_checks` counts a view without a floor reference as the action `no_floor_reference`. `flightrisk_obstacle_floor_ratio` is a histogram of the ratio of each judged view, by `depth_state`. `flightrisk_obstacle_depth_ratio` (the score over its threshold) is recorded only while the score decides.
 
 ### Field numbers so far
 
@@ -287,21 +291,21 @@ Recorded at 110 cm, outdoors: one clear recording and two wall recordings.
 | Metric | Threshold | False clear | False block | Notes |
 |---|---|---|---|---|
 | Current score | its best threshold | 23.3% | not reported | The clear and wall ranges overlap |
-| `centre_floor_ratio` | 0.7978 | 0% | 0% | Leave-one-recording-out false clear 0%. Margin only +0.0016. Clear range 0.747 to 0.798. None on 0% of clear frames and 6.1% of obstacle frames |
+| `centre_floor_ratio` | 0.7978 | 0% | 0% | Leave-one-recording-out false clear 0%. Clear range 0.747 to 0.7978; lowest wall value 0.7994; margin 0.0016. None on 0% of clear frames and 6.1% of obstacle frames |
 
-These numbers describe three recordings at one height in one place; they do not validate the metric. The default limit of 0.80 sits just above the highest clear value seen, with almost no margin, so a slightly different floor, light or height can move a clear view over it, or a wall under it.
+The highest clear value seen was 0.7978 and the lowest wall value 0.7994, so the margin between the classes is 0.0016. The default limit, 0.7986, is the midpoint between them: it lies strictly between the highest clear and the lowest wall value, 0.0008 from each. That is a description of three recordings at one height in one place, not a validation. A slightly different floor, light, height or compute device can move a clear view over the limit or a wall under it.
 
 ### Refit it for each height and site
 
 1. Record at the height the drone flies at (its slot, 100 or 130 cm), never on the ground or at another height, with `scripts/obstacle_record.py --height-cm <slot>` (calibration step 1). Record clear lanes and the obstacles that matter (a wall and a plant at 100 and 150 cm), in the room or yard where it will fly.
-2. Run `scripts/obstacle_replay.py --metrics-report` with `--clear` and `--obstacle` (see "Comparing obstacle metrics offline"). Read the `centre_floor_ratio` rows: its best threshold, the false clear rate per recording, the margin, the leave-one-recording-out estimate and the share of None per class. A negative or tiny margin means the metric does not separate these recordings.
-3. Set the fitted threshold as `FLIGHTRISK_OBSTACLE_FLOOR_RATIO_MAX` for that height and site only, and refit after any change of height, room or lighting.
+2. Replay one recording on both laptops and compare the ratios (the report names its compute device). Then run `scripts/obstacle_replay.py --metrics-report` with `--clear` and `--obstacle` on the laptop that flies (see "Comparing obstacle metrics offline"). Read the `centre_floor_ratio` rows: its best threshold, the false clear rate per recording, the margin, the leave-one-recording-out estimate and the share of None per class. A negative or tiny margin means the metric does not separate these recordings.
+3. Set the fitted threshold as `FLIGHTRISK_OBSTACLE_FLOOR_RATIO_MAX` for that height and site only, and refit after any change of height, room, lighting or laptop.
 
 ## Hardware checklist
 
 | Id | Item | How |
 |---|---|---|
-| H1 | MiDaS threshold on the Tello camera in the demo room: a wall or plant at 150 cm must be blocked, a wall at 300 cm clear; the false-stop rate over a clear 400 cm lane | Record video at marked distances, run `obstacle_replay.py`, set `FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH` |
+| H1 | MiDaS threshold on the Tello camera in the demo room: a wall or plant at 150 cm must be blocked, a wall at 300 cm clear; the false-stop rate over a clear 400 cm lane. Also the opt-in floor ratio indoors: its limit (0.7986) rests on 3 outdoor recordings at one height | Record video at marked distances, run `obstacle_replay.py`, set `FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH`. For the floor ratio, record at each slot height indoors, replay one recording on both laptops, run `--metrics-report` and set `FLIGHTRISK_OBSTACLE_FLOOR_RATIO_MAX` per height and site |
 | H2 | Overshoot after a 50 cm move, cruise speed, dead-reckoning error over a stepped 400 cm lane | Tape measure, ten lanes |
 | H3 | Yaw accuracy of `cw 90` and `cw 180`, and drift over a three-lane zone | Compare the commanded heading with the `yaw_before_deg` and `yaw_after_deg` of `edge_obstacle_turn`. On a MAVLink drone, also check the 10 degree heading rule against the real compass. If drift is bad, use `FLIGHTRISK_OBSTACLE_TURN=0` for the day |
 | H4 | CPU on the ZBook with two edges, MiDaS at one call per step: YOLO rate and the MiDaS latency distribution | `scripts/bench_obstacle.py --with-yolo` under the running pipeline, and Task Manager for five minutes (`docs/two-tellos-one-pc.md`) |
@@ -313,6 +317,7 @@ These numbers describe three recordings at one height in one place; they do not 
 
 ## Known limits
 
+- **The opt-in floor ratio metric is unvalidated.** Its default limit, 0.7986, rests on 3 outdoor recordings at one height (110 cm), with a margin of 0.0016 between the clear and wall values, no indoor data and one compute device. It is off by default; with it on, refit the limit at flight height for the site and keep an observer at LAND ALL (see "Opt-in floor ratio metric (unvalidated)").
 - **The depth threshold is uncalibrated** until H1 is done. 0.35 may stop a drone facing an empty wall or let it fly into a plant. Until then treat the sensor as a first guess and keep a human ready.
 - **Nothing on MAVLink has flown.** The parameter checks, `ONBOARD_AVOIDANCE`, `STOPPED_SHORT`, the 3.0 s stationary window and the 500 cm camera step are tested against a simulated MAVSDK only.
 - **Nudge and manual moves are body-relative and unsensed.** An operator nudge or a manual step is a relative move in the direction the drone faces. With nose-first turns, "forward" now depends on which way the drone is facing at the end of its lane, not on its takeoff heading. They are not gated by the sensor, and the operator is the sensor.

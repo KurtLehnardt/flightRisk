@@ -846,6 +846,9 @@ def format_report(report):
     width = max([len(lb) for lb in labels] + [5])
     for warning in report.get("warnings", []):
         lines.append(f"Warning: {warning}")
+    if report.get("device"):
+        lines.append(f"Depth model device: {report['device']} (the edge logs its own in edge_obstacle_metric; a map "
+                     "can differ slightly between devices, so replay one recording on both laptops before fitting)")
     lines.append("")
     lines.append("Recordings (a vote is one frame kept after resampling on capture time):")
     lines.append(f"{'label':<{width}}  {'frames':>6} {'stride':>6} {'frame dt s':>10} {'vote dt s':>9} {'height cm':>10}")
@@ -975,6 +978,8 @@ def run_metrics_report(recordings, stride, min_safe_depth, clear_labels=(), obst
     report = build_report(
         per_label, list(clear_labels), list(obstacle_labels), min_safe_depth, ratio_threshold, vote_interval_s
     )
+    # The same frame can give a slightly different map on another compute device; the edge logs its own.
+    report["device"] = getattr(guard, "device_name", None) or "unknown"
     out.write(format_report(report))
     if json_out:
         text = json.dumps(report, indent=2, allow_nan=False)
