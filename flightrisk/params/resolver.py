@@ -122,6 +122,8 @@ FIELD_ONLY_FLAGS = frozenset({
 #: Unit suffixes of a flag given in metres or metres per second.
 _METRE_FLAG_SUFFIXES = ("-m", "-mps")
 _METRE_SCALE = 100.0
+#: Unit suffixes of an environment name given in metres (``FLIGHTRISK_FIELD_ALT_SLOT_M``).
+_METRE_ENV_SUFFIXES = ("_M",)
 _CENTIMETRE_UNITS = (Unit.CM, Unit.CM_PER_S, Unit.CM_LIST)
 _TRUE_TEXT = ("1", "true", "yes", "on")
 _FALSE_TEXT = ("0", "false", "no", "off")
@@ -213,7 +215,8 @@ def _build_names() -> tuple[dict[str, _Name], dict[str, _Name]]:
     for spec in TABLE:
         alias_scales = {a.applies_to_scale for a in spec.env_aliases if a.applies_to_scale}
         if spec.env:
-            env[spec.env] = _Name(spec, spec.env, 1.0, all_scales - alias_scales, True)
+            env_scale = _METRE_SCALE if spec.unit in _CENTIMETRE_UNITS and spec.env.endswith(_METRE_ENV_SUFFIXES) else 1.0
+            env[spec.env] = _Name(spec, spec.env, env_scale, all_scales - alias_scales, True)
         for alias in spec.env_aliases:
             scales = frozenset({alias.applies_to_scale}) if alias.applies_to_scale else all_scales
             env[alias.name] = _Name(spec, alias.name, alias.scale_factor, scales, False)
