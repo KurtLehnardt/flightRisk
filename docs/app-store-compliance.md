@@ -99,6 +99,8 @@ Include the following in the "Notes" field during submission:
 > Cloud reasoning is off by default. It sends the cropped image of a detected person, the reference photo and the typed description to Anthropic only after the user turns on "Allow cloud reasoning" and confirms the consent dialog, saves a Claude API key and selects Cloud Claude. Reviewers can leave it off; all other features work without it.
 >
 > The first-launch privacy notice is shown before the camera starts.
+>
+> Demo mode (no drones, no photo and no ground station needed): on the first screen, tap "Try the demo (no drones, no photo)", or later turn on Settings > Demo > "Demo mode". A purple "DEMO – no real drones" banner then stays above every tab until you tap "Exit demo". The Ground tab shows a simulated ground station with two simulated drones that replays a scenario of about 40 seconds: the drones take off and fly their search lanes, one stops at an obstacle, a person match alert appears and later receives an AI verdict ("AI check: match (high confidence)", with a short explanation under "AI check details"), the operator confirms it on the simulated laptop, and the drones land. You can tap LAND ALL or a drone's Land button at any time; the simulated ground answers on the phone. In demo mode every command is answered on the device and nothing is sent to any network, the camera is not used, and the Search tab shows a drawn placeholder figure instead of a photo. The demo never runs beside a real ground station link: if one is set up, the app asks before it disconnects and switches that link off. Exiting the demo clears everything it showed. "Play the demo again" in Settings restarts it.
 
 ---
 
