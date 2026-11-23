@@ -112,7 +112,8 @@ class TestBrowserHelpers:
 
 
 def test_the_card_shows_the_temperature_and_no_depth_threshold():
-    assert "[senseBadge(d), personCueBadge(d), obstacleStopBadge(d), tempBadge(d)]" in JS
+    # The flight guard badges (refused moves, the hover-only test) follow the temperature badge.
+    assert "[senseBadge(d), personCueBadge(d), obstacleStopBadge(d), tempBadge(d), refusalBadge(d), hoverTestBadge(d)]" in JS
     assert "const temp = tempMeta(d);" in JS
     assert "meta.appendChild(metaItem('Temp', temp.text, temp.cls));" in JS
     assert "meta.appendChild(metaItem('Temp at takeoff', atTakeoff.text, atTakeoff.cls));" in JS

@@ -187,6 +187,26 @@ const socket = io();
         }
         return null;
     }
+    // The drone card badge for moves the drone refused ("error No valid imu", "error Not joystick"), or null.
+    // A drone that keeps refusing needs a check (IMU calibration, light, floor texture) before it flies again.
+    function refusalBadge(d) {
+        const r = d && d.move_refusals;
+        const n = r && typeof r === 'object' ? r.total : null;
+        if (typeof n !== 'number' || n < 1) return null;
+        const last = r.last_cmd && r.last_reason ? 'Last: ' + r.last_cmd + ' answered "' + r.last_reason + '". '
+            : (r.last_reason ? 'Last: ' + r.last_reason + '. ' : '');
+        const fence = typeof r.fence_margin_cm === 'number' && r.fence_margin_cm > 0
+            ? 'The geofence is ' + r.fence_margin_cm + ' cm smaller for the rest of this flight after a refused step. ' : '';
+        return { text: 'DRONE REFUSED ' + n + (n === 1 ? ' move' : ' moves'), cls: 'held',
+            title: last + fence + 'Check this drone (IMU calibration, light, floor texture) before it flies again.' };
+    }
+    // The drone card badge of an edge in the hover-only test (FLIGHTRISK_HOVER_TEST=1), or null.
+    function hoverTestBadge(d) {
+        const r = d && d.move_refusals;
+        if (!r || typeof r !== 'object' || r.hover_test !== true) return null;
+        return { text: 'HOVER TEST', cls: 'held',
+            title: 'This edge runs the hover-only test: the drone takes off and hovers, and flies no slot move, lane, nudge or manual step. Land it to end the test.' };
+    }
     function obstacleStopBadge(d) {
         return d && d.obstacle_state === 'blocked' ? { text: 'OBSTACLE STOP', cls: 'held', title: 'This drone stopped a lane because of an obstacle.' } : null;
     }
@@ -336,7 +356,7 @@ const socket = io();
             card.appendChild(meta);
             const mode = modeText(id, d);
             if (mode.text) card.appendChild(el('div', 'dc-mode' + (mode.cls ? ' ' + mode.cls : ''), mode.text));
-            [senseBadge(d), personCueBadge(d), obstacleStopBadge(d), tempBadge(d)].forEach((b) => {
+            [senseBadge(d), personCueBadge(d), obstacleStopBadge(d), tempBadge(d), refusalBadge(d), hoverTestBadge(d)].forEach((b) => {
                 if (!b) return;
                 const node = el('div', 'dc-mode dc-sense' + (b.cls ? ' ' + b.cls : ''), b.text);
                 node.title = b.title;

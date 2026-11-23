@@ -62,7 +62,9 @@ from flightrisk.drone.safety import (
     MIN_CEILING_CM,
     MIN_CEILING_MARGIN_CM,
     format_cm,
+    is_finite_number,
     slot_above_ceiling,
+    slot_below_minimum,
     validate_ceiling,
 )
 from flightrisk.observability import StructuredLogger
@@ -136,7 +138,9 @@ class CeilingSettings:
     def slot_problem(self, drone_id: str, slot_cm: float) -> str | None:
         """Why *slot_cm* cannot be *drone_id*'s slot, or None."""
         if not MIN_ALT_SLOT_CM <= slot_cm <= MAX_ALT_SLOT_CM:
-            return f"{drone_id} slot {format_cm(slot_cm)} cm is outside {MIN_ALT_SLOT_CM}-{MAX_ALT_SLOT_CM} cm"
+            low = slot_below_minimum(slot_cm)
+            return (f"{drone_id} slot {format_cm(slot_cm)} cm is outside {MIN_ALT_SLOT_CM}-{MAX_ALT_SLOT_CM} cm"
+                    + (f" ({low})" if low else ""))
         reason = slot_above_ceiling(slot_cm, self.ceiling_cm, self.margin_cm)
         return None if reason is None else f"{drone_id} {reason}"
 
@@ -180,19 +184,51 @@ class CeilingSettings:
         return settings
 
 
+def _without_low_slots(data: Any) -> tuple[CeilingSettings, list[tuple[str, float]]] | None:
+    """Settings from *data* with every drone slot below ``MIN_ALT_SLOT_CM`` dropped, and the dropped slots.
+
+    None when no slot is below the minimum or the rest is not valid either.
+    """
+    if not isinstance(data, dict) or not isinstance(data.get("slots_cm"), dict):
+        return None
+    kept: dict[str, Any] = {}
+    dropped: list[tuple[str, float]] = []
+    for drone_id, slot in data["slots_cm"].items():
+        if is_finite_number(slot) and slot < MIN_ALT_SLOT_CM:
+            dropped.append((str(drone_id), slot))
+        else:
+            kept[drone_id] = slot
+    if not dropped:
+        return None
+    try:
+        return CeilingSettings.from_json({**data, "slots_cm": kept}), sorted(dropped)
+    except (ValueError, TypeError):
+        return None
+
+
 class CeilingStore:
     """Loads and atomically saves ``CeilingSettings`` as JSON at *path* (``default_settings_path()``)."""
 
     def __init__(self, path: str | os.PathLike | None = None):
         self.path = Path(path).expanduser() if path is not None else default_settings_path()
+        # Set by load() when it dropped drone slots below the lowest slot:
+        # the warning, and the ``(drone_id, slot)`` pairs dropped.
+        self.load_warning: str | None = None
+        self.dropped_slots: list[tuple[str, float]] = []
 
     def load(self) -> tuple[CeilingSettings, str | None]:
         """The saved settings, or the defaults when there is no file.
 
         Returns ``(settings, error)``. When the file exists but cannot be
         read or is not valid, *settings* are the defaults and *error* says
-        why; the caller must not fly on them silently.
+        why; the caller must not fly on them silently. A file that is valid
+        except for drone slots below the lowest slot (``MIN_ALT_SLOT_CM``,
+        raised from 20 to 50 cm after the 2026-11-21 incident) keeps its
+        ceiling, margin and other slots; only those slots are dropped (the
+        drones fly their zone's default slot) and ``load_warning`` says so.
         """
+        self.load_warning = None
+        self.dropped_slots = []
         try:
             text = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
@@ -200,8 +236,23 @@ class CeilingStore:
         except OSError as exc:
             return CeilingSettings(), f"cannot read {self.path}: {exc}"
         try:
-            return CeilingSettings.from_json(json.loads(text)), None
+            data = json.loads(text)
+        except ValueError as exc:
+            return CeilingSettings(), f"{self.path} is not valid ceiling settings: {exc}"
+        try:
+            return CeilingSettings.from_json(data), None
         except (ValueError, TypeError) as exc:
+            kept = _without_low_slots(data)
+            if kept is not None:
+                settings, dropped = kept
+                self.dropped_slots = dropped
+                self.load_warning = (
+                    "saved altitude slots below the lowest slot of "
+                    f"{MIN_ALT_SLOT_CM} cm were dropped: "
+                    + ", ".join(f"{drone_id} {format_cm(slot)} cm" for drone_id, slot in dropped)
+                    + "; those drones now fly their zone's default slot"
+                )
+                return settings, None
             return CeilingSettings(), f"{self.path} is not valid ceiling settings: {exc}"
 
     def save(self, settings: CeilingSettings) -> None:
@@ -295,8 +346,16 @@ class CeilingBoard:
         self._lock = threading.Lock()
         self._activity: Callable[[], str | None] | None = None
         self.settings, self.load_error = store.load()
+        # Low slots dropped on load (``CeilingStore.load``); cleared by a save.
+        self.load_warning: str | None = getattr(store, "load_warning", None)
+        if self.load_warning:
+            self.load_warning += (
+                self._dropped_slot_note(getattr(store, "dropped_slots", [])) + ". Save the settings to keep this"
+            )
         if self.load_error:
             self._log.error("ceiling_settings_unreadable", error=self.load_error)
+        if self.load_warning:
+            self._log.warning("ceiling_slots_dropped", warning=self.load_warning)
         self._edges: dict[str, _EdgeCeiling] = {}
         for drone_id in self._fleet_drones:
             self._edge(drone_id)
@@ -306,6 +365,25 @@ class CeilingBoard:
         self._activity = activity
 
     # -- Slots ----------------------------------------------------------------
+
+    def _dropped_slot_note(self, dropped: list[tuple[str, float]]) -> str:
+        """For each dropped slot of a configured drone, the slot it flies now, and any drone that shares it.
+
+        A dropped slot falls back to the default slot of the drone's zone,
+        which may be the slot another drone flies.
+        """
+        ids = list(self._fleet_drones)
+        notes = []
+        for drone_id, _ in dropped:
+            if drone_id not in ids:
+                continue
+            slot = self.slot_for(drone_id, ids.index(drone_id))
+            same = [other for k, other in enumerate(ids) if other != drone_id and self.slot_for(other, k) == slot]
+            notes.append(
+                f"{drone_id} now flies {format_cm(slot)} cm"
+                + (f", the same slot as {', '.join(same)}: give one of them its own slot" if same else "")
+            )
+        return "; " + "; ".join(notes) if notes else ""
 
     def slot_for(self, drone_id: str, index: int, settings: CeilingSettings | None = None) -> int:
         """The altitude slot for *drone_id*, flying zone *index*: its own, else the default for the zone."""
@@ -472,7 +550,7 @@ class CeilingBoard:
             self._log.error("ceiling_settings_save_failed", error=repr(exc), path=str(self._store.path))
             return f"Not changed: the settings could not be saved to {self._store.path} ({exc})."
         with self._lock:
-            self.settings, self.load_error = new, None
+            self.settings, self.load_error, self.load_warning = new, None, None
         if (current.ceiling_cm, current.margin_cm) != (new.ceiling_cm, new.margin_cm):
             self._log.warning(
                 "ceiling_changed",
@@ -646,7 +724,7 @@ class CeilingBoard:
         locked = self.locked_reason()
         ids = self._drone_ids()
         with self._lock:
-            settings, load_error = self.settings, self.load_error
+            settings, load_error, load_warning = self.settings, self.load_error, self.load_warning
             drones = []
             for index, drone_id in enumerate(ids):
                 edge = self._edges.get(drone_id) or _EdgeCeiling(drone_id)
@@ -689,6 +767,8 @@ class CeilingBoard:
             "locked_reason": locked,
             "load_error": load_error,
             "file": str(self._store.path),
+            # Only when slots were dropped on load, so other payloads are unchanged.
+            **({"load_warning": load_warning} if load_warning else {}),
         }
 
     def publish(self) -> None:

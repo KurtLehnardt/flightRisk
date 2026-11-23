@@ -98,7 +98,7 @@ ceiling and margin saved in the dashboard (`~/.flightrisk/ceiling.json`) when th
 | Preset | Runs here | Drones | Ports (dashboard, edge link) | Notes |
 | --- | --- | --- | --- | --- |
 | Layout A (ground here) | ground, loopback plus 10.42.0.1 | drone-1, drone-2: tello, edges on the other computer, slots 100 and 130 cm | 5555, 9000 | needs the token |
-| Layout A (edges on this computer) | edges only, dialling 10.42.0.1:9000 | drone-1 at 50 cm, drone-2 at 80 cm (the slots of `scripts/demo_edge_pair.ps1`), adapters chosen in the window | | no adapter address or interface index is stored in the preset; see "Adapters" below |
+| Layout A (edges on this computer) | edges only, dialling 10.42.0.1:9000 | drone-1 at 60 cm, drone-2 at 80 cm (the slots of `scripts/demo_edge_pair.ps1`), adapters chosen in the window | | no adapter address or interface index is stored in the preset; see "Adapters" below |
 | Layout B (everything here) | ground, loopback | drone-1 and drone-2: tello, slots 100 and 130 cm, adapters chosen in the window | 5555, 9000 | same |
 | Single drone | ground, loopback | drone-1, tello, slot 100 cm | 5555, 9000 | |
 | Rehearsal with fake drones | ground, loopback | drone-1, drone-2: fake, slots 100 and 130 cm, geofence 500 cm | 5800, 9800 | other ports, so it can run beside a live ground station; needs no adapter |

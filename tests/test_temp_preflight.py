@@ -20,7 +20,7 @@ import pytest
 
 from flightrisk import edge_device
 from flightrisk import fleet_protocol as fp
-from flightrisk.drone.controller import DroneLinkStatus
+from flightrisk.drone.controller import DroneLinkStatus, SettledHeight
 from flightrisk.drone.lane_executor import LaneExecutor
 from flightrisk.drone.safety import SafetyEnvelope
 from flightrisk.drone.temp_preflight import (
@@ -534,6 +534,9 @@ def test_no_state_packet_yet_is_no_reading(tello_on_wire):
 def _wired_executor(ctrl):
     ctrl.read_battery = lambda: 90
     ctrl.read_height_cm = lambda: 100 if ctrl.state.is_flying else 0
+    # The state stream here never shows a climb, so the settled height the
+    # climb waits for (flight_guards) is stubbed, as in test_lane_executor_wire.
+    ctrl.settled_height = lambda **_: SettledHeight(100, 110, 5, 0.0)
     clock = FakeClock()
     sent: list[dict] = []
     log = QuietLogger()

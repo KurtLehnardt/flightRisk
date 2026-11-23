@@ -104,9 +104,13 @@ meets the obstacle at a new gate, with a new budget. What bounds the total is
 the per-lane counts, ``obstacle_sidesteps`` attempts and
 ``OBSTACLE_RELOOKS_PER_LANE`` re-look rounds, which a resumed plan keeps.
 
-**Never land.** Nothing here calls a landing. Every sideways and offset move is
-checked against the geofence before it is sent, so the geofence landing of a
-lane step can never be reached from a sidestep. A way back to the lane that a
+**Never land for an obstacle.** Nothing here calls a landing. Every sideways
+and offset move is checked against the geofence (shrunk by the lane steps the
+drone refused this flight) before it is sent, so the geofence landing of a
+lane step can never be reached from a sidestep. A move or turn the drone
+itself refuses still lands it through the executor's error path
+(``executor_error``): it is never retried here, and a transient refusal is
+counted in ``move_refusals`` (``flightrisk.drone.flight_guards``). A way back to the lane that a
 gate does not clear cuts nothing (unless it saw a person or a sensor down,
 above): the drone hovers under manual control with the point on the lane as
 its hold point (``lane_manual._end_blocked_return``), its telemetry reports
@@ -888,11 +892,12 @@ class ObstacleAvoidMixin:
         body = "right" if side == _direction_at(heading + 90.0) else "left"
         turn = shortest_rotation(pose.heading_deg, heading)
         path = ([("rotate", turn)] if turn else []) + [(body, size)]
-        # TODO(fix/tello-climb-freshness-guards): once that branch is merged,
-        # fly this sideways move and its turn through ``_retry_refusal``, as a
-        # sensed lane step is, so a transient Tello refusal (for example
-        # "error No valid imu") is retried after a hover instead of landing
-        # the drone through the executor's fail-safe.
+        # The sideways move and its turn are flown like the way back of a
+        # resume_search and are never retried (``flight_guards``): a turn is
+        # never retried, and a sidestep that the Tello refused (for example
+        # "error No valid imu") may have been partly flown beside an
+        # obstacle. The executor counts such a refusal in ``move_refusals``
+        # and lands (``lane_flight._run_sequence``).
         outcome, blocked = self._fly_return_sensed(path, source=SOURCE_SIDESTEP, person=True)
         if outcome == "stopped":
             self._avoid_log(EVENT_OBSTACLE_SIDESTEP, step, "stopped", side=side)
@@ -1045,11 +1050,12 @@ class ObstacleAvoidMixin:
                 continue
             if verdict != _GO:
                 return ended("done")
+            # The envelope's fence is shrunk by the lane steps the drone
+            # refused this flight, which it may have partly flown.
             if not self.envelope.check_move("forward", beside[3]):
                 return ended("done")
-            # TODO(fix/tello-climb-freshness-guards): route this single sensed
-            # move through ``_retry_refusal`` once that branch is merged, so a
-            # transient Tello refusal is retried instead of landing the drone.
+            # Not retried: a refusal beside an obstacle lands, counted in
+            # ``move_refusals`` (``lane_flight._run_sequence``).
             if not self._command_move("forward", beside[3], record=True):
                 return ended(_STOPPED)
             moved_line = RelativePose(line.x_cm + fx * beside[3], line.y_cm + fy * beside[3], heading)
@@ -1115,8 +1121,8 @@ class ObstacleAvoidMixin:
                 self._avoid_log(EVENT_OBSTACLE_SIDESTEP, step, "held", reason="geofence",
                                 control_mode=self.control_mode)
                 return _HELD, False
-            # TODO(fix/tello-climb-freshness-guards): route these single sensed
-            # moves and turns through ``_retry_refusal`` once that branch is merged.
+            # Never retried, like the sidestep itself: a refusal lands, counted
+            # in ``move_refusals`` (``lane_flight._run_sequence``).
             outcome, blocked = self._fly_return_sensed(path, source=SOURCE_SIDESTEP_RETURN, person=True)
             if outcome == "stopped":
                 self._avoid_log(EVENT_OBSTACLE_SIDESTEP, step, "stopped", reason="return")

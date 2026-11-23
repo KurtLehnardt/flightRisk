@@ -11,19 +11,26 @@ that now bounds every slot, on the dashboard and on every edge.
 | --- | --- | --- | --- |
 | Ceiling height | 200 cm | 150 to 1000 cm | Dashboard sidebar, "Ceiling and altitude" section |
 | Safety margin | 60 cm | at least 30 cm | same |
-| Altitude slot per drone | 100 cm and 130 cm for zones in turn | 20 to 500 cm, and at most ceiling minus margin | same; on an edge, `ALT_CM` / `--alt-slot` |
+| Altitude slot per drone | 100 cm and 130 cm for zones in turn | 50 to 500 cm, and at most ceiling minus margin | same; on an edge, `ALT_CM` / `--alt-slot` |
 
 **Effective maximum slot = ceiling height - safety margin.** With the defaults that is
 200 - 60 = 140 cm. A slot exactly at the maximum is allowed; anything above it is refused.
 
-Measure the ceiling **from the surface the drones take off from**, not from the floor. Every
-height FlightRisk uses is the Tello's own reading of its height above its takeoff point. If the
-drones take off from a 75 cm table in a 240 cm room, the ceiling to enter is 165 cm.
+**Take off from the floor only**, on a matte, textured surface, and measure the ceiling from the
+floor. Never take off from a desk, a table or any raised surface. Every height FlightRisk uses is
+the Tello's own reading of its height above its takeoff point, and nothing in FlightRisk knows
+where the edge of a raised surface is. On 2026-11-21 a Tello took off from a desk about 122 cm
+above the floor, drifted off the desk edge and came down to about 30 cm above the floor (see
+"Before the move to the slot" below).
 
 Things to know about Tello heights:
 
 - The Tello's takeoff alone climbs to about 80 cm and hovers there. A slot below that (for
   example 50 cm) means a short descent right after takeoff. A slot above it means a climb.
+- The lowest slot is 50 cm. The Tello's downward Vision Positioning System works from 0.3 m
+  (Tello user manual: effective at 0.3 to 10 m, best at 0.3 to 6 m), and the other 20 cm covers
+  the height error and overshoot below, as the margin does at the ceiling. A lower slot is
+  refused on the edge, the dashboard, the launcher and the plan check, with that reason.
 - Heights are the Tello's own reading. Expect a few cm of error, and some overshoot at the end of
   a climb. The margin exists for that, which is why it never goes below 30 cm.
 - A ceiling below 150 cm is refused: the takeoff alone would come too close to it.
@@ -81,10 +88,11 @@ holds the ceiling and margin, from `FLIGHTRISK_CEILING_CM` and `FLIGHTRISK_CEILI
   set for example `FLIGHTRISK_CEILING_CM=250` on that edge (and the same ceiling on the dashboard).
 - **Lane plans.** An `assign_lanes` whose `alt_cm` is above the limit is refused with the
   `altitude` reason, as an out-of-range slot always was.
-- **The climb to the slot.** After takeoff the edge reads the Tello's measured height and moves to
-  the slot. It refuses a slot above the limit, and a climb from the measured height that would end
-  above the limit; it then lands instead of climbing (`slot_refused_above_ceiling`, landing reason
-  `ceiling`). A descent is always allowed.
+- **The climb to the slot.** After takeoff the edge waits for a settled height (see "Before the
+  move to the slot" below) and moves to the slot. It refuses a slot above the limit, and a climb
+  from the measured height that would end above the limit; it then lands instead of climbing
+  (`slot_refused_above_ceiling`, landing reason `ceiling`). A descent is bounded by the distance
+  to what is below the drone, not by the ceiling.
 - **Above the ceiling.** If the measured height is ever above the ceiling itself while flying, the
   edge logs `edge_ceiling_exceeded` and lands at once through the normal landing path (landing
   reason `ceiling_exceeded`). The landing stops any climb or lane in progress.
@@ -94,6 +102,86 @@ holds the ceiling and margin, from `FLIGHTRISK_CEILING_CM` and `FLIGHTRISK_CEILI
 
 The existing envelope checks (geofence, battery gates, link-loss watchdog, slot range) are
 unchanged; the ceiling is one more check in the same envelope.
+
+## Before the move to the slot
+
+The Tello's height reading can be stale right after its takeoff reply. On 2026-10-28 a takeoff
+`ok` came 8.8 s late and the climb read 20 cm with the drone near 80 cm, so it climbed 110 cm,
+near the ceiling. On 2026-11-21 a takeoff `ok` came 8.8 s late from a desk and the climb read
+100 cm with the drone 30 to 40 cm above the desk, so it sent `down 80`. The edge now guards the
+move to the slot (`flightrisk/drone/flight_guards.py`):
+
+- **A settled height.** Nothing is computed from a height read before the takeoff reply. The edge
+  waits for `FLIGHTRISK_TELLO_SETTLE_SAMPLES` (default 5) state packets received after the reply,
+  each fresh, whose `h` and `tof` vary by at most `FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM` (default
+  10 cm), and that all show the drone off its takeoff point. The packets must also be spread as
+  the Tello sends them, about ten a second: together they span at least 0.05 s per gap, and no
+  two arrive within 0.01 s of each other, so a backlog that is processed in one burst is not taken
+  for steady state. A stream that is delayed steadily, without a burst, cannot be told apart this
+  way. If no such run arrives within `FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S` (default 5 s), nothing is
+  sent and the drone lands (landing reason `height_unsettled`, event `edge_height_unsettled`,
+  whose `reject` says why the last run did not count: `too_few`, `stale`, `gap`, `burst`, `span`,
+  `not_lifted`, `h_drift` or `tof_drift`).
+  The settle checks vertical steadiness only. The horizontal speeds (`vgx`, `vgy`) are logged
+  with the settled height (`edge_height_settled`) for calibration, but not judged. A `tof` that
+  jumps resets the run: a drone that drifts off a desk edge settles about 0.5 s after the edge,
+  on the distance to the floor, and a descent is then bounded by that distance.
+- **A descent bounded by `tof`.** A descent to the slot must leave at least 50 cm (the lowest slot)
+  between the drone and what its downward distance sensor sees. A descent that would go further,
+  or one with no usable distance, is not flown part of the way: the drone lands instead (landing
+  reason `tof_clearance`, event `edge_descent_refused`), because flying lanes at another height
+  than its slot would break the altitude separation. At a slot of exactly 50 cm this needs a
+  downward distance at least the height on every settled packet; the presets use 60 cm for the
+  lower drone for that reason.
+- **A late takeoff reply.** A takeoff answered later than `FLIGHTRISK_TELLO_TAKEOFF_LATE_S`
+  (default 10 s) after it was put on the wire lands instead of moving to the slot (landing reason
+  `takeoff_late`, event `edge_takeoff_late`). The Tello controller measures it from the send
+  itself, so a keepalive that held the command channel before the takeoff does not count. A Tello
+  lifts within about 2 s and hovers within about 5 s; with two edges on one laptop the reply has
+  taken 4.7 to 6.7 s, 8.8 s three times and once 16 s. A reply within the limit is covered by
+  the settled height. Set the limit lower, for example 3, for a first test flight.
+- **Transient refusals.** A move answered `error No valid imu` or `error Not joystick` is retried
+  at most `FLIGHTRISK_TELLO_REFUSAL_RETRIES` times (default 2, 0 turns retries off) after a hover
+  of `FLIGHTRISK_TELLO_REFUSAL_HOLD_S` (default 2.5 s). A move to the slot is computed again from
+  a new settled height, never resent with its old distance, which the drone may have partly
+  flown. A sensed lane step goes back through its sense gate with a new view first. An unsensed
+  lane move, a turn, a manual step, a nudge, a step of the `resume_search` way back and a move of
+  an obstacle sidestep are never retried. A flight retries at most `FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT` refusals in all
+  (default 2, counted from each takeoff): the next one lands, whatever the step, so a drone that
+  refuses every step lands instead of retrying each one. A refused lane step may have been partly
+  flown, so from then on the geofence is checked as if all of it had been: the edge's safety
+  envelope shrinks the fence by the length of every refused lane step of the flight, until the
+  next takeoff. Every geofence check of the flight uses the shrunk fence: lane steps, a re-task,
+  nudges, manual steps, the `resume_search` way back and the obstacle sidestep's choice of side.
+  A move refused only because of the shrinking says so (`fence 50 cm smaller after a refused
+  step`) in its nack, in `edge_geofence_refused` (with `refused_margin_cm`) and in the drone card's
+  `DRONE REFUSED` tooltip; telemetry carries the margin as `fence_margin_cm` in `move_refusals`. When no retry is left the drone lands as before (`executor_error`). A hold,
+  a landing or a lost ground link during the hover stops the retry. Every such refusal, retried or
+  not, is logged (`edge_move_refused`) and counted in telemetry (the object field
+  `move_refusals`, whose `last_reason` is the reply as plain printable text), and the drone card
+  shows `DRONE REFUSED n moves`. A drone that keeps refusing needs a check (IMU calibration in
+  the Tello app, light, floor texture) before it flies again; neither reply is in the Tello SDK
+  documentation.
+- **The hover-only test.** `FLIGHTRISK_HOVER_TEST=1` on an edge makes its drone take off and
+  hover: no move to the slot and no lane (event `edge_hover_test`). Nudges, manual steps and the
+  `resume_search` way back are refused with the reason `busy` and a detail that names the test,
+  so the drone flies nothing but its takeoff. Obstacle sensing stays required, and a start's
+  probe look still runs before the takeoff. The drone still lands if its height does not settle.
+  It hovers until LAND, LAND ALL, the link-loss failsafe or the battery lands it; a hold or a
+  manual takeover only keeps it hovering. The edge logs `edge_hover_test_mode` at startup, its
+  telemetry carries `hover_test: true` in `move_refusals`, the drone card shows `HOVER TEST`, and
+  the launcher warns when `FLIGHTRISK_HOVER_TEST=1` is inherited.
+
+Only a Tello is settled, bounded by `tof` and held to the late-reply limit; other drones keep
+their single height read. A bad value of any of these settings refuses to start the edge, and
+each one that is not its default is logged once at startup
+(`edge_flight_guard_setting_non_default`).
+
+Saved dashboard settings from before the lowest slot was raised may hold a slot below 50 cm. The
+dashboard keeps the saved ceiling, margin and other slots, drops only those slots (the drones then
+fly their zone's default slot), logs `ceiling_slots_dropped` and shows the change in the
+"Ceiling and altitude" section until the settings are saved again. The warning names the slot each
+such drone of the configured fleet now flies, and any drone it now shares that slot with.
 
 ## The `set_ceiling` command
 
