@@ -257,7 +257,9 @@ const socket = io();
             d = d || {};
             const card = el('div', 'drone-card');
             const state = connState(d);
-            if (state.key === 'down' || state.key === 'lost') {
+            if (outOfSearch(d)) {
+                card.title = 'Out of the search: it landed with lanes left. Its link is up, so its values are current.';
+            } else if (state.key === 'down' || state.key === 'lost') {
                 card.classList.add('stale');
                 card.title = 'No live link: values are the last ones received';
             }
@@ -1595,10 +1597,30 @@ const socket = io();
         clear(box);
         box.hidden = !keys.length;
         if (!keys.length) return;
-        const awaiting = keys.filter((k) => isAwaiting(uncoveredLanes[k])).length;
-        const failed = keys.length - awaiting;
+        // Lanes and segments that wait for the operator are counted on their own: no drone takes them until you
+        // confirm it, so they are neither uncovered nor awaiting a drone.
+        const confirming = keys.filter((k) => uncoveredLanes[k].status === 'needs_confirmation').length;
+        const awaiting = keys.filter((k) => uncoveredLanes[k].status !== 'needs_confirmation' && isAwaiting(uncoveredLanes[k])).length;
+        const failed = keys.length - awaiting - confirming;
         box.appendChild(el('div', 'uncovered-head', 'NOT SEARCHED: ' + failed + ' lane' + (failed === 1 ? '' : 's')
-            + ' uncovered, ' + awaiting + ' awaiting a drone'));
+            + ' uncovered, ' + awaiting + ' awaiting a drone'
+            + (confirming ? ', ' + confirming + ' waiting for your confirmation' : '')));
+        // One Re-task button per drone whose lanes wait for confirmation: it confirms all of that drone's lanes at once.
+        const retaskDrones = {};
+        keys.forEach((k) => {
+            const e = uncoveredLanes[k];
+            if (!e.seg && e.status === 'needs_confirmation') {
+                const d = retaskDrones[e.lost_id] || (retaskDrones[e.lost_id] = { lost_id: e.lost_id, reason: e.reason, lanes: 0 });
+                d.lanes += 1;
+            }
+        });
+        Object.keys(retaskDrones).sort().forEach((id) => {
+            const d = retaskDrones[id];
+            const row = el('div', 'retask-confirm-row', id + ': ' + d.lanes + ' unflown lane' + (d.lanes === 1 ? '' : 's')
+                + ' wait for your confirmation');
+            row.appendChild(retaskConfirmButton(d));
+            box.appendChild(row);
+        });
         keys.forEach((k) => {
             const e = uncoveredLanes[k];
             const where = '(' + fmt(e.x_cm) + ', ' + fmt(e.y_cm) + ') to (' + fmt(e.end_x_cm) + ', ' + fmt(e.end_y_cm) + ') cm';
@@ -1615,46 +1637,65 @@ const socket = io();
             }
             const row = el('div', null, e.lost_id + ' lane ' + e.index + ' ' + e.direction + ' ' + fmt(e.distance_cm) + ' cm ' + where + ': ' + why);
             if (e.seg && e.status === 'needs_confirmation') row.appendChild(reflightConfirmButton(e));
-            if (!e.seg && e.status === 'needs_confirmation') row.appendChild(retaskConfirmButton(e));
             box.appendChild(row);
         });
+    }
+    // Confirmations are asked inline, in two clicks on the same button, never with window.confirm: a modal dialog would
+    // block the page, and with it the LAND ALL button and the Shift+L hotkey, while drones fly. The first click arms
+    // the button and shows what confirming means; a second click within CONFIRM_ARM_MS sends it. Armed buttons are
+    // remembered by key, so a redraw of the list (renderUncovered) keeps them armed.
+    const CONFIRM_ARM_MS = 8000;
+    const armedConfirms = {};  // key -> time (ms) the arming runs out
+    function twoStepConfirmButton(key, cls, label, armedLabel, warning, send) {
+        const button = el('button', 'btn ' + cls, label);
+        button.type = 'button';
+        button.title = warning;
+        const armed = () => (armedConfirms[key] || 0) > Date.now();
+        const show = () => {
+            const on = armed();
+            button.textContent = on ? armedLabel : label;
+            button.classList.toggle('armed', on);
+            button.title = on ? warning + ' Click again to confirm.' : warning;
+        };
+        show();
+        button.addEventListener('click', () => {
+            if (!armed()) {
+                armedConfirms[key] = Date.now() + CONFIRM_ARM_MS;
+                show();
+                showFleetBanner(warning + ' Click "' + armedLabel + '" again to confirm.', CONFIRM_ARM_MS);
+                setTimeout(() => { if (button.isConnected) show(); }, CONFIRM_ARM_MS + 50);
+                return;
+            }
+            delete armedConfirms[key];
+            button.disabled = true;
+            button.textContent = label;
+            button.classList.remove('armed');
+            send();
+        });
+        return button;
     }
     // A person cut is never re-flown on its own: another drone would fly toward the same person from the far side.
     // The operator may confirm it once the person is known to have moved away.
     function reflightConfirmButton(e) {
-        const button = el('button', 'btn reflight-confirm', 'Re-fly');
-        button.type = 'button';
-        button.title = 'Offer this segment to another drone once ' + e.lost_id + ' has finished its lanes';
-        button.addEventListener('click', () => {
-            const question = 'A person stopped ' + e.lost_id + ' on lane ' + e.index + '. Another drone would fly this '
-                + 'segment from the far side, toward where the person was. Re-fly it only if the person has moved away. '
-                + 'Re-fly it?';
-            if (!window.confirm(question)) return;
-            button.disabled = true;
-            socket.emit('confirm_reflight', { drone_id: e.drone_id || e.lost_id, cut_seq: e.cut_seq });
-        });
-        return button;
+        const warning = 'A person stopped ' + e.lost_id + ' on lane ' + e.index + '. Another drone would fly this '
+            + 'segment from the far side, toward where the person was. Re-fly it only if the person has moved away.';
+        return twoStepConfirmButton('reflight:' + e.lost_id + ':' + e.cut_seq, 'reflight-confirm', 'Re-fly',
+            'Confirm re-fly', warning,
+            () => socket.emit('confirm_reflight', { drone_id: e.drone_id || e.lost_id, cut_seq: e.cut_seq }));
     }
     socket.on('reflight_confirm_result', (r) => {
         if (!r) return;
         showFleetBanner('RE-FLIGHT ' + (r.drone_id || '') + ': ' + (r.detail || (r.ok ? 'confirmed' : 'not confirmed')), 15000);
         if (!r.ok) renderUncovered();  // a refused confirmation gives the button back
     });
-    // The lanes of a drone that was landed (or lost) while nobody controlled it are never handed to another drone on
-    // their own: the operator decides whether another drone flies into the area it was held over.
-    function retaskConfirmButton(e) {
-        const button = el('button', 'btn reflight-confirm', 'Re-task');
-        button.type = 'button';
-        button.title = 'Offer all of ' + e.lost_id + "'s unflown lanes to another drone";
-        button.addEventListener('click', () => {
-            const question = e.lost_id + ' was ' + (e.reason || 'landed with no controller') + '. Another drone would '
-                + 'fly its unflown lanes, over the area where it was held for manual control. Offer them only if that '
-                + 'area is safe to fly. Re-task its lanes?';
-            if (!window.confirm(question)) return;
-            button.disabled = true;
-            socket.emit('confirm_retask', { drone_id: e.lost_id });
-        });
-        return button;
+    // The lanes of a drone that landed (or was lost) while held with nobody controlling it are not given to another
+    // drone unless the operator confirms it. One button per drone confirms all of its waiting lanes.
+    function retaskConfirmButton(d) {
+        const warning = d.lost_id + ' was ' + (d.reason || 'landed with no controller') + '. Another drone would fly '
+            + 'its unflown lanes, over the area where it was held for manual control. Re-task them only if that area '
+            + 'is safe to fly and ' + d.lost_id + ' stays on the ground.';
+        return twoStepConfirmButton('retask:' + d.lost_id, 'retask-confirm', 'Re-task', 'Confirm re-task', warning,
+            () => socket.emit('confirm_retask', { drone_id: d.lost_id }));
     }
     socket.on('retask_confirm_result', (r) => {
         if (!r) return;
@@ -1673,6 +1714,17 @@ const socket = io();
         markSegments(segments);
         if (mapPlan && mapPlan.setUncoveredSegments) mapPlan.setUncoveredSegments(segments);
         renderUncovered();
+    }
+    // A drone declared lost because it landed with lanes left while its link is up (for example one landed while held
+    // with no controller) is out of the search, not lost: its card and the banner say so.
+    function outOfSearch(d) { return !!d && d.lost === true && d.connected === true && d.is_flying === false; }
+    function droneLostText(id) {
+        // The fleet_status that marks it lost follows this event, so only its link and flight state are read here.
+        const d = droneInfo[id];
+        if (d && d.connected === true && d.is_flying === false) {
+            return 'OUT OF THE SEARCH: ' + id + ' landed with lanes left; its link is up';
+        }
+        return 'DRONE LOST: ' + (id || '');
     }
     socket.on('fleet_event', (ev) => {
         if (!ev) return;
@@ -1703,7 +1755,7 @@ const socket = io();
             markLanes(ev.drone_id, ev.awaiting, 'awaiting');
             renderUncovered();
             showFleetBanner('RETASK:' + who + (ev.detail ? ' ' + ev.detail : ''));
-        } else if (kind === 'drone_lost') showFleetBanner('DRONE LOST:' + who);
+        } else if (kind === 'drone_lost') showFleetBanner(droneLostText(ev.drone_id));
         else if (kind === 'land_all') {
             const fb = landAllEventFeedback(ev);
             if (fb) showFleetBanner(fb.text, LAND_ALL_FAILURE_HOLD_MS);

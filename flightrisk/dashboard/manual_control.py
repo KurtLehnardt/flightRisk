@@ -13,7 +13,11 @@ Rules:
 * **Release.** ``resume_search(X)`` releases X only, and is the only way to
   release a drone besides taking control of another one. It is also accepted
   for a drone that its edge reports paused while no one controls it (for
-  example after the controlling browser went away).
+  example after the controlling browser went away). It is refused (reason
+  ``lost``) for a drone the fleet coordinator has declared lost: that
+  drone's lanes were handed on, or wait for the operator's Re-task, so it
+  must not fly them too. Switching control away from a lost drone leaves it
+  held instead of resuming it.
 * **Controller gone.** When the browser that took control disconnects
   (closed, reloaded or crashed), the drone stays paused: it keeps hovering
   where it is, and its edge reports it ``held``. No motion is started
@@ -33,7 +37,12 @@ Rules:
   operator who walked away from one who is only idle. If the ground process
   itself dies, the edge's ground-link watchdog lands the drone within
   ``FLIGHTRISK_LINK_LOSS_LAND_S`` (3 s), sooner than this countdown.
-  The battery landing still applies throughout.
+  The battery landing still applies throughout. A drone that lands while
+  its countdown runs, by the countdown's own ``land`` or by itself (its
+  battery landing, for example), is remembered as orphan-landed
+  (``orphan_landing``) until a new plan, or until it reports flying again
+  after its landing was seen: the supervisor then makes its unflown lanes
+  wait for the operator's confirmation instead of handing them on.
 * **Held with no controller, whatever the cause.** The same countdown also
   starts whenever a flying drone's edge reports it ``manual`` or ``held``
   and no dashboard controls it, not only after a disconnect: for example
@@ -88,6 +97,8 @@ __all__ = [
     "MANUAL_ACTIONS",
     "MANUAL_REPLY_TIMEOUT_S",
     "MIN_ORPHAN_LAND_S",
+    "ORPHAN_LANDED_BY_GROUND",
+    "ORPHAN_LANDED_ITSELF",
     "ORPHAN_LAND_ENV",
     "ManualControl",
     "manual_orphan_land_s",
@@ -136,6 +147,11 @@ DEFAULT_STEP_CM = 30
 DEFAULT_ROTATE_DEG = 30
 # An orphan landing that could not be sent is tried again after this long.
 _ORPHAN_LAND_RETRY_S = 2.0
+#: How a held drone with no controller came to land (``ManualControl.orphan_landing``):
+#: the ground's countdown sent it the landing, or it landed by itself (its battery
+#: landing, the edge's link-loss landing) while the countdown ran.
+ORPHAN_LANDED_BY_GROUND = fp.ORPHAN_LAND_REASON
+ORPHAN_LANDED_ITSELF = "landed"
 
 # Dashboard command names -> what they send.
 MANUAL_ACTIONS = frozenset({
@@ -176,8 +192,12 @@ class ManualControl:
         reply_timeout_s: float = MANUAL_REPLY_TIMEOUT_S,
         background: bool = True,
         orphan_land_s: float | None = None,
+        lost: Callable[[str], bool] | None = None,
     ):
         self._drone_ids = tuple(drone_ids)
+        # Whether the fleet coordinator has declared a drone lost: such a
+        # drone's lanes are no longer its own, so it never resumes its search.
+        self._lost = lost
         self._send = send
         self._emit_fn = emit
         self._clock = clock
@@ -200,10 +220,15 @@ class ManualControl:
             MIN_ORPHAN_LAND_S, float(orphan_land_s)
         )
         self._orphans: dict[str, float] = {}
-        # Drones the orphan countdown has landed since the last
-        # ``forget_orphan_landings`` (a new plan): the supervisor makes their
-        # lanes wait for the operator (``orphan_landed``).
-        self._orphan_landed: set[str] = set()
+        # Drones that landed while held with no controller, since the last
+        # ``forget_orphan_landings`` (a new plan), with how they landed
+        # (``ORPHAN_LANDED_BY_GROUND`` or ``ORPHAN_LANDED_ITSELF``): the
+        # supervisor makes their lanes wait for the operator
+        # (``orphan_landing``). ``_orphan_down`` holds those whose telemetry
+        # has shown them on the ground since; one that reports flying after
+        # that is in the air again and loses the mark.
+        self._orphan_landed: dict[str, str] = {}
+        self._orphan_down: set[str] = set()
         # When each drone's last ``resume_search`` was acknowledged (ground
         # clock): telemetry this soon after may predate the edge's release.
         self._resumed_at: dict[str, float] = {}
@@ -279,6 +304,28 @@ class ManualControl:
         resumed = self._resumed_at.get(drone_id)
         return resumed is None or self._clock() - resumed >= _RELEASE_GRACE_S
 
+    def _note_orphan_flight_locked(self, drone_id: str) -> str | None:
+        """Track an orphan-landed drone's flight state from its telemetry. Caller holds ``_lock``.
+
+        The landing is seen once the telemetry shows the drone on the ground.
+        A drone that reports flying after that has taken off again (a person
+        flies it, or a new start): its orphan-landing mark is removed, and
+        how it had landed is returned so the caller can log it. Returns None
+        otherwise. Telemetry that still shows the drone flying right after
+        the countdown sent its landing does not count: the landing was not
+        seen yet.
+        """
+        if drone_id not in self._orphan_landed:
+            return None
+        flying = self._flying.get(drone_id)
+        if flying is False:
+            self._orphan_down.add(drone_id)
+            return None
+        if flying is True and drone_id in self._orphan_down:
+            self._orphan_down.discard(drone_id)
+            return self._orphan_landed.pop(drone_id)
+        return None
+
     def cancel_orphan(self, drone_id: str, reason: str) -> bool:
         """Stop *drone_id*'s orphan-landing countdown; True if one was running."""
         with self._lock:
@@ -289,20 +336,32 @@ class ManualControl:
         self._emit_status()
         return True
 
-    def orphan_landed(self, drone_id: str) -> bool:
-        """True once the orphan countdown has sent *drone_id* its landing, until ``forget_orphan_landings``."""
+    def orphan_landing(self, drone_id: str) -> str | None:
+        """How *drone_id* landed while held with no controller, or None.
+
+        ``ORPHAN_LANDED_BY_GROUND`` once the orphan countdown has sent it its
+        landing, ``ORPHAN_LANDED_ITSELF`` when its telemetry showed it on the
+        ground while the countdown ran (a battery landing, for example). The
+        mark lasts until ``forget_orphan_landings`` (a new plan), or until
+        the drone reports flying again after its landing was seen.
+        """
         with self._lock:
-            return drone_id in self._orphan_landed
+            return self._orphan_landed.get(drone_id)
+
+    def orphan_landed(self, drone_id: str) -> bool:
+        """True while *drone_id* carries an orphan-landing mark (``orphan_landing``)."""
+        return self.orphan_landing(drone_id) is not None
 
     def orphaned(self, drone_id: str) -> bool:
-        """True while *drone_id*'s orphan countdown runs, and once it has landed the drone (``orphan_landed``)."""
+        """True while *drone_id*'s orphan countdown runs, and while it carries an orphan-landing mark."""
         with self._lock:
             return drone_id in self._orphans or drone_id in self._orphan_landed
 
     def forget_orphan_landings(self) -> None:
-        """Forget which drones the orphan countdown landed; the supervisor calls it for a new plan."""
+        """Forget which drones landed while held with no controller; the supervisor calls it for a new plan."""
         with self._lock:
             self._orphan_landed.clear()
+            self._orphan_down.clear()
 
     def check_orphans(self) -> list[str]:
         """Land every held drone whose controller has been gone for ``orphan_land_s``; returns their ids.
@@ -330,7 +389,8 @@ class ManualControl:
             try:
                 self._send(drone_id, msg)
                 with self._lock:
-                    self._orphan_landed.add(drone_id)
+                    self._orphan_landed[drone_id] = ORPHAN_LANDED_BY_GROUND
+                    self._orphan_down.discard(drone_id)
             except Exception as exc:  # noqa: BLE001 - retried, never raised into the monitor
                 with self._lock:
                     self._pending.pop((drone_id, msg["cmd_id"]), None)
@@ -391,9 +451,15 @@ class ManualControl:
             self._flying[drone_id] = msg.get("is_flying") if isinstance(msg.get("is_flying"), bool) else None
             orphan_over = None
             orphan_started = False
+            flying_again = self._note_orphan_flight_locked(drone_id)
             if drone_id in self._orphans:
                 if self._flying[drone_id] is False:
                     orphan_over = "landed"
+                    # It landed by itself while nobody controlled it (its
+                    # battery landing, for example): its lanes wait for the
+                    # operator exactly as after the countdown's own landing.
+                    self._orphan_landed[drone_id] = ORPHAN_LANDED_ITSELF
+                    self._orphan_down.add(drone_id)
                 elif mode == "autonomous":
                     orphan_over = "edge_released"
             elif self._unattended_locked(drone_id, mode, msg.get("state")):
@@ -409,7 +475,16 @@ class ManualControl:
                 self._controlled = None
                 self._controller_sid = None
                 released = True
+        if flying_again is not None:
+            obs_events.flight_safety("manual_orphan_landing_cleared", reason="flying_again", drone_id=drone_id,
+                                     landing=flying_again, level=logging.INFO)
+            log.warning("%s reports flying again after landing while held with no controller; it is no longer "
+                        "treated as orphan-landed", drone_id)
         if orphan_over is not None:
+            if orphan_over == "landed":
+                obs_events.flight_safety("manual_orphan_landed", reason=ORPHAN_LANDED_ITSELF, drone_id=drone_id)
+                log.warning("Held %s landed by itself while nobody controlled it; its unflown lanes wait for the "
+                            "operator", drone_id)
             self.cancel_orphan(drone_id, orphan_over)
         if orphan_started:
             obs_events.flight_safety("manual_orphan_started", reason="no_controller", drone_id=drone_id,
@@ -535,6 +610,17 @@ class ManualControl:
             self.cancel_orphan(drone_id, "land_all")
         return dropped
 
+    def _is_lost(self, drone_id: str) -> bool:
+        """True when the coordinator has declared *drone_id* lost. An unreadable answer counts as lost."""
+        check = self._lost
+        if check is None:
+            return False
+        try:
+            return bool(check(drone_id))
+        except Exception:  # fail closed: never resume a drone that may be lost
+            log.warning("lost check failed for %s", drone_id, exc_info=True)
+            return True
+
     def _fence_now(self) -> fp.Fence | None:
         try:
             return self._fence()
@@ -580,7 +666,16 @@ class ManualControl:
         # this controller goes away too).
         self.cancel_orphan(drone_id, "take_control")
         fence = self._fence_now()
-        if previous is not None:
+        if previous is not None and self._is_lost(previous):
+            # A lost drone never resumes its search (``resume_search``): it
+            # stays held, and with nobody controlling it its orphan
+            # countdown starts from its next telemetry.
+            obs_events.flight_safety("manual_release", reason="switch", drone_id=previous, to_drone=drone_id,
+                                     resumed=False)
+            self._result(previous, "resume_search", False, reason="lost",
+                         detail=(f"{previous} was declared lost, so it stays held instead of resuming its search; "
+                                 f"take control of it again and land it"))
+        elif previous is not None:
             obs_events.flight_safety("manual_release", reason="switch", drone_id=previous, to_drone=drone_id)
             self._queue_send(previous, fp.make_resume_search(drone_id=previous, fence=fence), "resume_search",
                              _RESUME_REPLY_TIMEOUT_S)
@@ -595,6 +690,14 @@ class ManualControl:
         if drone_id not in self._drone_ids:
             return self._result(str(drone_id), "resume_search", False, reason="invalid",
                                 detail=f"{drone_id!r} is not in the fleet")
+        if self._is_lost(drone_id):
+            # Its unflown lanes were handed on, or wait for the operator's
+            # Re-task: resuming would fly them twice. It stays as it is.
+            return self._result(
+                drone_id, "resume_search", False, reason="lost",
+                detail=(f"{drone_id} was declared lost, so its lanes are no longer its own and it cannot resume "
+                        f"its search; land it, then make a new plan to fly it again"),
+            )
         with self._lock:
             controlled = drone_id == self._controlled
             paused_elsewhere = not controlled and self._edge_mode.get(drone_id) in ("manual", "held")

@@ -302,7 +302,9 @@ def test_f2_the_dashboard_offers_a_re_fly_button_only_for_a_person_cut_waiting_f
     js = app_module.Path(app_module.__file__).with_name("static").joinpath("ui", "ui.js").read_text()
     render = js[js.index("function renderUncovered()"):js.index("socket.on('reflight_confirm_result'")]
     assert "e.status === 'needs_confirmation'" in render and "reflightConfirmButton(e)" in render
-    assert "window.confirm(" in render and "socket.emit('confirm_reflight', { drone_id:" in render
+    # Confirmed inline with a second click on the same button: a window.confirm dialog would block LAND ALL.
+    assert "window.confirm(" not in render and "twoStepConfirmButton(" in render
+    assert "socket.emit('confirm_reflight', { drone_id:" in render
     assert "cut_seq: e.cut_seq" in render
 
 
