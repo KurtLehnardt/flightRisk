@@ -23,8 +23,11 @@ ground on 5555/9000, no edge, no drone and no packet to 192.168.10.1.
 """
 from __future__ import annotations
 
+import base64
 import contextlib
+import hashlib
 import json
+import socket
 import threading
 import time
 from pathlib import Path
@@ -160,6 +163,35 @@ class RawClient:
         self.connect({"api_key": KEY})
         assert self.wait_for(lambda: self.sid is not None), self.frames
         self.wait_event("status")
+
+
+def test_a_frame_sent_with_the_handshake_response_is_not_lost():
+    """The open frame can share a TCP read with the 101 response; the client must still deliver it at once."""
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+
+    def serve() -> None:
+        conn, _ = listener.accept()
+        with conn:
+            request = b""
+            while b"\r\n\r\n" not in request:
+                request += conn.recv(4096)
+            key = next(line.split(b":", 1)[1].strip() for line in request.split(b"\r\n") if line.lower().startswith(b"sec-websocket-key"))
+            accept = base64.b64encode(hashlib.sha1(key + b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest())
+            response = (b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                        b"Sec-WebSocket-Accept: " + accept + b"\r\n\r\n")
+            conn.sendall(response + b"\x81\x030{}")  # the 101 response and one text frame in a single write
+            time.sleep(WAIT_S)
+
+    thread = threading.Thread(target=serve, name="coalesced-handshake-server", daemon=True)
+    thread.start()
+    client = _WebSocket.connect(f"ws://127.0.0.1:{listener.getsockname()[1]}/")
+    try:
+        assert client.receive(timeout=2.0) == "0{}"
+    finally:
+        client.close()
+        listener.close()
 
 
 # ---------------------------------------------------------------------------
