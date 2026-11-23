@@ -20,6 +20,9 @@ class BackupRulesTest {
         ExcludeRule("sharedpref", "flightrisk_reasoning.xml"),
         ExcludeRule("sharedpref", "flightrisk_ground_link.xml"),
         ExcludeRule("sharedpref", "flightrisk_config.xml"),
+        // A detector the user imported, and its record (attestation, digest).
+        ExcludeRule("file", "byo_detector"),
+        ExcludeRule("sharedpref", "flightrisk_byo_detector.xml"),
     )
 
     private fun assertAll(where: String, actual: List<ExcludeRule>) {
@@ -56,6 +59,13 @@ class BackupRulesTest {
         val ui = java.io.File("src/main/java/com/flightrisk/app/MainActivity.kt").readText()
         assertTrue(repo.contains("File(context.filesDir, \"snapshots\")"))
         assertTrue(ui.contains("java.io.File(ctx.filesDir, \"recordings\")"))
+    }
+
+    @Test fun importedDetectorNamesMatchTheCode() {
+        val src = java.io.File("src/main/java/com/flightrisk/app/byo/ByoDetectorStore.kt").readText()
+        assertTrue(src.contains("const val FOLDER = \"byo_detector\""))
+        assertTrue(src.contains("const val PREFS_NAME = \"flightrisk_byo_detector\""))
+        assertTrue(src.contains("File(appContext.filesDir, FOLDER)"))
     }
 
     @Test fun groundSettingsFileNameMatchesTheCode() {

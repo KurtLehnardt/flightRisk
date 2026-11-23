@@ -10,7 +10,9 @@
     (flightrisk_privacy_local.xml), the onboarding flag (flightrisk_prefs.xml),
     the ground console settings (flightrisk_ground_settings.xml), the Room
     database, the recorded videos (files/recordings) and the match pictures
-    (files/snapshots), for cloud backup and for device transfer alike.
+    (files/snapshots), and a person detector the user imported
+    (files/byo_detector, with its record flightrisk_byo_detector.xml), for
+    cloud backup and for device transfer alike.
 -->
 <data-extraction-rules>
     <cloud-backup>
@@ -27,6 +29,8 @@
         <exclude domain="database" path="flightrisk_sessions.db-shm" />
         <exclude domain="file" path="recordings" />
         <exclude domain="file" path="snapshots" />
+        <exclude domain="sharedpref" path="flightrisk_byo_detector.xml" />
+        <exclude domain="file" path="byo_detector" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="flightrisk_secure_prefs.xml" />
@@ -42,5 +46,7 @@
         <exclude domain="database" path="flightrisk_sessions.db-shm" />
         <exclude domain="file" path="recordings" />
         <exclude domain="file" path="snapshots" />
+        <exclude domain="sharedpref" path="flightrisk_byo_detector.xml" />
+        <exclude domain="file" path="byo_detector" />
     </device-transfer>
 </data-extraction-rules>

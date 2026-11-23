@@ -21,6 +21,9 @@
     - The Room database (flightrisk_sessions.db and its journal files), the
       recorded session videos (files/recordings) and the match pictures
       (files/snapshots): they can show people, including faces.
+    - A person detector the user imported (files/byo_detector) and its record
+      (flightrisk_byo_detector.xml): the model is the user's own, licensed to
+      them, and its attestation was given on this phone only.
 -->
 <full-backup-content>
     <exclude domain="sharedpref" path="flightrisk_secure_prefs.xml" />
@@ -36,4 +39,6 @@
     <exclude domain="database" path="flightrisk_sessions.db-shm" />
     <exclude domain="file" path="recordings" />
     <exclude domain="file" path="snapshots" />
+    <exclude domain="sharedpref" path="flightrisk_byo_detector.xml" />
+    <exclude domain="file" path="byo_detector" />
 </full-backup-content>
