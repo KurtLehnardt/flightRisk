@@ -139,7 +139,7 @@ def test_pending_names_known_rows_and_prs() -> None:
     for row_id, entries in PENDING.items():
         assert row_id in ids
         for entry in entries:
-            assert entry["pr"] in {"B4", "C5", "C6", "C7", "D1", "D2", "D5"}
+            assert entry["pr"] in {"B4", "C5", "C6", "C7", "D1", "D2", "D5", "E1"}
             profile = entry["profile"]
             if entry["value"] is not None and profile is not None:
                 # Today's value stays the default; the later value must differ.
@@ -244,10 +244,36 @@ def test_table_and_golden_hold_the_same_rows_in_order() -> None:
     assert [row.id for row in TABLE] == [row["id"] for row in _golden_rows()]
 
 
+#: parameters.md unit cells spelled differently from the ``Unit`` value, by ``Unit`` value.
+UNIT_SPELLINGS: dict[str, set[str]] = {"cm_list": {"cm_list", "cm", "cm (w, h)"}}
+
+
+def _assert_same_kind(row: ParamSpec, default: object, golden: object, profile: str) -> None:
+    """``==`` lets True equal 1 and 5 equal 5.0; compare the kinds as well."""
+    if isinstance(default, str) and default in MARKER_TO_GOLDEN:
+        return
+    assert isinstance(default, bool) == isinstance(golden, bool), (profile, "bool")
+    if row.kind is Kind.INT:
+        assert type(default) is int and type(golden) is int, (profile, "int")
+    elif row.kind is Kind.FLOAT:
+        assert isinstance(default, (int, float)) and isinstance(golden, (int, float)), (profile, "float")
+    elif row.kind is Kind.ENUM:
+        assert isinstance(default, str) and isinstance(golden, str), (profile, "enum")
+
+
 @pytest.mark.parametrize("golden", _golden_rows(), ids=lambda r: f"{r['row']}-{r['id']}")
 def test_table_equals_golden(golden: dict) -> None:
     row = {r.id: r for r in TABLE}[golden["id"]]
     assert row.applies.value == golden["applies"], "applies"
+    assert golden["unit"] in UNIT_SPELLINGS.get(row.unit.value, {row.unit.value}), "unit"
+    # Every environment name and CLI flag, with the factor that turns its value into the registry unit.
+    scales = {a.name: a.scale_factor for a in row.env_aliases}
+    names = ([row.env] if row.env else []) + list(row.cli)
+    for name in names:
+        scales.setdefault(name, table_mod.NAME_SCALES.get(name, 1.0))
+    assert set(scales) == set(golden["env_aliases"]), "aliases"
+    for name, alias in golden["env_aliases"].items():
+        assert scales[name] == alias["scale"], (name, "scale")
     assert set(golden["profiles"]) == set(PROFILES)
     for profile in PROFILES:
         entry = golden["profiles"][profile]
@@ -258,6 +284,7 @@ def test_table_equals_golden(golden: dict) -> None:
             continue
         assert default is not None, profile
         assert _golden_value(default) == entry["default"], (profile, "default")
+        _assert_same_kind(row, default, entry["default"], profile)
         lo, hi = (bound.lo, bound.hi) if bound is not None else (None, None)
         assert (lo, hi) == (entry["lo"], entry["hi"]), (profile, "bounds")
         assert _golden_pending(row, profile) == entry["pending"], (profile, "pending")
@@ -299,9 +326,6 @@ def test_non_numeric_defaults_of_rows_87_to_162() -> None:
         ("position.dr_growth_per_turn_cm", "tello"),
         ("position.dr_growth_per_min_hover_cm", "tello"),
         ("find.local_search_max_radius_cm", "tello"),
-        ("link.ground_loss_timeout_s", "tello"),
-        ("link.ground_loss_timeout_s", "generic_multirotor"),
-        ("lost.flying_window_s", "generic_multirotor"),
         ("airspace.obstacle_top_cm", "generic_multirotor"),
         ("envelope.fence_margin_cm", "tello"),
     }
@@ -313,3 +337,51 @@ def test_tello_sdk_rows_are_read_only_tello_only() -> None:
     for row in rows:
         assert row.edit["tello"] is Edit.READ_ONLY
         assert row.defaults["generic_multirotor"] is None
+
+
+T, G = "tello", "generic_multirotor"
+#: Bound cells the generator cannot read as numbers: the golden file holds lo = hi = None for them, so
+#: test_table_equals_golden compares nothing there. A new unreadable cell must be added here on purpose.
+UNREAD_BOUND_CELLS = {
+    (5, G),
+    (5, T),
+    (17, T),
+    (60, G),
+    (60, T),
+    (71, G),
+    (71, T),
+    (109, T),
+    (110, T),
+    (113, G),
+    (113, T),
+    (114, G),
+    (114, T),
+    (116, T),
+    (117, T),
+    (118, T),
+    (121, G),
+    (121, T),
+    (127, G),
+    (127, T),
+    (130, G),
+    (130, T),
+    (131, G),
+    (131, T),
+    (135, G),
+    (135, T),
+    (138, G),
+    (139, G),
+    (140, G),
+}
+
+
+def test_unread_bound_cells_are_listed() -> None:
+    no_bound = {"none", "derived", "same", "n/a", "-", ""}
+    found = {
+        (row["row"], profile)
+        for row in _golden_rows()
+        for profile, entry in row["profiles"].items()
+        if entry and entry["lo"] is None and entry["hi"] is None and "choices" not in entry
+        and entry["bound_text"].strip().lower() not in no_bound
+    }
+    assert found == UNREAD_BOUND_CELLS

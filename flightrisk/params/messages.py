@@ -2,12 +2,17 @@
 
 Every text is plain words with numbers. A test-adapter fact is never offered
 to the operator as something to change, so the refused-input form refuses to
-render one.
+render one. Whether a row is a fact is read from the registry by its id, so a
+caller cannot render a fact by leaving out ``edit``.
 """
 
 from __future__ import annotations
 
 from .spec import Edit
+from .table import TABLE
+
+#: Ids of the rows that are a test-adapter fact on any profile.
+FACT_IDS = frozenset(row.id for row in TABLE if any(e is Edit.FACT for e in row.edit.values()))
 
 
 def _num(value: float) -> str:
@@ -31,8 +36,11 @@ def render_refused_input(
 
     Example: "`envelope.ceiling_margin_cm` 20 cm from FLIGHTRISK_CEILING_MARGIN_CM
     is refused: the Tello allows 30 to 500 cm."
+
+    A row that is a fact in the registry is refused whatever ``edit`` says;
+    ``edit`` only adds the refusal for an id the registry does not hold.
     """
-    if edit is Edit.FACT:
+    if param_id in FACT_IDS or edit is Edit.FACT:
         raise ValueError(f"{param_id} is a test-adapter fact and is never shown as an input")
     return (
         f"`{param_id}` {_num(value)} {unit} from {source_detail} is refused: "

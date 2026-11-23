@@ -81,8 +81,10 @@ def test_fact_rows_are_reported_per_profile():
 
 def test_packages_import_without_heavy_libraries():
     code = (
-        "import sys, flightrisk.params, flightrisk.hardware, "
-        "flightrisk.params.spec, flightrisk.params.messages\n"
+        "import sys, flightrisk.params, flightrisk.hardware, flightrisk.params.spec, "
+        "flightrisk.params.messages, flightrisk.params.table, flightrisk.hardware.catalogue\n"
+        "from flightrisk.hardware.catalogue import BUILTIN_MODELS\n"
+        "[m.coverage_camera(m.cameras[0].id, -90.0) for m in BUILTIN_MODELS.values() if m.cameras]\n"
         "bad = [m for m in ('flask','ultralytics','torch','cv2','mavsdk','djitellopy') if m in sys.modules]\n"
         "assert not bad, bad\n"
     )
