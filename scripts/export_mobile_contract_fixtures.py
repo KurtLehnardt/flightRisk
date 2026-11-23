@@ -296,6 +296,25 @@ def _supervisor(drone_ids: tuple[str, ...] = DRONES, **kwargs: Any):
     return supervisor, transport, sio, clock
 
 
+_PROFILE_FLAT_TO_GROUPED = {
+    "detection_profile_fallback": "fallback", "detection_profile_fallback_reason": "fallback_reason",
+    "detection_profile_requested": "requested", "detection_profile_switchable": "switchable",
+}
+
+
+def _group_profile_fields(extra: dict) -> dict:
+    """Turn the flat ``detection_profile*`` keywords into the one ``detection_profile`` object an edge sends now.
+
+    The fixtures hold what the ground publishes, which is the same for either telemetry shape.
+    """
+    if "detection_profile" not in extra:
+        return dict(extra)
+    out = {key: value for key, value in extra.items() if key not in _PROFILE_FLAT_TO_GROUPED}
+    out["detection_profile"] = {"name": extra["detection_profile"], **{
+        grouped: extra[flat] for flat, grouped in _PROFILE_FLAT_TO_GROUPED.items() if flat in extra}}
+    return out
+
+
 def _telemetry(drone_id: str, *, battery: float | None = 87, height_cm: float | None = 100, is_flying: bool = False,
                rel_x_cm: float | None = 0.0, rel_y_cm: float | None = 0.0, lane_index: int | None = None,
                lanes_total: int | None = None, **extra: Any) -> dict:
@@ -307,7 +326,7 @@ def _telemetry(drone_id: str, *, battery: float | None = 87, height_cm: float | 
         rel_y_cm=rel_y_cm, heading_deg=0.0, lane_index=lane_index, lanes_total=lanes_total, link_age_s=0.1,
         takeoff_at_local_s=None,
     )
-    msg.update(extra)
+    msg.update(_group_profile_fields(extra))
     fp.validate_edge_to_ground(msg, proto=1)
     return msg
 

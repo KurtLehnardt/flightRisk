@@ -33,10 +33,10 @@ class _NoGpsTello(LinkedFakeTello):
 
 def _runner(profile_fields=True):
     """A runner with every field ``_with_profile_status`` can add."""
-    switcher = types.SimpleNamespace(status_fields=lambda: {
-        "detection_profile": "fast", "detection_profile_fallback": True, "detection_profile_switchable": True,
-        "detection_profile_fallback_reason": "model missing", "detection_profile_requested": "accurate",
-    })
+    switcher = types.SimpleNamespace(status_fields=lambda: {"detection_profile": {
+        "name": "fast", "fallback": True, "switchable": True,
+        "fallback_reason": "model missing", "requested": "accurate",
+    }})
     return types.SimpleNamespace(detector_ok=True, camera_ok=True, profile_switcher=switcher if profile_fields else None)
 
 
@@ -63,7 +63,8 @@ def test_mavlink_telemetry_with_gps_and_the_person_cue_is_a_valid_fleet_message(
 
 def test_the_full_wire_message_of_a_mavlink_edge_is_valid():
     msg = _wire(_GpsTello)
-    assert {"lat", "lon", TELEMETRY_PERSON_CUE, "detector_ok", "camera_ok", "detection_profile_requested"} <= set(msg)
+    assert {"lat", "lon", TELEMETRY_PERSON_CUE, "detector_ok", "camera_ok", "detection_profile"} <= set(msg)
+    assert msg["detection_profile"]["requested"] == "accurate"
     assert fp.validate_message(fp.shape_for_peer(msg, 2), proto=2) == "telemetry"
 
 
@@ -80,6 +81,12 @@ def test_every_telemetry_producer_stays_within_the_field_cap(drone_cls, cue, v2,
 def test_the_worst_case_telemetry_leaves_headroom_under_the_cap():
     worst = max(len(_wire(cls)) for cls in (_GpsTello, _NoGpsTello, LinkedFakeTello))
     assert worst <= fp.MAX_FIELDS - 5, f"worst-case telemetry has {worst} of {fp.MAX_FIELDS} fields; add no field without grouping"
+
+
+def test_the_profile_status_is_one_field_not_five():
+    with_profile, without = _wire(_GpsTello), _wire(_GpsTello, profile_fields=False)
+    assert len(with_profile) - len(without) == 1
+    assert not [key for key in with_profile if key.startswith("detection_profile_")]
 
 
 def test_the_cap_still_rejects_a_message_over_it():
