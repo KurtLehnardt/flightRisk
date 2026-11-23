@@ -32,6 +32,7 @@ from flightrisk.drone.obstacle_sensor import (
 from flightrisk.edge_device import ObstacleSettings
 from flightrisk.drone.safety import SafetyEnvelope
 from flightrisk.launcher.commands import EdgeToken, Redactor, build_plan
+from flightrisk.launcher.preflight import INFO, PASS, WARN, obstacle_threshold_check, run_preflight
 from flightrisk.launcher.processes import ProcessManager
 from flightrisk.launcher.server import STATIC_DIR, LauncherApp, make_server
 from flightrisk.launcher.settings import (
@@ -40,6 +41,7 @@ from flightrisk.launcher.settings import (
     WARNING,
     LauncherSettings,
     PresetStore,
+    UNCALIBRATED_DEPTH_NOTE,
     SettingsError,
     builtin_presets,
     effective_obstacle,
@@ -365,3 +367,56 @@ def test_the_script_asks_before_a_weaker_mode_and_sends_the_confirmation():
     load = SCRIPT[SCRIPT.index("function loadPreset()"):SCRIPT.index("async function savePreset()")]
     assert "sensingConfirmed = null;" in load
     assert "Applies on next Start." in SCRIPT
+
+
+# ---------------------------------------------------------------------------
+# Preflight: a threshold that was never calibrated
+# ---------------------------------------------------------------------------
+
+
+def test_the_shipped_threshold_with_sensing_required_is_a_preflight_warning():
+    check = obstacle_threshold_check(REHEARSAL, {})
+    assert (check.name, check.status) == ("Obstacle threshold", WARN)
+    assert check.detail == UNCALIBRATED_DEPTH_NOTE
+    assert check.detail.startswith("The obstacle threshold has not been calibrated (H1), so lanes will be cut on "
+                                   "every gate until it is set from recordings.")
+    assert "0.35" in check.detail and check.detail.endswith(".")
+
+
+@pytest.mark.parametrize("settings, environ, status, detail", [
+    (replace(REHEARSAL, obstacle_min_safe_depth=0.77), {}, PASS, "min safe depth 0.77 (from the window)"),
+    (REHEARSAL, {ENV_OBSTACLE_MIN_SAFE_DEPTH: "0.77"}, PASS,
+     "min safe depth 0.77 (from FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH in the launcher's environment)"),
+    (replace(REHEARSAL, obstacle_min_safe_depth=0.77), {ENV_OBSTACLE_MIN_SAFE_DEPTH: "0.35"}, WARN,
+     UNCALIBRATED_DEPTH_NOTE),
+    (replace(REHEARSAL, obstacle_sensing="off"), {}, INFO, "is not used: obstacle sensing is off"),
+])
+def test_the_threshold_check_follows_the_effective_values(settings, environ, status, detail):
+    check = obstacle_threshold_check(settings, environ)
+    assert check.status == status and detail in check.detail
+
+
+def test_the_warning_is_in_the_preflight_and_never_blocks_the_start(launcher_with):
+    checks = run_preflight(REHEARSAL, EdgeToken(TOKEN, "environment"), _preflight_env(), probe_drones=False)
+    (row,) = [c for c in checks if c.name == "Obstacle threshold"]
+    assert row.status == WARN
+    remote_only = run_preflight(builtin_presets()["Layout A (ground here)"], EdgeToken(TOKEN, "environment"),
+                                _preflight_env(), probe_drones=False)
+    assert not [c for c in remote_only if c.name == "Obstacle threshold"]  # no edge starts there
+    client, _, _ = launcher_with()
+    status, data = client.post("/api/start", {"settings": REHEARSAL.to_json()})
+    assert status == 200 and data["started"] is True
+    (row,) = [c for c in data["checks"] if c["name"] == "Obstacle threshold"]
+    assert row["status"] == "WARN" and row["detail"] == UNCALIBRATED_DEPTH_NOTE
+
+
+def test_the_window_shows_the_same_note_next_to_the_threshold(launcher_with):
+    client, _, _ = launcher_with()
+    ob = client.post("/api/validate", {"settings": REHEARSAL.to_json()})[1]["obstacle"]
+    assert ob["uncalibrated"] is True and ob["uncalibrated_note"] == UNCALIBRATED_DEPTH_NOTE
+    ob = client.post("/api/validate", {"settings": _settings(obstacle_min_safe_depth=0.77)})[1]["obstacle"]
+    assert ob["uncalibrated"] is False and ob["uncalibrated_note"] is None
+    ob = client.post("/api/validate", {"settings": _settings(obstacle_sensing="off")})[1]["obstacle"]
+    assert ob["uncalibrated_note"] is None
+    assert 'id="obstacle-uncalibrated"' in PAGE
+    assert 'note.textContent = ob.uncalibrated_note || "";' in SCRIPT

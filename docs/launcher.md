@@ -195,6 +195,7 @@ All checks are read-only; any FAIL blocks Start.
 | Virtual environment | the launcher runs in a virtual environment (otherwise a warning) |
 | Dependencies | the packages the chosen processes import are installed |
 | Detector weights | the chosen profile's weights are on disk (a stock model that Ultralytics would download is a warning) |
+| Obstacle threshold | an edge starts here and its min safe depth is not the shipped 0.35. With sensing `required` and 0.35 it is a warning, never a block: the threshold has not been calibrated (H1), so lanes will be cut on every gate until it is set from recordings. The window shows the same note under the threshold. With sensing `off` it is INFO |
 | Dashboard port, edge link port | free on 127.0.0.1 (a port in use is reported, never freed: the launcher only stops what it started) |
 | Cable address | in layout A, the address is on one of this computer's adapters and the edge port is free on it |
 | Ground station | edges only: something listens at the ground host and port (otherwise a warning; the edges keep retrying) |

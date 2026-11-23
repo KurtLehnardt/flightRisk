@@ -56,6 +56,7 @@ from flightrisk.launcher.settings import (
     ERROR,
     MAX_DRONES,
     OBSTACLE_SENSING_MODES,
+    UNCALIBRATED_DEPTH_NOTE,
     Issue,
     LauncherSettings,
     PresetError,
@@ -182,6 +183,7 @@ class LauncherApp:
             **eff.to_json(),
             "edges": list(local),
             "warning": sensing_warning(eff, local) if eff.downgraded and local else None,
+            "uncalibrated_note": UNCALIBRATED_DEPTH_NOTE if eff.uncalibrated and local else None,
         }
 
     def _require_sensing_confirmation(self, settings: LauncherSettings, body: dict[str, Any]) -> None:

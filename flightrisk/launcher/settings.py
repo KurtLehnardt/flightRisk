@@ -434,6 +434,13 @@ def validate(
 SOURCE_WINDOW = "window"
 SOURCE_ENVIRONMENT = "environment"
 
+#: The preflight warning and the window's note for a required sensor still on the shipped threshold.
+UNCALIBRATED_DEPTH_NOTE = (
+    "The obstacle threshold has not been calibrated (H1), so lanes will be cut on every gate until it is set "
+    f"from recordings. The min safe depth is still the shipped default {OBSTACLE_MIN_SAFE_DEPTH:g}; set the value "
+    "calibrated for this site (docs/obstacle-sensing.md, \"Calibration procedure\")."
+)
+
 
 @dataclass(frozen=True)
 class EffectiveObstacle:
@@ -457,6 +464,11 @@ class EffectiveObstacle:
         """True when the edges would fly with weaker obstacle protection than ``required``."""
         return self.mode != SENSING_ENV_REQUIRED
 
+    @property
+    def uncalibrated(self) -> bool:
+        """True when sensing is required and the threshold is still the shipped default (never calibrated)."""
+        return self.mode == SENSING_ENV_REQUIRED and self.depth == OBSTACLE_MIN_SAFE_DEPTH
+
     def to_json(self) -> dict[str, Any]:
         return {
             "mode": self.mode,
@@ -468,6 +480,7 @@ class EffectiveObstacle:
             "min_safe_depth_default": OBSTACLE_MIN_SAFE_DEPTH,
             "min_safe_depth_range": list(OBSTACLE_MIN_SAFE_DEPTH_RANGE),
             "downgraded": self.downgraded,
+            "uncalibrated": self.uncalibrated,
             "applies": "on the next Start",
         }
 

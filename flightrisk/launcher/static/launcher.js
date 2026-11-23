@@ -319,6 +319,10 @@ function renderObstacle(ob) {
   }
   $("#obstacle_sensing").disabled = ob.mode_source === "environment";
   $("#obstacle_min_safe_depth").disabled = ob.min_safe_depth_source === "environment";
+  // The threshold still at the shipped default with sensing required: the same note as the preflight WARN.
+  const note = $("#obstacle-uncalibrated");
+  note.hidden = !ob.uncalibrated_note;
+  note.textContent = ob.uncalibrated_note || "";
 }
 
 function renderRunningObstacle(ob) {
