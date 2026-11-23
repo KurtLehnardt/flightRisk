@@ -699,11 +699,13 @@ class TelloController:
         self._takeoff_in_flight = False
         self._takeoff_sent_at: float | None = None
         self._takeoff_answered_ok = False
-        # While a takeoff waits for its reply: None until a land sends its
-        # first interrupting command, then how many replies were already
-        # queued at that moment, less those read since. A reply read once it
-        # is 0 came after the land's command and may answer it, so it is
-        # never taken as the takeoff's (see _TAKEOFF_CONFIRM_S).
+        # While a takeoff waits for its reply: how many replies it has read
+        # (each counted under _wire_lock as it is taken), and None until a
+        # land sends its first interrupting command, then how many replies
+        # the takeoff had read or found queued at that moment. A reply read
+        # beyond that count came after the land's command and may answer it,
+        # so it is never taken as the takeoff's (see _TAKEOFF_CONFIRM_S).
+        self._takeoff_replies_read = 0
         self._replies_before_land: int | None = None
         self._lift_guard_until = 0.0
         self._reply_guard_until = 0.0
@@ -1343,16 +1345,18 @@ class TelloController:
     def _send_land_raw(self, command: str) -> None:
         """Send ``stop`` or ``land`` for an interrupting land, without reading a reply.
 
-        The first one sent while a takeoff waits for its reply marks the
-        replies already queued (``_replies_before_land``): only those may
-        still be read as the takeoff's answer.
+        The first one sent while a takeoff waits for its reply marks how
+        many replies the takeoff has read or finds queued
+        (``_replies_before_land``): only those may still be read as the
+        takeoff's answer.
         """
         with self._wire_lock:
             if self._takeoff_in_flight and self._replies_before_land is None:
                 try:
-                    self._replies_before_land = len(self.tello.get_own_udp_object()["responses"])
+                    queued = len(self.tello.get_own_udp_object()["responses"])
                 except Exception:  # noqa: BLE001 - no count: every later reply counts as after the land
-                    self._replies_before_land = 0
+                    queued = 0
+                self._replies_before_land = self._takeoff_replies_read + queued
         try:
             self.tello.send_command_without_return(command)
         except Exception as e:
@@ -1879,6 +1883,7 @@ class TelloController:
                     # starts the takeoff guards (see _TAKEOFF_LIFT_GUARD_S).
                     self._takeoff_in_flight = True
                     self._takeoff_answered_ok = False
+                    self._takeoff_replies_read = 0
                     self._replies_before_land = None
                     self._takeoff_sent_at = time.monotonic()
                     self._lift_guard_until = 0.0
@@ -1934,7 +1939,8 @@ class TelloController:
         takeoff was sent. Returns the reply that decides (None when no reply
         that could answer a takeoff arrived within ``timeout_s`` of the
         send) and whether the takeoff counts as done. A reply queued after a
-        land sent its interrupting ``stop`` (``_replies_before_land``) is
+        land sent its interrupting ``stop`` (``_replies_before_land``, against
+        the replies this takeoff has read, ``_takeoff_replies_read``) is
         never taken as the takeoff's: it is logged as ``ignored_landing``,
         and the answer is ``interrupted``. While a bare ``error`` is being
         confirmed, any reply read once a land has started ends it with that
@@ -1962,6 +1968,7 @@ class TelloController:
                 responses,
                 max(0.0, end - time.monotonic()),
                 stop_waiting=decided if unconfirmed is not None else None,
+                count_for_takeoff=True,
             )
             if reply is None:
                 if unconfirmed is None:
@@ -2017,15 +2024,10 @@ class TelloController:
             )
 
     def _read_after_land_command(self) -> bool:
-        """Count one reply read by a takeoff; True if it was queued after a land's interrupting command."""
+        """True if the reply the takeoff read last was queued after a land's interrupting command."""
         with self._wire_lock:
             before = self._replies_before_land
-            if before is None:
-                return False
-            if before > 0:
-                self._replies_before_land = before - 1
-                return False
-            return True
+            return before is not None and self._takeoff_replies_read > before
 
     def _confirm_takeoff_error(self, reply: str, sent_at: float, landing: bool) -> bool:
         """Decide a takeoff answered only with a bare "error": True when fresh state shows the drone in the air.
@@ -2103,12 +2105,17 @@ class TelloController:
         responses: list,
         timeout_s: float,
         stop_waiting: Callable[[], bool] | None = None,
+        count_for_takeoff: bool = False,
     ) -> str | None:
         """Read the reply to the command just sent, or None if none arrives within ``timeout_s``.
 
         Caller holds ``_cmd_lock``. Records the reply time, as djitellopy
         does, so the next command keeps the minimum gap. Also returns None,
-        without waiting further, as soon as ``stop_waiting()`` is true.
+        without waiting further, as soon as ``stop_waiting()`` is true. With
+        *count_for_takeoff* the reply is taken and counted in
+        ``_takeoff_replies_read`` in one step under ``_wire_lock``, so a land
+        that marks the replies before its stop (``_send_land_raw``) never
+        finds one taken but not yet counted.
         """
         sent_at = time.monotonic()
         while not responses:
@@ -2118,7 +2125,12 @@ class TelloController:
                 return None
             time.sleep(_REPLY_POLL_S)
         self.tello.last_received_command_timestamp = time.time()
-        raw = responses.pop(0)
+        if count_for_takeoff:
+            with self._wire_lock:
+                raw = responses.pop(0)
+                self._takeoff_replies_read += 1
+        else:
+            raw = responses.pop(0)
         if isinstance(raw, (bytes, bytearray)):
             reply = bytes(raw).decode("utf-8", "replace")
         else:
