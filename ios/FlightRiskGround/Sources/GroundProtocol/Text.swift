@@ -98,8 +98,22 @@ public enum GroundText {
         case .start: return "start"
         case .planRefused: return "PLAN REFUSED"
         case .startRefused: return "start_refused"
+        case .laneBlocked: return laneBlocked(ev)
         case .unknown(let raw): return raw.isEmpty ? nil : raw
         }
+    }
+
+    /// The dashboard's `laneBlockedText`: "OBSTACLE drone-2: lane 0 stopped at (250, 210) cm,
+    /// 190 cm not searched". A cut for a person adds that it is re-flown only if the operator
+    /// confirms it on the laptop.
+    public static func laneBlocked(_ ev: FleetEvent) -> String {
+        let lane = ev.laneIndex.map { "lane \($0)" } ?? "a lane"
+        let at = " stopped at (\(number(ev.xCm)), \(number(ev.yCm))) cm"
+        let left = ev.unflownCm.map { ", \(number($0)) cm not searched" } ?? ""
+        let person = ev.reason == "person" ? "; a person: re-flown only if the operator confirms it on the laptop" : ""
+        var who = "a drone"
+        if let id = ev.droneId, !id.isEmpty { who = id }
+        return "OBSTACLE \(who): \(lane)\(at)\(left)\(person)"
     }
 
     /// The error line for a refused plan or start, as the dashboard words it; nil for other kinds.
