@@ -23,8 +23,11 @@ A1 ─> A2 ─┬─> A3 ─┬─> B1 ─┐
                 B2 ─> B3 ─> B4 ─> C1 ─> C2 ─> D4 ─> D1 ─> D2 ─> D3 ─> C3 ─> C4 ─> C5 ─> C6 ─┬─> C7
                      (fast path: B1 to B4, C1, C2, D4)                                 └─> F1 ─┬─> F2 ─┐
                                                                                                └─> F3 ─┤
-                     D5 (after D4, F2 and F3) ─────────────────────────────────────────────────────────┴─> D5 ─> E1 ─> E2 ─> E3 ─> E4
+                     F3 ───────────────────────────────────────────────────────────────────────────────┴─> D5 ─> E1 ─> E2 ─> E3 ─> E4
 ```
+
+D5 follows D4, F2 and F3.
+The arrows after D4 (D4, D1, D2, D3, C3) show the follow-up order only, not dependencies: D1's airspace work does not need D4, and C3 does not need D3.
 
 - Phases in merge order: A (core; A1 and A2 change no behaviour, A3 carries items 47 and 53, A4 items 1, 47,
   48, 49 and 53, A5 items 47 and 53). B4 adds item 53 of section 27. The order then continues with B
