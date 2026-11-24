@@ -113,7 +113,9 @@ class AsyncBridge:
         publish the loop, and shuts the new loop down instead.
 
         Raises ``RuntimeError`` if the loop is not running within
-        ``_START_TIMEOUT`` seconds, which bounds the whole call.
+        ``_START_TIMEOUT`` seconds of its thread starting. That limit covers
+        only the wait for the loop thread: a start that overlaps a stop can
+        first wait for ``_stop_lock`` while the stop joins its thread.
         """
         with self._start_lock:
             if self.is_running:

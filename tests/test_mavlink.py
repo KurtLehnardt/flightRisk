@@ -345,8 +345,10 @@ class TestConnect:
         ctrl = MavlinkController(name="no-loop")
         with patch.object(
             ctrl._bridge, "start_loop", side_effect=RuntimeError("[x] Event loop did not start within 5s")
-        ):
+        ) as start_loop:
             assert ctrl.connect() is False
+        # Without this, an early return (for example the mavsdk version check) would pass the test.
+        start_loop.assert_called_once()
         assert ctrl._running is False
         assert ctrl._loop is None
 
