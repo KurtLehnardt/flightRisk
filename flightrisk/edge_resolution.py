@@ -33,8 +33,9 @@ CAP-6, and today's ranges from ``params/today.py``, so an environment or
 flag value of a name today's code reads keeps today's range), runs the static feature gates (``resolve_features``, FEA-7 static
 part, FEA-10) and builds the start report (``build_report``). Any refusal
 raises ``EdgeStartRefused``, whose text is the operator's exit message. The
-resolved values are kept in ``EdgeResolution``; nothing reads them yet, so a
-start that is not refused flies exactly as before.
+resolved values are kept in ``EdgeResolution``. The edge builds its start
+envelope from them (``envelope_arguments``); with no new input they are
+today's values, so a start that is not refused flies exactly as before.
 """
 
 from __future__ import annotations
@@ -663,6 +664,60 @@ def resolve_edge(
         gates=MappingProxyType(gates),
         report=report,
     )
+
+
+#: The registry row each ``SafetyEnvelope`` argument of the edge's start envelope reads (EDGE-2).
+ENVELOPE_ROWS: Mapping[str, str] = MappingProxyType({
+    "geofence_cm": "envelope.geofence_cm",
+    "alt_slot_cm": "envelope.alt_slot_cm",
+    "ceiling_cm": "envelope.ceiling_cm",
+    "ceiling_margin_cm": "envelope.ceiling_margin_cm",
+    "min_takeoff_battery": "battery.min_takeoff_pct",
+    "land_battery": "battery.critical_pct",
+    "link_loss_land_s": "link.loss_detect_s",
+    "link_loss_hold_s": "link.loss_wait_s",
+})
+
+
+def todays_envelope_arguments(envelope: Any) -> dict[str, Any]:
+    """The ``SafetyEnvelope`` arguments that rebuild ``envelope``, keyed as ``ENVELOPE_ROWS``."""
+    return {
+        "geofence_cm": envelope.geofence_cm,
+        "alt_slot_cm": envelope.alt_slot_cm,
+        "ceiling_cm": envelope.ceiling_cm,
+        "ceiling_margin_cm": envelope.ceiling_margin_cm,
+        "min_takeoff_battery": envelope.min_takeoff_battery,
+        "land_battery": envelope.land_battery,
+        "link_loss_land_s": envelope.link_watchdog.timeout_s,
+        "link_loss_hold_s": envelope.link_loss_hold_s,
+    }
+
+
+def envelope_arguments(resolution: EdgeResolution, today: Mapping[str, Any]) -> dict[str, Any]:
+    """The ``SafetyEnvelope`` arguments of the edge's start envelope, from the resolved values (EDGE-2).
+
+    ``today`` holds the arguments of the envelope today's readers built from the environment and the
+    command line (``todays_envelope_arguments``). Each argument is its row's resolved value
+    (``ENVELOPE_ROWS``), so a value from the profile, the params file or the launcher layer reaches
+    the envelope. A value the environment or the command line set keeps today's reader's value: for a
+    name today's envelope reads, the resolver gives the same value (``tests/test_param_parity.py``),
+    and a name it does not read, such as ``FLIGHTRISK_LAND_BATTERY`` or ``FLIGHTRISK_FIELD_ALT_SLOT_M``
+    on an indoor edge, must not change the envelope in phase A (plan section 1). A row missing from
+    the resolution keeps today's value too. A test-adapter fact override that the resolver ignored on
+    a production unit never reaches the envelope, since the resolved value is then the profile's.
+    """
+    from flightrisk.params.spec import Source
+
+    arguments = dict(today)
+    for name, row in ENVELOPE_ROWS.items():
+        value = resolution.values.get(row)
+        if value is None or Source(value.source) in (Source.ENV, Source.CLI):
+            continue
+        arguments[name] = value.value
+    if not arguments["link_loss_hold_s"]:
+        # The envelope stores a 0 s hold as None: the drone lands at once.
+        arguments["link_loss_hold_s"] = None
+    return arguments
 
 
 def _fact_ids(profile: Any) -> frozenset[str]:
