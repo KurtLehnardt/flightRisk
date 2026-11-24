@@ -40,6 +40,8 @@ register(
     default_host=_tello_host,
     options_from=_tello_options,
     description="DJI Tello over Wi-Fi (djitellopy)",
+    adapter="tello_sdk_udp",
+    models=("tello", "tello_edu"),
 )
 
 
@@ -71,6 +73,8 @@ register(
     default_host=_mavlink_host,
     options_from=_mavlink_options,
     description="MAVLink autopilot via MAVSDK, video over RTSP",
+    adapter="mavlink",
+    models=("generic_multirotor",),
 )
 
 

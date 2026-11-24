@@ -56,6 +56,11 @@ class BackendSpec:
     #: generic settings mapping.
     options_from: OptionsParser = _no_options
     description: str = ""
+    #: The adapter family this backend speaks (an entry of
+    #: ``flightrisk.hardware.catalogue.ADAPTERS``), or ``""`` when not declared.
+    adapter: str = ""
+    #: The catalogue model ids this backend can fly. Empty when not declared.
+    models: tuple[str, ...] = ()
 
     def options(self, settings: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
         return self.options_from(settings or {})
@@ -91,6 +96,8 @@ def register(
     default_host: HostResolver,
     options_from: OptionsParser = _no_options,
     description: str = "",
+    adapter: str = "",
+    models: tuple[str, ...] = (),
     replace: bool = False,
 ) -> BackendSpec:
     """Register a backend under ``name`` and return its spec.
@@ -105,6 +112,8 @@ def register(
         default_host=default_host,
         options_from=options_from,
         description=description,
+        adapter=adapter,
+        models=tuple(models),
     )
     with _lock:
         if name in _specs and not replace:
