@@ -613,7 +613,7 @@ def resolve_edge(
     argv: Iterable[str] = (),
     parser: Any = None,
     load_inventory: Optional[Callable[[], Any]] = None,
-    today_accepts: Optional[Mapping[str, Mapping[str, Any]]] = TODAY_ACCEPTS,
+    today_accepts: Mapping[str, Mapping[str, Any]] = TODAY_ACCEPTS,
 ) -> EdgeResolution:
     """Resolve the unit ``drone_id`` flying ``choice`` on edge drone kind ``drone``, before any contact.
 
@@ -626,6 +626,10 @@ def resolve_edge(
     from flightrisk.params.report import build_report
     from flightrisk.params.resolver import ParamRefused, resolve_unit
 
+    if today_accepts is None or not today_accepts:
+        # None or an empty map would check environment and flag values against the target bounds,
+        # which accepts inputs today's edge refuses (SEAM-10).
+        raise ValueError("today_accepts must be today's accepted ranges, not None or an empty map")
     if drone not in BACKEND_DEFAULT_MODELS:
         raise ValueError(f"unknown edge drone {drone!r}")
     simulated = drone in SIMULATED_DRONES
