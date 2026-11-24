@@ -353,10 +353,6 @@ ALLOWLIST: dict[str, dict[tuple, dict]] = {
     "flightrisk/drone/fake.py": {
         ('flightrisk/drone/fake.py', '<module>.FakeDrone.__init__', 'kwarg', 'DroneCapabilities', 'max_altitude_m', 10): {"count": 1, "category": "test_double",
             "reason": 'Simulation only value for the fake drone.'},
-        ('flightrisk/drone/fake.py', '<module>.FakeDrone.__init__', 'kwarg', 'DroneCapabilities', 'max_move_cm', 500): {"count": 1, "category": "deferred",
-            "reason": 'A test double mirrors the Tello move limit of row move.max_cm; A3 makes the fake read it from the registry so it cannot drift.'},
-        ('flightrisk/drone/fake.py', '<module>.FakeDrone.__init__', 'kwarg', 'DroneCapabilities', 'min_move_cm', 20): {"count": 1, "category": "deferred",
-            "reason": 'A test double mirrors the Tello move limit of row move.min_cm; A3 makes the fake read it from the registry so it cannot drift.'},
         ('flightrisk/drone/fake.py', '<module>.FakeDroneConfig', 'assign', 'battery_pct', 'battery_pct', 100.0): {"count": 1, "category": "test_double",
             "reason": 'Simulation only value for the fake drone.'},
         ('flightrisk/drone/fake.py', '<module>.FakeDroneConfig', 'assign', 'takeoff_height_m', 'takeoff_height_m', 1.0): {"count": 1, "category": "test_double",
@@ -896,12 +892,6 @@ ALLOWLIST: dict[str, dict[tuple, dict]] = {
     "flightrisk/drone/tello_bound.py": {
         ('flightrisk/drone/tello_bound.py', '<module>', 'assign', 'MAX_QUEUE_AGE_S', 'MAX_QUEUE_AGE_S', 2.0): {"count": 1, "category": "internal",
             "reason": 'Internal loop, join, poll or log timing, not a flight parameter.'},
-        ('flightrisk/drone/tello_bound.py', '<module>', 'assign', 'TELLO_CMD_PORT', 'TELLO_CMD_PORT', 8889): {"count": 1, "category": "deferred",
-            "reason": 'Tello SDK fact, row 87 (`tello_sdk.command_port`); A3 makes it a read of the read-only row.'},
-        ('flightrisk/drone/tello_bound.py', '<module>', 'assign', 'TELLO_STATE_PORT', 'TELLO_STATE_PORT', 8890): {"count": 1, "category": "deferred",
-            "reason": 'Tello SDK fact, row 88 (`tello_sdk.state_port`); A3 makes it a read of the read-only row.'},
-        ('flightrisk/drone/tello_bound.py', '<module>', 'assign', 'TELLO_VIDEO_PORT', 'TELLO_VIDEO_PORT', 11111): {"count": 1, "category": "deferred",
-            "reason": 'Tello SDK fact, row 89 (`tello_sdk.video_port`); A3 makes it a read of the read-only row.'},
         ('flightrisk/drone/tello_bound.py', '<module>', 'assign', '_LOG_INTERVAL_S', '_LOG_INTERVAL_S', 10.0): {"count": 1, "category": "internal",
             "reason": 'Internal loop, join, poll or log timing, not a flight parameter.'},
         ('flightrisk/drone/tello_bound.py', '<module>', 'assign', '_RECV_POLL_S', '_RECV_POLL_S', 0.2): {"count": 1, "category": "internal",

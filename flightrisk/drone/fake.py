@@ -44,6 +44,7 @@ from flightrisk.drone.snapshot import (
     TelemetrySnapshot,
     reading,
 )
+from flightrisk.params import table as _registry
 
 DEFAULT_HOST = "sim://drone"
 
@@ -118,6 +119,18 @@ def _coerce(value: Any, default: Any) -> Any:
     return text
 
 
+def _registry_default(param_id: str) -> Any:
+    """The registry default of ``param_id`` in the Tello profile column.
+
+    The fake mirrors the Tello's move limits, so it reads them instead of
+    keeping a copy that could drift.
+    """
+    for spec in _registry.TABLE:
+        if spec.id == param_id:
+            return spec.defaults[_registry.T]
+    raise KeyError(f"no registry row {param_id!r}")
+
+
 class FakeDrone:
     """Simulated drone implementing every role protocol deterministically."""
 
@@ -140,8 +153,8 @@ class FakeDrone:
         self.capabilities = DroneCapabilities(
             has_gps=False,
             has_rtsp=False,
-            min_move_cm=20,
-            max_move_cm=500,
+            min_move_cm=_registry_default("move.min_cm"),
+            max_move_cm=_registry_default("move.max_cm"),
             max_altitude_m=10,
             supports_missions=False,
             features=frozenset(features),
