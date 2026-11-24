@@ -45,6 +45,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from flightrisk.drone.controller import (
+    INFERRED_BY_METHOD,
     Capability,
     CommandOutcome,
     CommandResult,
@@ -172,6 +173,12 @@ def check_capabilities_honest(subject: Subject) -> None:
             if caps.supports(capability):
                 for method in methods:
                     assert callable(getattr(ctrl, method, None)), f"{subject.name}: declares {capability} without {method}"
+        for capability, method in INFERRED_BY_METHOD:
+            if caps.supports(capability):
+                assert callable(getattr(ctrl, method, None)), f"{subject.name}: declares {capability} without {method}"
+        if caps.supports(Capability.TAKEOFF_ABORT):
+            assert "abort" in inspect.signature(ctrl.takeoff).parameters, (
+                f"{subject.name}: declares {Capability.TAKEOFF_ABORT} but takeoff takes no abort keyword")
         source = inspect.getsource(inspect.getmodule(type(ctrl)))
         for node in ast.walk(ast.parse(source)):
             if isinstance(node, ast.Raise) and node.exc is not None:

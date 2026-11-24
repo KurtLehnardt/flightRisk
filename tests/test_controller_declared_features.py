@@ -89,3 +89,24 @@ def test_constructor_defaults_unchanged():
     assert caps.flight_scale == "room"
     assert caps.features == BASIC_FLIGHT
     assert caps.has_gps is False
+
+
+def _real_classes():
+    from flightrisk.drone.fake import FakeDrone
+    from flightrisk.drone.mavlink_fleet import MavlinkFleetDrone
+    from flightrisk.drone.tello import FakeTelloController, TelloController
+
+    return [
+        (TelloController, {Capability.LINK_HEALTH, Capability.SETTLED_HEIGHT, Capability.STATE_TEMPERATURE,
+                           Capability.TAKEOFF_ABORT, Capability.TAKEOFF_REPLY_TIME}),
+        (FakeTelloController, {Capability.TAKEOFF_ABORT}),
+        (FakeDrone, {Capability.RETURN_TO_HOME, Capability.TAKEOFF_ABORT}),
+        (MavlinkFleetDrone, {Capability.LINK_HEALTH, Capability.MEASURED_HEADING, Capability.MEASURED_POSE,
+                             Capability.TAKEOFF_ABORT}),
+    ]
+
+
+@pytest.mark.parametrize("cls,expected", _real_classes(), ids=lambda v: getattr(v, "__name__", ""))
+def test_inferred_set_of_each_real_backend_is_pinned(cls, expected):
+    inferred = DroneCapabilities.inferred_from(cls).features
+    assert inferred - BASIC_FLIGHT == expected
