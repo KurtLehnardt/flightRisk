@@ -56,7 +56,8 @@ unless every later hash is also recomputed; CODEOWNERS review of this file is th
   `flightrisk/drone/safety.py` and 11 in `flightrisk/drone/flight_guards.py` and
   `flightrisk/drone/temp_preflight.py`. Each constant now reads its registry row and keeps its value and
   type, so the allowlist only loses those 38 entries.
-- Section 27 item: none.
+- Section 27 item: 47 (A3). A production unit ignores the Tello flight-guard and temperature overrides,
+  with a log line naming each variable.
 - SHA-256 previous: 79c17994057de59fb0abd4a575c978dad863b81ec39efdb6f9d0432d66acb710
 - SHA-256 table: f949df64f14cee5c1c025d683cabea1d56a493941db05c214c33f7deac628378
 - SHA-256 golden: 7403c28493386027b0c383326d30d2bb2645fa54c154e289276f9246289d2504

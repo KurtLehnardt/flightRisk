@@ -649,6 +649,24 @@ IGNORED_WITHOUT_BOUND = frozenset({("tello", "FLIGHTRISK_LINK_LOSS_WAIT_S")})
 READ_BY_THE_EDGE = frozenset({"mode.hover_test"})
 
 
+#: Test-adapter fact rows that a production unit's model does not hold, but whose variable today's edge
+#: reads on every unit: the Tello flight guards (``edge_device._flight_guards``) and takeoff temperature
+#: levels (``edge_device._temp_limits``). An override of one on a production unit is ignored, as for the
+#: facts the model holds, with the same warning naming the variable (N-10, FACT-3; design section 27,
+#: item 47). Pinned by a test.
+IGNORED_WHERE_NOT_APPLICABLE = frozenset({
+    "takeoff.settle_samples",
+    "takeoff.settle_tolerance_cm",
+    "takeoff.settle_timeout_s",
+    "takeoff.late_s",
+    "takeoff.refusal_retries",
+    "takeoff.refusal_hold_s",
+    "tello.refusals_per_flight",
+    "tello.temp_warn_c",
+    "tello.temp_refuse_c",
+})
+
+
 def _new_name_without_bound(spec: ParamSpec, profile: str, name: str) -> bool:
     """True for a number from a name today's code does not read, on a row with no target bound."""
     return not read_today(name) and spec.kind in _NUMERIC_KINDS and spec.bounds.get(profile) is None
@@ -786,7 +804,10 @@ def resolve(
             continue
         for param_id, (_, raw, detail, name) in _entries(source, layer, scale, drone, unit_id).items():
             if param_id not in result:
-                log.debug("%s from %s does not apply to %s; skipped", param_id, detail, drone.id)
+                if name is not None and not test_unit and param_id in IGNORED_WHERE_NOT_APPLICABLE:
+                    log.warning("%s is ignored on %s: it is a test-adapter override", detail, unit_id)
+                else:
+                    log.debug("%s from %s does not apply to %s; skipped", param_id, detail, drone.id)
                 continue
             spec = specs[param_id]
             edit = spec.edit.get(profile)

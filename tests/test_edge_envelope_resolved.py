@@ -171,6 +171,56 @@ def test_the_environment_wins_over_the_launcher_as_in_the_resolution(edge_env):
     assert resolved.min_takeoff_battery == 35
 
 
+@pytest.mark.parametrize("argv,name,raw,row,layer_value,flown", [
+    # A stray field slot variable on a Tello would hide the launcher's 130 cm slot: the resolution
+    # would say 120 cm from the variable while the drone flies today's 100 cm.
+    (_ROOM, G + "FIELD_ALT_SLOT_M", "1.2", "envelope.alt_slot_cm", 130, 100),
+    (_ROOM, G + "LAND_BATTERY", "12", "battery.critical_pct", 20, 15),
+])
+def test_a_name_todays_envelope_does_not_read_may_not_hide_a_launcher_value(edge_env, argv, name, raw, row,
+                                                                              layer_value, flown):
+    _launcher(edge_env, {row: layer_value})
+    edge_env.setenv(name, raw)
+    args = _args(argv)
+    edge_device._resolve_edge_start(args, _Log(), argv=argv, parser=_PARSER)
+    assert args.edge_resolution.values[row].source is Source.ENV
+    with pytest.raises(SystemExit) as refused:
+        edge_device._startup_envelope(args)
+    message = str(refused.value)
+    assert message.startswith("edge_device: drone-1: ") and message.endswith("Refusing to start.")
+    for part in (name, f"`{row}`", f"over {layer_value} from {LAUNCHER_PARAMS_ENV_VAR}", f"would fly {flown}."):
+        assert part in message, part
+
+
+def test_a_name_todays_envelope_does_not_read_may_not_hide_a_params_file_value(edge_env, tmp_path):
+    path = tmp_path / "params.json"
+    path.write_text(json.dumps({"version": 1, "units": {"drone-1": {"envelope.alt_slot_cm": 130}}}),
+                    encoding="utf-8")
+    edge_env.setenv(PARAMS_FILE_ENV_VAR, str(path))
+    edge_env.setenv(G + "FIELD_ALT_SLOT_M", "1.2")
+    args = _args(_ROOM)
+    edge_device._resolve_edge_start(args, _Log(), argv=_ROOM, parser=_PARSER)
+    with pytest.raises(SystemExit, match=r"FLIGHTRISK_FIELD_ALT_SLOT_M .* over 130 from params\.json "):
+        edge_device._startup_envelope(args)
+
+
+def test_a_name_todays_envelope_does_not_read_without_a_launcher_value_is_not_refused(edge_env):
+    edge_env.setenv(G + "FIELD_ALT_SLOT_M", "1.2")
+    _launcher(edge_env, {"envelope.geofence_cm": 400})  # A launcher value of another row.
+    today, resolved, resolution = _envelopes(_ROOM)
+    assert resolution.values["envelope.alt_slot_cm"].value == 120
+    assert today.alt_slot_cm == resolved.alt_slot_cm == 100
+    assert resolved.geofence_cm == 400
+
+
+def test_a_name_todays_envelope_reads_still_wins_over_the_launcher(edge_env):
+    _launcher(edge_env, {"envelope.alt_slot_cm": 130})
+    argv = _ROOM + ["--alt-slot", "110"]
+    _, resolved, resolution = _envelopes(argv)
+    assert resolution.values["envelope.alt_slot_cm"].source is Source.CLI
+    assert resolved.alt_slot_cm == 110
+
+
 @pytest.mark.parametrize("argv,provider", [(_ROOM, "_envelope_pose_provider"), (_FIELD, "_autopilot_pose_provider")])
 def test_the_flight_edge_flies_the_resolved_envelope(edge_env, argv, provider):
     _launcher(edge_env, {"battery.min_takeoff_pct": 40})

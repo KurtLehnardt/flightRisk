@@ -705,19 +705,61 @@ def envelope_arguments(resolution: EdgeResolution, today: Mapping[str, Any]) -> 
     on an indoor edge, must not change the envelope in phase A (plan section 1). A row missing from
     the resolution keeps today's value too. A test-adapter fact override that the resolver ignored on
     a production unit never reaches the envelope, since the resolved value is then the profile's.
+
+    Raises ``EdgeStartRefused`` when such a name hides a launcher or params-file value of the row
+    (``_refuse_shadowed``).
     """
     from flightrisk.params.spec import Source
 
     arguments = dict(today)
     for name, row in ENVELOPE_ROWS.items():
         value = resolution.values.get(row)
-        if value is None or Source(value.source) in (Source.ENV, Source.CLI):
+        if value is None:
+            continue
+        if Source(value.source) in (Source.ENV, Source.CLI):
+            _refuse_shadowed(resolution, row, value, today[name])
             continue
         arguments[name] = value.value
     if not arguments["link_loss_hold_s"]:
         # The envelope stores a 0 s hold as None: the drone lands at once.
         arguments["link_loss_hold_s"] = None
     return arguments
+
+
+def _refuse_shadowed(resolution: EdgeResolution, row: str, value: Any, flown: Any) -> None:
+    """Refuse a start where an environment or command-line name hides a launcher or params-file value.
+
+    ``value`` is the row's resolved value, from the environment or the command line, and ``flown`` is
+    the value today's envelope reader gives. For a name today's envelope reads they are equal
+    (``tests/test_param_parity.py``). When they differ, the name is one today's envelope does not read
+    for this drone, so the drone would fly ``flown`` while the resolution and the start log report
+    ``value``, and a launcher or params-file value of the row would be lost without a word.
+
+    Only that case is refused. Without a launcher or params-file value of the row nothing is refused,
+    so such a start keeps today's envelope exactly. Launcher and params-file values never reached the
+    envelope before A3, so the refusal costs no value today's edge flew: a start it refuses is one where
+    today's edge also drops the launcher or params-file value, without a word.
+    """
+    from flightrisk.params.messages import render_shadowed_value
+    from flightrisk.params.resolver import LayerValue
+    from flightrisk.params.spec import Source
+
+    said = value.value
+    if row == ENVELOPE_ROWS["link_loss_hold_s"]:
+        # The envelope stores a 0 s hold as None.
+        said, flown = said or 0, flown or 0
+    if said == flown:
+        return
+    layers = resolution.layers.layers
+    for source, where in ((Source.LAUNCHER, LAUNCHER_PARAMS_ENV_VAR), (Source.FILE, None)):
+        raw = (layers.get(source) or {}).get(row)
+        if raw is None:
+            continue
+        if isinstance(raw, LayerValue):
+            raw, where = raw.value, raw.detail
+        raise EdgeStartRefused(_refusing(render_shadowed_value(
+            resolution.layers.unit_id, row, value.source_detail, said, where or source.value, raw, flown,
+        )))
 
 
 #: The registry row each ``FlightGuards`` setting of the edge's start reads (EDGE-2). The hover-only test
@@ -745,7 +787,8 @@ TEMP_ROWS: Mapping[str, str] = MappingProxyType({
 # which only the Tello raises (lane_flight._retry_refusal), and the temperature levels only for a drone
 # with state_temperature (lane_executor._takeoff_temp_refusal and temp_status); MavlinkFleetDrone has
 # none of them. Only the start log changes: edge_flight_guard_setting_non_default and
-# edge_temp_setting_non_default no longer name an override the drone never used.
+# edge_temp_setting_non_default no longer name an override the drone never used, and the resolver logs a
+# warning naming each such variable as ignored (resolver.IGNORED_WHERE_NOT_APPLICABLE, N-10).
 
 
 def fact_arguments(resolution: EdgeResolution, rows: Mapping[str, str], today: Mapping[str, Any],
@@ -776,6 +819,20 @@ def fact_arguments(resolution: EdgeResolution, rows: Mapping[str, str], today: M
         off = off_values.get(row)
         arguments[name] = None if off is not None and value.value == off else value.value
     return arguments
+
+
+def resolved_elsewhere(resolution: EdgeResolution, row: str) -> Optional[str]:
+    """The source detail of ``row``'s resolved value when neither the environment nor the command line set it.
+
+    None when the row is not resolved, or when the environment or the command line set it, where today's
+    reader gives the value (``fact_arguments``).
+    """
+    from flightrisk.params.spec import Source
+
+    value = resolution.values.get(row)
+    if value is None or Source(value.source) in (Source.ENV, Source.CLI):
+        return None
+    return value.source_detail
 
 
 def _fact_ids(profile: Any) -> frozenset[str]:

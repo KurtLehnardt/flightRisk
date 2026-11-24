@@ -210,6 +210,41 @@ def test_a_mavlink_unit_is_production_and_ignores_fact_overrides(edge_env):
     assert (value.source, value.value) == (Source.PROFILE, 500)
 
 
+def test_the_ignored_tello_overrides_are_the_guard_and_temperature_rows():
+    from flightrisk.edge_resolution import GUARD_ROWS, TEMP_ROWS
+    from flightrisk.params.resolver import IGNORED_WHERE_NOT_APPLICABLE
+
+    assert IGNORED_WHERE_NOT_APPLICABLE == frozenset(GUARD_ROWS.values()) | frozenset(TEMP_ROWS.values())
+
+
+@pytest.mark.parametrize("row", sorted({spec.id for spec in TABLE if spec.env} & {
+    "takeoff.settle_samples", "takeoff.settle_tolerance_cm", "takeoff.settle_timeout_s", "takeoff.late_s",
+    "takeoff.refusal_retries", "takeoff.refusal_hold_s", "tello.refusals_per_flight", "tello.temp_warn_c",
+    "tello.temp_refuse_c",
+}))
+def test_a_mavlink_unit_logs_each_ignored_tello_override(edge_env, caplog, row):
+    # N-10: a production unit ignores the Tello flight-guard and temperature overrides with a warning
+    # naming the variable, like the obstacle overrides it ignores (design section 27, item 47).
+    name = next(spec.env for spec in TABLE if spec.id == row)
+    edge_env.setenv(name, "5")
+    args = _args(_MAVLINK + ["--source", "camera", "--drone-id", "drone-1"])
+    with caplog.at_level("DEBUG", logger="flightrisk.params.resolver"):
+        edge_device._resolve_edge_start(args, _Log())
+    assert row not in args.edge_resolution.values
+    lines = [r for r in caplog.records if name in r.getMessage()]
+    assert [(r.levelname, r.getMessage()) for r in lines] == [
+        ("WARNING", f"{name} is ignored on drone-1: it is a test-adapter override")]
+
+
+def test_a_tello_override_is_not_logged_as_ignored_on_the_tello(edge_env, caplog):
+    edge_env.setenv("FLIGHTRISK_TELLO_TAKEOFF_LATE_S", "5")
+    args = _args(["--source", "tello", "--drone-id", "drone-1"])
+    with caplog.at_level("DEBUG", logger="flightrisk.params.resolver"):
+        edge_device._resolve_edge_start(args, _Log())
+    assert args.edge_resolution.values["takeoff.late_s"].source is Source.ENV
+    assert not any("is ignored" in r.getMessage() for r in caplog.records)
+
+
 # --- Refusals before the drone is contacted ---------------------------------------------------------------
 
 

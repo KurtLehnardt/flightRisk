@@ -2486,10 +2486,13 @@ def _resolved_envelope(args: argparse.Namespace, envelope: SafetyEnvelope) -> Sa
     resolution = getattr(args, "edge_resolution", None)
     if resolution is None:
         return envelope
-    from flightrisk.edge_resolution import envelope_arguments, todays_envelope_arguments
+    from flightrisk.edge_resolution import EdgeStartRefused, envelope_arguments, todays_envelope_arguments
 
     today = todays_envelope_arguments(envelope)
-    arguments = envelope_arguments(resolution, today)
+    try:
+        arguments = envelope_arguments(resolution, today)
+    except EdgeStartRefused as exc:
+        raise SystemExit(f"edge_device: {exc}") from None
     if arguments == today:
         return envelope
     try:
@@ -2518,17 +2521,37 @@ def _temp_limits(
     if args is not None:
         limits = _resolved_temp_limits(args, limits)
     if log is not None:
-        for name, value, default in (
-            (ENV_TELLO_TEMP_WARN_C, limits.warn_c, DEFAULT_TEMP_WARN_C),
-            (ENV_TELLO_TEMP_REFUSE_C, limits.refuse_c, DEFAULT_TEMP_REFUSE_C),
+        for field, name, value, default in (
+            ("warn_c", ENV_TELLO_TEMP_WARN_C, limits.warn_c, DEFAULT_TEMP_WARN_C),
+            ("refuse_c", ENV_TELLO_TEMP_REFUSE_C, limits.refuse_c, DEFAULT_TEMP_REFUSE_C),
         ):
             if value != default:
+                name, where = _temp_level_source(args, field, name)
                 log.warning(
                     "edge_temp_setting_non_default", drone_id=drone_id, variable=name,
                     value="off" if value is None else value, default=default,
-                    detail=f"{name}={'off' if value is None else value!r} is not the default ({default!r})",
+                    detail=f"{name}={'off' if value is None else value!r}{where} is not the default ({default!r})",
                 )
     return limits
+
+
+def _temp_level_source(args: argparse.Namespace | None, field: str, variable: str) -> tuple[str, str]:
+    """The name of the temperature level ``field`` and where it came from, for its non-default log line.
+
+    A level from the environment, or one read without a resolution, is named by ``variable`` alone. A
+    level the profile, the params file or the launcher set is named by its row and that source, for
+    example ``("tello.temp_warn_c", " from launcher")``.
+    """
+    resolution = getattr(args, "edge_resolution", None) if args is not None else None
+    if resolution is None:
+        return variable, ""
+    from flightrisk.edge_resolution import TEMP_ROWS, resolved_elsewhere
+
+    row = TEMP_ROWS[field]
+    where = resolved_elsewhere(resolution, row)
+    if where is None:
+        return variable, ""
+    return row, f" from {where}"
 
 
 def _resolved_temp_limits(args: argparse.Namespace, limits: TempLimits) -> TempLimits:
@@ -2600,7 +2623,8 @@ def _run_flight_edge(
     # drone is built or contacted (EDGE-1).
     _resolve_edge_start(args, log, argv=argv, parser=parser)
     if start_envelope:
-        # Built again from the resolved values (EDGE-2); an envelope the caller passed is kept.
+        # Built again from the resolved values (EDGE-2). An envelope the caller passed is never rebuilt
+        # from the resolution and wins over it; only tests pass one, main never does.
         envelope = _startup_envelope(args)
     # The temperature levels and the flight guards from the resolved values (EDGE-2); a level that is
     # not its default is logged here, once.

@@ -86,3 +86,18 @@ def render_unconfirmed_switch_off(unit_id: str, reason: str, source: str) -> str
     which a feature switch from the launcher cannot give."
     """
     return f"{unit_id}: {reason}, which a feature switch from {source} cannot give."
+
+
+def render_shadowed_value(
+    unit_id: str, param_id: str, variable: str, value: float, layer: str, layer_value: float, flown: float,
+) -> str:
+    """Refuse a variable the edge does not read for this unit that would hide a launcher or params-file value.
+
+    Example: "drone-1: FLIGHTRISK_FIELD_ALT_SLOT_M sets `envelope.alt_slot_cm` to 120 over 130 from
+    FLIGHTRISK_LAUNCHER_PARAMS, but this edge does not read FLIGHTRISK_FIELD_ALT_SLOT_M for its drone and
+    would fly 100. Unset FLIGHTRISK_FIELD_ALT_SLOT_M."
+    """
+    return (
+        f"{unit_id}: {variable} sets `{param_id}` to {_num(value)} over {_num(layer_value)} from {layer}, "
+        f"but this edge does not read {variable} for its drone and would fly {_num(flown)}. Unset {variable}."
+    )
