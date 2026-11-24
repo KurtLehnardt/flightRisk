@@ -107,6 +107,7 @@ CATALOGUE_DATA_FILES = frozenset(
         "flightrisk/hardware/catalogue.py",
         "flightrisk/hardware/inventory.py",
         "flightrisk/params/constraints.py",
+        "flightrisk/params/table.py",
     }
 )
 
