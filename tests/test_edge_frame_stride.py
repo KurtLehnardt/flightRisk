@@ -224,7 +224,7 @@ def test_source_accepts_the_largest_stride():
 
 
 def test_slow_consumer_gets_about_one_nth_of_the_frames():
-    # 330 ms per frame at 30 fps is the ZBook's detector. Stride N must give about 1/N of the
+    # 330 ms per frame at 30 fps is the edge laptop's detector. Stride N must give about 1/N of the
     # stride-1 rate while the skip cap does not bind; counting polls instead of time would give
     # 0.91, 0.83 and 0.72 here.
     base = _consume(1, 0.33)
@@ -234,7 +234,7 @@ def test_slow_consumer_gets_about_one_nth_of_the_frames():
         assert ratio == pytest.approx(1 / stride, rel=0.1), (stride, ratio)
 
 
-def test_default_cap_leaves_strides_two_and_three_proportional_on_the_zbook():
+def test_default_cap_leaves_strides_two_and_three_proportional_on_the_edge_laptop():
     # At 330 ms the skips of stride 2 and 3 (0.33 s and 0.66 s) are under the 1 s cap.
     base = _consume(1, 0.33)
     for stride in (2, 3):

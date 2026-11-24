@@ -703,7 +703,7 @@ function Register-App {
     $values = @{
         DisplayName          = "FlightRisk"
         DisplayVersion       = $script:Ref
-        Publisher            = "Kurt Lehnardt"
+        Publisher            = "FlightRisk contributors"
         InstallLocation      = $script:AppDir
         DisplayIcon          = $icon
         UninstallString      = "`"$ps`" -NoProfile -ExecutionPolicy Bypass -File `"$uninstall`""

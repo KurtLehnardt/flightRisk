@@ -25,7 +25,7 @@
 AppId={{6C2B7F1E-4D0B-4E3A-9B57-2F1D7A1C9E40}
 AppName=FlightRisk
 AppVersion={#AppVersion}
-AppPublisher=Kurt Lehnardt
+AppPublisher=FlightRisk contributors
 AppPublisherURL=https://github.com/KurtLehnardt/flightRisk
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
