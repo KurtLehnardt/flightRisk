@@ -45,7 +45,7 @@ Use `setx FLIGHTRISK_EDGE_TOKEN "<secret>"` to persist it for future terminals.
 
 ## 5. Check the link
 
-With the ground station already running on the other laptop, run on this laptop:
+With the server side of the link check (`check_fleet_link.py --role server`) running on the ground-station laptop, run on this laptop:
 
 ```powershell
 venv\Scripts\python.exe scripts\check_fleet_link.py --help
