@@ -141,6 +141,10 @@ class SimVehicle:
         self.velocity_body = (0.0, 0.0, 0.0, 0.0)
         self.speed = self.max_speed
         self.takeoff_alt = 2.5
+        # When set, a takeoff stops climbing at this height (metres) when it
+        # is below the takeoff altitude: a vehicle that settles within its
+        # arrival tolerance below the commanded takeoff altitude.
+        self.takeoff_stop_m: float | None = None
         self.linked = True
         self.reports_in_air = reports_in_air
         self.commands: list[tuple] = []
@@ -214,7 +218,7 @@ class SimVehicle:
                 raise SimActionError("COMMAND_DENIED: not armed")
             self.mode = FlightMode.TAKEOFF if self.autopilot == "px4" else FlightMode.OFFBOARD
             self.landed = LandedState.TAKING_OFF
-            self.goal = _Goal(self.north, self.east, self.takeoff_alt)
+            self.goal = _Goal(self.north, self.east, self._takeoff_goal_alt())
 
     def goto(self, lat: float, lon: float, abs_alt: float, yaw: float) -> None:
         with self.lock:
@@ -260,6 +264,11 @@ class SimVehicle:
         with self.lock:
             self.velocity_body = (forward, right, down, yaw_rate)
 
+    def _takeoff_goal_alt(self) -> float:
+        if self.takeoff_stop_m is None:
+            return self.takeoff_alt
+        return min(self.takeoff_alt, float(self.takeoff_stop_m))
+
     # --- physics --------------------------------------------------------
 
     def step(self, dt: float) -> None:
@@ -301,7 +310,7 @@ class SimVehicle:
                 self.heading = (self.heading + turn) % 360.0
             if self.alt > 0.2 and self.armed:
                 self.in_air = True
-                if self.landed is LandedState.TAKING_OFF and self.alt >= self.takeoff_alt - 0.1:
+                if self.landed is LandedState.TAKING_OFF and self.alt >= self._takeoff_goal_alt() - 0.1:
                     self.landed = LandedState.IN_AIR
                     if self.autopilot == "px4":
                         self.mode = FlightMode.HOLD

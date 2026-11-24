@@ -151,7 +151,7 @@ from flightrisk.drone.obstacle_sensor import (
     STATE_CLEAR,
     SenseResult,
 )
-from flightrisk.drone.safety import ROOM_LIMITS, CeilingError
+from flightrisk.drone.safety import ROOM_LIMITS, CeilingError, is_finite_number
 from flightrisk.fleet_protocol import MAX_TEXT_LEN
 
 __all__ = [
@@ -783,7 +783,10 @@ class FlightSequenceMixin:
         a late takeoff reply, and a drone that does not settle in time is
         landed (``height_unsettled``) without anything sent. Its descent is
         bounded by its downward distance (``_descent_clear``). Other drones
-        are read once, as before.
+        are read once, as before. A drone that reports the height it is
+        commanded to hold (``commanded_height_cm``, the MAVLink fleet drone)
+        has its move sized from that height, because its vertical moves are
+        added to it (``_move_from_height``).
 
         Lands if the height is unknown, and lands instead of climbing when
         the slot, or the climb from the measured height, would end above
@@ -802,13 +805,14 @@ class FlightSequenceMixin:
             reading = self._height_for_slot()
             if reading is None:
                 return False
-            height, tof = reading
+            measured, tof = reading
+            height = self._move_from_height(measured)
             if self._guards.hover_test:
                 self._log.warning(
                     EVENT_HOVER_TEST,
                     drone_id=self.drone_id,
                     skipped="climb",
-                    height_cm=height,
+                    height_cm=measured,
                     tof_cm=tof,
                     alt_slot_cm=self.envelope.alt_slot_cm,
                 )
@@ -833,7 +837,8 @@ class FlightSequenceMixin:
             self._log.info(
                 "edge_alt_slot_climb",
                 drone_id=self.drone_id,
-                height_cm=height,
+                height_cm=measured,
+                commanded_height_cm=None if height is measured else height,
                 tof_cm=tof,
                 alt_slot_cm=self.envelope.alt_slot_cm,
                 direction=direction,
@@ -848,6 +853,33 @@ class FlightSequenceMixin:
                 retries += 1
                 if self._abort.is_set():
                     return False
+
+    def _move_from_height(self, measured: Any) -> Any:
+        """The height the move to the slot is sized from: the commanded height when the drone reports one, else *measured*.
+
+        A drone with ``commanded_height_cm()`` (the MAVLink fleet drone) adds
+        every vertical move to the height it is commanded to hold, and its
+        takeoff and moves return once the measured height is within an
+        arrival tolerance (0.7 m) of that. A move sized from the measured
+        height would then end up to that tolerance away from the slot, so it
+        is sized from the commanded height. The measured height must still
+        be known and positive: otherwise it is returned unchanged and the
+        drone lands as before (``height_unknown``). A drone that settles its
+        height (the Tello) moves from where it is and is never asked, and a
+        commanded height that cannot be read falls back to *measured*.
+        """
+        if self._settles_height() or not is_finite_number(measured) or measured <= 0:
+            return measured
+        reader = getattr(self.drone, "commanded_height_cm", None)
+        if not callable(reader):
+            return measured
+        try:
+            commanded = reader()
+        except Exception:  # noqa: BLE001 - size the move from the measured height as before
+            return measured
+        if not is_finite_number(commanded) or commanded <= 0:
+            return measured
+        return commanded
 
     def _settles_height(self) -> bool:
         """True for a drone that reports a settled height (``settled_height``, the Tello)."""

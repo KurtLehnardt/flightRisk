@@ -298,6 +298,52 @@ def test_field_lanes_fly_with_measured_pose_in_telemetry(make_edge):
     assert ("land",) in edge.vehicle.commands
 
 
+def _slot_climb(edge):
+    (climb,) = [fields for _, name, fields in edge.log.events if name == "edge_alt_slot_climb"]
+    return climb
+
+
+@pytest.mark.parametrize("slot_cm", [1500, 2000, 2500])
+def test_climb_from_a_takeoff_that_stops_short_ends_at_the_slot(make_edge, slot_cm):
+    """A takeoff that returns at 4.30 m (5 m minus the 0.7 m tolerance) still ends at the slot, not 0.7 m above it."""
+    vehicle = SimVehicle(ARDUPILOT, time_scale=20.0)
+    vehicle.takeoff_stop_m = 4.30
+    edge = make_edge(vehicle)
+    assert edge.ready(), edge.drone.link_status()
+    start_lanes(edge, lanes=[{"direction": "forward", "distance_cm": 500}], alt_cm=slot_cm)
+    assert wait_for(lambda: edge.executor.lane_index == 1 and not edge.executor.is_busy), edge.log.names()
+    climb = _slot_climb(edge)
+    assert climb["height_cm"] == 430
+    assert climb["commanded_height_cm"] == pytest.approx(500)
+    assert (climb["direction"], climb["distance_cm"]) == ("up", slot_cm - 500)
+    assert edge.drone.commanded_height_cm() == pytest.approx(slot_cm)
+    assert wait_for(lambda: abs(edge.vehicle.alt - slot_cm / 100) < 0.05), edge.vehicle.alt
+    assert edge.vehicle.alt == pytest.approx(slot_cm / 100, abs=edge.drone.options.arrival_alt_m)
+
+
+@pytest.mark.parametrize("slot_cm", [1500, 1700])
+def test_descent_from_a_takeoff_that_stops_short_ends_at_the_slot(make_edge, slot_cm):
+    """A takeoff to 20 m that returns at 19.30 m descends to the slot, not to 0.7 m above it."""
+    vehicle = SimVehicle(ARDUPILOT, time_scale=20.0)
+    vehicle.takeoff_stop_m = 19.30
+    edge = make_edge(vehicle, takeoff_alt_m=20.0)
+    assert edge.ready(), edge.drone.link_status()
+    start_lanes(edge, lanes=[{"direction": "forward", "distance_cm": 500}], alt_cm=slot_cm)
+    assert wait_for(lambda: edge.executor.lane_index == 1 and not edge.executor.is_busy), edge.log.names()
+    climb = _slot_climb(edge)
+    assert climb["height_cm"] == 1930
+    assert (climb["direction"], climb["distance_cm"]) == ("down", 2000 - slot_cm)
+    assert edge.drone.commanded_height_cm() == pytest.approx(slot_cm)
+    assert wait_for(lambda: abs(edge.vehicle.alt - slot_cm / 100) < 0.05), edge.vehicle.alt
+    assert edge.vehicle.alt == pytest.approx(slot_cm / 100, abs=edge.drone.options.arrival_alt_m)
+
+
+def test_commanded_height_is_unknown_before_the_first_takeoff(make_edge):
+    edge = make_edge()
+    assert edge.ready()
+    assert edge.drone.commanded_height_cm() is None
+
+
 def test_takeoff_refused_when_the_autopilot_failsafes_are_not_configured(make_edge):
     vehicle = SimVehicle(ARDUPILOT, time_scale=20.0)
     vehicle.params["FENCE_ENABLE"] = 0
