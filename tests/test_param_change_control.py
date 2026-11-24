@@ -24,6 +24,9 @@ OWNED = (
 CHECKER_PATHS = (
     "tests/test_param_literals.py",
     "tests/test_param_change_control.py",
+    "tests/param_adopters.py",
+    "tests/tello_coupling_baseline.py",
+    "tests/test_tello_coupling.py",
     "docs/design/hardware-profiles/safety-value-changes.md",
 )
 # The A1 baseline entry. Editing it needs an edit here too, which CODEOWNERS makes owned (F6, F7).
