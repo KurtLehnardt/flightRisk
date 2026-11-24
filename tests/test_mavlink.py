@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import sys
-import threading
 import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -169,11 +168,8 @@ def _make_controller(system: _FakeSystem | None = None) -> MavlinkController:
     if system is not None:
         ctrl._system = system
         ctrl._running = True
-        ctrl._loop = asyncio.new_event_loop()
-        ctrl._loop_thread = threading.Thread(
-            target=ctrl._loop.run_forever, daemon=True
-        )
-        ctrl._loop_thread.start()
+        # start_loop() returns only once the loop is running, which AsyncBridge.run() requires.
+        ctrl._start_loop()
     return ctrl
 
 
@@ -192,6 +188,29 @@ def _teardown_controller(ctrl: MavlinkController) -> None:
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _bind_fake_mavsdk(monkeypatch):
+    """Bind the fake mavsdk names into the module under test.
+
+    The sys.modules stubs above only take effect if this file is the first
+    to import flightrisk.drone.mavlink. In a full run another test module
+    (e.g. test_capabilities_max_altitude.py) imports it first, so it binds
+    the real mavsdk's OffboardError, and ``except OffboardError`` in the
+    product no longer catches the _FakeOffboardError these tests raise.
+
+    Patch the globals the controller's code actually reads. A test that
+    re-imports flightrisk.drone.mavlink can leave ``sys.modules`` or the
+    ``flightrisk.drone.mavlink`` package attribute pointing at a different
+    module object than the one MavlinkController was defined in.
+    """
+    mav_globals = MavlinkController._move_async.__globals__
+
+    monkeypatch.setitem(mav_globals, "HAS_MAVSDK", True)
+    monkeypatch.setitem(mav_globals, "System", _FakeSystem)
+    monkeypatch.setitem(mav_globals, "OffboardError", _FakeOffboardError)
+    monkeypatch.setitem(mav_globals, "VelocityBodyYawspeed", _FakeVelocityBodyYawspeed)
 
 
 @pytest.fixture(autouse=False)
@@ -287,11 +306,7 @@ class TestAsyncBridge:
 
     def test_run_dispatches_coroutine(self):
         ctrl = MavlinkController(name="bridge")
-        ctrl._loop = asyncio.new_event_loop()
-        ctrl._loop_thread = threading.Thread(
-            target=ctrl._loop.run_forever, daemon=True
-        )
-        ctrl._loop_thread.start()
+        ctrl._start_loop()
         try:
             result = ctrl._run(asyncio.coroutine(lambda: 42)() if False else self._async_return(42))
             assert result == 42
@@ -309,11 +324,7 @@ class TestAsyncBridge:
 
     def test_run_timeout(self):
         ctrl = MavlinkController(name="timeout")
-        ctrl._loop = asyncio.new_event_loop()
-        ctrl._loop_thread = threading.Thread(
-            target=ctrl._loop.run_forever, daemon=True
-        )
-        ctrl._loop_thread.start()
+        ctrl._start_loop()
         try:
             with pytest.raises(TimeoutError):
                 ctrl._run(asyncio.sleep(999), timeout=0.1)
@@ -352,6 +363,17 @@ class TestConnect:
             finally:
                 ctrl._running = False
                 ctrl._stop_loop()
+
+    def test_connect_returns_false_when_the_event_loop_does_not_start(self):
+        ctrl = MavlinkController(name="no-loop")
+        with patch.object(
+            ctrl._bridge, "start_loop", side_effect=RuntimeError("[x] Event loop did not start within 5s")
+        ) as start_loop:
+            assert ctrl.connect() is False
+        # Without this, an early return (for example the mavsdk version check) would pass the test.
+        start_loop.assert_called_once()
+        assert ctrl._running is False
+        assert ctrl._loop is None
 
 
 class TestDisconnect:
