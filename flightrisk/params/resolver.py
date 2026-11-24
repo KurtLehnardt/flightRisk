@@ -84,9 +84,12 @@ Safety (step S7):
     ``confirmations`` (the ``--confirm-less-safe id=value`` flags, see
     ``parse_confirm_flags``) names exactly that id and value. With a launcher
     layer, only the launcher's ``confirmed`` object counts; it is passed as
-    the reserved ``confirmed`` key of that layer (RES-11). Less-safe values
-    from the launcher, the environment or a flag are accepted, and those from
-    the environment or a flag are logged at warning level. A test-adapter
+    the reserved ``confirmed`` key of that layer (RES-11). A launcher value
+    of a row in ``LAUNCHER_NEEDS_CONFIRMATION`` (``sensing.mode`` off) needs
+    the same confirmation in the launcher's ``confirmed`` object. Other
+    less-safe values from the launcher, and those from the environment or a
+    flag, are accepted, and those from the environment or a flag are logged
+    at warning level. A test-adapter
     fact is never less safe and never logged as less safe, from any layer or
     value (R7, R8).
 14. A safety switch stored as off in ``params.json`` or the inventory is
@@ -191,11 +194,16 @@ FACT_NOT_SETTABLE = "A value in {detail} is not a setting and cannot be stored. 
 LAUNCHER_CONFIRMED = "confirmed"
 #: Operator text for a less-safe value from a file that nobody confirmed (RES-11).
 UNCONFIRMED_LESS_SAFE = (
-    "`{param_id}` {value} {unit} from {detail} is less safe than the {model} default of {base} {unit}. "
+    "`{param_id}` {value}{unit} from {detail} is less safe than the {model} default of {base}{unit}. "
     "{how} Refusing to start."
 )
 _CONFIRM_BY_FLAG = "Start with --confirm-less-safe {param_id}={value} to use it."
 _CONFIRM_IN_LAUNCHER = "Confirm it in the launcher at Start to use it."
+#: Rows whose less-safe value from the launcher layer needs the launcher's ``confirmed`` object, as a value
+#: from a file does (RES-11). From A3.4 the edge applies a launcher ``sensing.mode``, and its off value
+#: flies the lanes with no obstacle sensing. A less-safe launcher value of any other row is accepted, as
+#: before. Pinned by a test.
+LAUNCHER_NEEDS_CONFIRMATION = frozenset({"sensing.mode"})
 
 
 class ParamRefused(ValueError):
@@ -661,6 +669,9 @@ READ_BY_THE_EDGE = frozenset({
     "avoid.sidestep_cm",
     "avoid.sidesteps",
 })
+#: The ``READ_BY_THE_EDGE`` rows the edge uses only when the unit senses obstacles with a camera; a MAVLink
+#: unit without one (``--source file`` or none) reads them but does not use them. Pinned by a test.
+USED_ONLY_WITH_A_CAMERA = READ_BY_THE_EDGE - {"mode.hover_test"}
 
 
 #: Test-adapter fact rows that a production unit's model does not hold, but whose variable today's edge
@@ -843,8 +854,10 @@ def resolve(
             if edit is Edit.FACT:
                 if not test_unit:
                     if param_id in READ_BY_THE_EDGE:
-                        log.info("%s is not resolved on %s, a production unit; the edge reads it itself",
-                                 detail, unit_id)
+                        log.info("%s is not resolved on %s, a production unit; the edge reads it itself%s",
+                                 detail, unit_id,
+                                 ", and uses it only when the unit senses obstacles with a camera"
+                                 if param_id in USED_ONLY_WITH_A_CAMERA else "")
                     else:
                         log.warning("%s is ignored on %s: it is a test-adapter override", detail, unit_id)
                     continue
@@ -914,9 +927,13 @@ def check_resolved(
             continue
         if not needs_confirmation(spec, effective):
             continue
-        if effective.source in FILE_SOURCES:
+        if effective.source in FILE_SOURCES or (
+                effective.source is Source.LAUNCHER and param_id in LAUNCHER_NEEDS_CONFIRMATION):
             if not _confirmed(spec, confirmed.get(param_id), effective.value):
                 raise _unconfirmed(spec, model, effective, effective.base_default, launcher_present)
+            if effective.source is Source.LAUNCHER:
+                log.warning("confirmed less-safe %s=%r from %s on %s", param_id, effective.value,
+                            effective.source_detail, unit_id)
         elif effective.source in _NAME_LAYERS:
             log.warning("less-safe %s=%r from %s on %s", param_id, effective.value, effective.source_detail, unit_id)
     violation = check_constraints(result, model.name, profile=model.profile)
@@ -931,8 +948,10 @@ def _unconfirmed(spec: ParamSpec, model: DroneModel, effective: EffectiveValue, 
     shown = str(value).lower() if isinstance(value, bool) else _whole(value) if _is_number(value) else value
     how = (_CONFIRM_IN_LAUNCHER if launcher_present
            else _CONFIRM_BY_FLAG.format(param_id=spec.id, value=shown))
+    # A choice or a switch has no unit to show.
+    unit = "" if spec.unit in (Unit.ENUM, Unit.BOOL) else f" {spec.unit.value}"
     text = UNCONFIRMED_LESS_SAFE.format(
-        param_id=spec.id, value=shown, unit=spec.unit.value, detail=effective.source_detail,
+        param_id=spec.id, value=shown, unit=unit, detail=effective.source_detail,
         model=model.name, base=_whole(base) if _is_number(base) else base, how=how,
     )
     return ParamRefused(text, param_id=spec.id, source=effective.source)

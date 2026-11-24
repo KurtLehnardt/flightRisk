@@ -2239,9 +2239,14 @@ def _build_obstacle_wiring(
     settings.warn_non_default(log, drone_id)
     mode, turn, step_cm, settle_s = settings.mode, settings.turn, settings.step_cm, settings.settle_s
     if mode == SENSING_ENV_OFF:
+        from flightrisk.edge_resolution import resolved_elsewhere
+
+        # A launcher off reaches here only when the launcher confirmed it (resolver.LAUNCHER_NEEDS_CONFIRMATION).
+        where = resolved_elsewhere(resolution, "sensing.mode") if resolution is not None else None
+        said = f"sensing.mode=off from {where}" if where else f"{ENV_OBSTACLE_SENSING}=off"
         log.warning(
             "edge_obstacle_sensing_off", drone_id=drone_id,
-            detail=f"{ENV_OBSTACLE_SENSING}=off: this drone flies its lanes with NO obstacle sensing",
+            detail=f"{said}: this drone flies its lanes with NO obstacle sensing",
         )
         return ObstacleWiring(sensor=NullSensor(), turn=turn)
     if kind == "mavlink" and getattr(args, "source", None) not in ("camera", "url"):

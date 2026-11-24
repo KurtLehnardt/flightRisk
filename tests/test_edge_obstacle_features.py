@@ -21,6 +21,7 @@ from flightrisk.drone.obstacle_sensor import NullSensor
 from flightrisk.drone.safety import SafetyEnvelope
 from flightrisk.edge_resolution import LAUNCHER_PARAMS_ENV_VAR, OBSTACLE_ROWS, PARAMS_FILE_ENV_VAR
 from flightrisk.hardware.features import FORWARD_OBSTACLE_SENSING
+from flightrisk.params.resolver import LAUNCHER_NEEDS_CONFIRMATION
 from flightrisk.params.spec import Source
 from flightrisk.params.table import TABLE
 from tests.test_edge_envelope_resolved import _FAKE, _FIELD, _ROOM, _args, _Log
@@ -66,9 +67,26 @@ def _settings(argv, args=None):
             vars(edge_device.ObstacleSettings.resolved(_kind(argv), envelope, os.environ, args.edge_resolution)))
 
 
-def _wire(args, drone=None):
+def _wire(args, drone=None, log=None):
     envelope = SafetyEnvelope.from_env(alt_slot_cm=100, environ={})
-    return edge_device._build_obstacle_wiring(args, _Log(), drone or _Drone(), "runner", envelope, os.environ)
+    return edge_device._build_obstacle_wiring(args, log or _Log(), drone or _Drone(), "runner", envelope, os.environ)
+
+
+class _Recorder:
+    """A structured log that keeps ``(level, event, fields)``."""
+
+    def __init__(self):
+        self.lines = []
+
+    def __getattr__(self, level):
+        return lambda event, **fields: self.lines.append((level, event, fields))
+
+
+def _launcher(edge_env, mode, confirmed=None):
+    layer = {"unit_id": "drone-1", "values": {"sensing.mode": mode}}
+    if confirmed is not None:
+        layer["confirmed"] = confirmed
+    edge_env.setenv(LAUNCHER_PARAMS_ENV_VAR, json.dumps(layer))
 
 
 def _gate_off(args):
@@ -142,7 +160,8 @@ def test_an_obstacle_override_on_a_production_mavlink_unit_is_logged_as_read_by_
     assert args.edge_resolution.values[row].source is Source.PROFILE  # No value changes in the resolution.
     lines = [(r.levelname, r.getMessage()) for r in caplog.records
              if r.name == "flightrisk.params.resolver" and name in r.getMessage()]
-    assert lines == [("INFO", f"{name} is not resolved on drone-1, a production unit; the edge reads it itself")]
+    assert lines == [("INFO", f"{name} is not resolved on drone-1, a production unit; the edge reads it itself, "
+                              "and uses it only when the unit senses obstacles with a camera")]
     _, resolved = _settings(_FIELD, args)
     assert resolved[setting] == value
 
@@ -171,6 +190,74 @@ def test_a_launcher_sensing_mode_reaches_the_settings(edge_env):
     assert args.edge_resolution.values["sensing.mode"].source == Source.LAUNCHER
     _, resolved = _settings(_ROOM, args)
     assert resolved["mode"] == "required"
+
+
+# Switching sensing off is less safe, so a launcher off needs the launcher's confirmation (item 47). Today's
+# edge ignored the launcher value and sensed as usual; the environment variable keeps today's reader.
+
+
+def test_only_sensing_mode_needs_the_launchers_confirmation():
+    assert LAUNCHER_NEEDS_CONFIRMATION == frozenset({"sensing.mode"})
+
+
+@pytest.mark.parametrize("argv", [_ROOM, _FIELD], ids=["room", "field"])
+@pytest.mark.parametrize("confirmed", [None, {}, {"sensing.mode": "required"}], ids=["none", "empty", "other"])
+def test_an_unconfirmed_launcher_sensing_off_refuses_the_start(edge_env, argv, confirmed):
+    _launcher(edge_env, "off", confirmed)
+    with pytest.raises(SystemExit) as refused:
+        _resolved(argv)
+    text = str(refused.value)
+    assert "`sensing.mode` off from launcher is less safe than the" in text
+    assert text.endswith("default of required. Confirm it in the launcher at Start to use it. Refusing to start.")
+    assert not _StubCamera.built
+
+
+def test_a_confirmation_flag_does_not_count_with_a_launcher_layer(edge_env):
+    _launcher(edge_env, "off")
+    argv = _ROOM + ["--confirm-less-safe", "sensing.mode=off"]
+    with pytest.raises(SystemExit, match="Confirm it in the launcher at Start"):
+        _resolved(argv)
+
+
+@pytest.mark.parametrize("argv", [_ROOM, _FIELD], ids=["room", "field"])
+def test_a_confirmed_launcher_sensing_off_flies_without_a_sensor_and_warns(edge_env, caplog, argv):
+    _launcher(edge_env, "off", {"sensing.mode": "off"})
+    with caplog.at_level("WARNING", logger="flightrisk.params.resolver"):
+        args = _resolved(argv)
+    assert args.edge_resolution.values["sensing.mode"].source == Source.LAUNCHER
+    assert [(r.levelname, r.getMessage()) for r in caplog.records if "sensing.mode" in r.getMessage()] == [
+        ("WARNING", "confirmed less-safe sensing.mode='off' from launcher on drone-1")]
+    log = _Recorder()
+    wiring = _wire(args, log=log)
+    assert isinstance(wiring.sensor, NullSensor) and not _StubCamera.built
+    off = [(level, fields["detail"]) for level, event, fields in log.lines if event == "edge_obstacle_sensing_off"]
+    assert off == [("warning", "sensing.mode=off from launcher: this drone flies its lanes with NO obstacle sensing")]
+
+
+def test_the_environment_sensing_off_is_unchanged(edge_env):
+    edge_env.setenv("FLIGHTRISK_OBSTACLE_SENSING", "off")
+    args = _resolved(_ROOM)
+    assert args.edge_resolution.values["sensing.mode"].source == Source.ENV
+    today, resolved = _settings(_ROOM, args)
+    assert resolved == today and resolved["mode"] == "off"
+    log = _Recorder()
+    assert isinstance(_wire(args, log=log).sensor, NullSensor)
+    off = [fields["detail"] for level, event, fields in log.lines if event == "edge_obstacle_sensing_off"]
+    assert off == ["FLIGHTRISK_OBSTACLE_SENSING=off: this drone flies its lanes with NO obstacle sensing"]
+
+
+@pytest.mark.parametrize("argv", [_ROOM, _FIELD], ids=["room", "field"])
+def test_a_launcher_sensing_required_builds_the_camera_sensor_as_before(edge_env, argv):
+    _launcher(edge_env, "required")
+    wiring = _wire(_resolved(argv))
+    assert isinstance(wiring.sensor, _StubCamera) and len(_StubCamera.built) == 1
+
+
+def test_a_launcher_sensing_on_is_refused_as_before(edge_env):
+    # "on" is not one of the row's choices, so the resolver refused it before A3.4 too.
+    _launcher(edge_env, "on", {"sensing.mode": "on"})
+    with pytest.raises(SystemExit, match=r"cannot do `sensing.mode` on from launcher: .* takes only required, off"):
+        _resolved(_ROOM)
 
 
 def test_the_environment_beats_the_launcher(edge_env):

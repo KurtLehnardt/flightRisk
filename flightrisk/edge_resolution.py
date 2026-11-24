@@ -855,11 +855,15 @@ def obstacle_arguments(resolution: EdgeResolution, today: Mapping[str, Any],
       resolution (FACT-3) and logs that the edge reads it itself (``resolver.READ_BY_THE_EDGE``): a
       MAVLink edge with a camera senses with these settings, so ignoring the override here would change
       how today's edge flies. Plan risk R6 leaves that change to B1.
+
+    A launcher ``sensing.mode`` of off reaches here only when the launcher's ``confirmed`` object names
+    it. Without that confirmation the resolver refuses the start (``resolver.LAUNCHER_NEEDS_CONFIRMATION``),
+    where today's edge ignored the launcher value and sensed as usual (design item 47).
     """
     from flightrisk.params.spec import Source
     from flightrisk.params.table import TABLE
 
-    names = {spec.id: spec.env for spec in TABLE if spec.id in OBSTACLE_ROWS.values()}
+    names ={spec.id: spec.env for spec in TABLE if spec.id in OBSTACLE_ROWS.values()}
     arguments = dict(today)
     for name, row in OBSTACLE_ROWS.items():
         value = resolution.values.get(row)

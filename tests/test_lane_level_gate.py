@@ -4,8 +4,8 @@ Part 1: ``HEADING_TOLERANCE_DEG`` and ``OBSTACLE_RETRY_PAUSE_S`` in ``flightrisk
 read their registry rows and keep today's values and types; ``LaneExecutor`` takes its
 ``obstacle_retry_pause_s`` default from the second and its ``obstacle_turn`` default from ``sensing.turn``.
 
-Part 2: on a gimbal mount every sense gate reads the camera's pitch; a missing pitch, or one whose
-absolute value exceeds ``sensing.level_pitch_tolerance_deg`` (5 degrees), makes the gate
+Part 2: on a gimbal mount every sense gate reads the camera's pitch; a missing pitch (including one
+not measured, or read before the look started), or one whose absolute value exceeds ``sensing.level_pitch_tolerance_deg`` (5 degrees), makes the gate
 ``unavailable`` with the cause "camera not level", which cuts the lane. A fixed mount, and an
 executor given no camera (every unit today), are gated exactly as before.
 
@@ -129,16 +129,22 @@ def _camera(mount_kind: str = "gimbal") -> CameraSpec:
 
 
 class PitchReader:
-    """A fake gimbal pitch reader: ``script`` values first, one per read, then ``pitch``."""
+    """A fake gimbal pitch reader: ``script`` values first, one per read, then ``pitch``.
 
-    def __init__(self, pitch, script=()):
+    Each read returns ``(pitch, stamp)``, stamped ``age_s`` seconds before the rig's clock reads (0: fresh).
+    """
+
+    def __init__(self, pitch, script=(), age_s=0.0):
         self.pitch = pitch
         self.script = list(script)
+        self.age_s = age_s
+        self.clock = None
         self.reads: list = []
 
     def __call__(self, camera_id):
         self.reads.append(camera_id)
-        return self.script.pop(0) if self.script else self.pitch
+        pitch = self.script.pop(0) if self.script else self.pitch
+        return pitch, self.clock() - self.age_s
 
 
 def level_events(rig):
@@ -148,6 +154,8 @@ def level_events(rig):
 def gimbal_rig(rigs, camera=None, reader=None, **tolerance):
     """The obstacle rig with *camera* (a gimbal by default) named for the level gate."""
     rig = rigs()
+    if isinstance(reader, PitchReader):
+        reader.clock = rig.clock
     rig.executor.set_obstacle_camera(_camera() if camera is None else camera, reader, **tolerance)
     return rig
 
@@ -196,6 +204,40 @@ def test_a_reader_that_raises_is_a_missing_pitch(rigs):
         raise RuntimeError("gimbal offline")
 
     rig = gimbal_rig(rigs, reader=broken)
+    fly(rig, lanes_of(("forward", 50),))
+    assert rig.executor.obstacle_cuts == [Cut(0, 0, CUT_SENSOR_STALE)]
+    assert all(e["pitch_deg"] is None for e in level_events(rig))
+
+
+def test_a_fresh_measured_level_pitch_passes(rigs):
+    rig = gimbal_rig(rigs, reader=PitchReader(0.0))
+    fly(rig, lanes_of(("forward", 50),))
+    assert rig.executor.obstacle_cuts == [] and level_events(rig) == []
+    assert rig.sensor.states() == ["clear"] and len(lane_moves(rig)) == 1
+
+
+def test_a_stale_pitch_is_a_missing_pitch(rigs):
+    # A level 0 read a minute before the look may hide a gimbal that has tipped since.
+    rig = gimbal_rig(rigs, reader=PitchReader(0.0, age_s=60.0))
+    fly(rig, lanes_of(("forward", 50),))
+    assert rig.sensor.calls == [] and lane_moves(rig) == []
+    assert rig.executor.obstacle_cuts == [Cut(0, 0, CUT_SENSOR_STALE)]
+    assert len(level_events(rig)) == OBSTACLE_SENSE_RETRIES
+    assert all(e["pitch_deg"] is None for e in level_events(rig))
+
+
+def test_a_pitch_that_is_not_measured_is_a_missing_pitch(rigs):
+    # A gimbal that does not measure its pitch never looks level, whatever its reader says.
+    reader = PitchReader(0.0)
+    rig = gimbal_rig(rigs, dataclasses.replace(_camera(), pitch_measured=False), reader)
+    fly(rig, lanes_of(("forward", 50),))
+    assert rig.sensor.calls == [] and lane_moves(rig) == []
+    assert rig.executor.obstacle_cuts == [Cut(0, 0, CUT_SENSOR_STALE)]
+    assert len(level_events(rig)) == OBSTACLE_SENSE_RETRIES and reader.reads == []
+
+
+def test_a_pitch_without_its_time_is_a_missing_pitch(rigs):
+    rig = gimbal_rig(rigs, reader=lambda camera_id: 0.0)
     fly(rig, lanes_of(("forward", 50),))
     assert rig.executor.obstacle_cuts == [Cut(0, 0, CUT_SENSOR_STALE)]
     assert all(e["pitch_deg"] is None for e in level_events(rig))

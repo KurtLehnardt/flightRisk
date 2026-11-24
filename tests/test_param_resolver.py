@@ -149,7 +149,7 @@ def test_fact_override_is_not_resolved_on_a_production_unit_with_a_log_line(capl
     assert (got.value, got.source) == (0.35, Source.PROFILE)
     lines = [r.getMessage() for r in caplog.records if "FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH" in r.getMessage()]
     assert lines == ["FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH is not resolved on drone-1, a production unit; "
-                     "the edge reads it itself"]
+                     "the edge reads it itself, and uses it only when the unit senses obstacles with a camera"]
 
 
 @pytest.mark.parametrize("model, simulated", [("tello", False), ("tello_edu", False), (G, True)])

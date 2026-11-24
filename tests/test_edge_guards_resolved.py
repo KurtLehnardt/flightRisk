@@ -193,12 +193,12 @@ def test_the_hover_test_on_a_production_mavlink_unit_is_not_logged_as_ignored(ed
     lines = [r.getMessage() for r in caplog.records if r.name == "flightrisk.params.resolver"]
     hover = [line for line in lines if "FLIGHTRISK_HOVER_TEST" in line]
     assert hover and not any("ignored" in line for line in hover)
-    assert any("the edge reads it itself" in line for line in hover)
+    assert any(line.endswith("the edge reads it itself") for line in hover)  # Not only with a camera.
 
 
 def test_the_rows_read_by_the_edge_are_the_hover_test_and_the_obstacle_facts():
     from flightrisk.edge_resolution import OBSTACLE_ROWS
-    from flightrisk.params.resolver import READ_BY_THE_EDGE
+    from flightrisk.params.resolver import READ_BY_THE_EDGE, USED_ONLY_WITH_A_CAMERA
     from flightrisk.params.table import TABLE
 
     obstacle_facts = {spec.id for spec in TABLE
@@ -206,6 +206,7 @@ def test_the_rows_read_by_the_edge_are_the_hover_test_and_the_obstacle_facts():
                       and spec.edit.get("generic_multirotor") is Edit.FACT}
     assert len(obstacle_facts) == 9
     assert READ_BY_THE_EDGE == frozenset({"mode.hover_test"}) | obstacle_facts
+    assert USED_ONLY_WITH_A_CAMERA == obstacle_facts
 
 
 # --- Test-adapter overrides on a production MAVLink unit --------------------------------------------------

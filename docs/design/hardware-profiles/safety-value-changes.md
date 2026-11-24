@@ -80,8 +80,12 @@ unless every later hash is also recomputed; CODEOWNERS review of this file is th
 
 ## PR-A3.4: obstacle sensing, avoidance and lane constants from the registry
 
-- Value: none changed.
-- Old and new: not applicable.
+- Value: no registry value changed. One input is handled differently: a launcher `sensing.mode` of off
+  (`FLIGHTRISK_LAUNCHER_PARAMS`) now refuses the start unless the launcher's `confirmed` object names it, and
+  is applied with a warning when it does (design item 47).
+- Old and new: launcher `sensing.mode` off without confirmation: old, the start was accepted and the launcher
+  value ignored, so the drone sensed as usual; new, the start is refused. The environment variable
+  `FLIGHTRISK_OBSTACLE_SENSING` keeps today's reader. No registry value has an old and a new value.
 - Reason: PR-A3.4 moves 18 + 4 deferred allowlist entries to registry lookups with no value change: 18 in
   `flightrisk/drone/obstacle_sensor.py` and `flightrisk/drone/obstacle.py` (S13), and 4 in
   `flightrisk/drone/lane_flight.py` and `flightrisk/drone/lane_executor.py` (S15). Each constant now reads its
@@ -92,7 +96,11 @@ unless every later hash is also recomputed; CODEOWNERS review of this file is th
   and `obstacle_takeoff_probe`, which have no registry row.
 - Section 27 item: 47 (A3). A production MAVLink unit leaves the nine `FLIGHTRISK_OBSTACLE_*` fact overrides
   out of the resolution, with one log line naming each variable. The line says the edge reads it itself,
-  because the edge's obstacle settings still honour these overrides (plan risk R6 leaves that to B1).
+  because the edge's obstacle settings still honour these overrides (plan risk R6 leaves that to B1), and
+  that they apply only when the unit senses obstacles with a camera. Switching obstacle sensing off is less
+  safe, so a launcher off needs the launcher's confirmation, as a less-safe value from a file does (RES-11).
+  A custom MAVLink model whose camera does not look level now gets no camera sensor (SEAM-4), so its takeoff
+  needs the autopilot's own avoidance; this is the safe direction.
 - SHA-256 previous: 232c2d910939388ccb34883b2e83f3605c60aedafed6a69da687e85872a5bab6
 - SHA-256 table: f949df64f14cee5c1c025d683cabea1d56a493941db05c214c33f7deac628378
 - SHA-256 golden: 7403c28493386027b0c383326d30d2bb2645fa54c154e289276f9246289d2504

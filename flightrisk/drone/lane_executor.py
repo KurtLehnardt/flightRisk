@@ -499,7 +499,7 @@ class LaneExecutor(
         self._obstacle_turn = bool(obstacle_turn)
         # The level gate (ROLE-4): off until ``set_obstacle_camera`` names a gimbal mount.
         self._obstacle_camera: Any = None
-        self._obstacle_pitch_reader: Callable[[str], float | None] | None = None
+        self._obstacle_pitch_reader: Callable[[str], tuple[float | None, float | None]] | None = None
         self._obstacle_level_tolerance_deg: float | None = None
         self.obstacle_sense_timeout_s = float(obstacle_sense_timeout_s)
         self.obstacle_retry_pause_s = max(0.0, float(obstacle_retry_pause_s))
@@ -566,7 +566,7 @@ class LaneExecutor(
     def set_obstacle_camera(
         self,
         camera: Any,
-        pitch_reader: Callable[[str], float | None] | None = None,
+        pitch_reader: Callable[[str], tuple[float | None, float | None]] | None = None,
         *,
         level_tolerance_deg: float | None = None,
     ) -> None:
@@ -574,9 +574,11 @@ class LaneExecutor(
 
         *camera* is the ``CameraSpec`` of that camera (None removes it). On a
         ``gimbal`` mount every sense gate first reads the camera's pitch from
-        *pitch_reader*, called with the camera id (as
-        ``CameraSource.camera_pitch_deg``). A missing pitch (no reader, a
-        reader that raises or returns None) or one whose absolute value
+        *pitch_reader*, called with the camera id. It returns
+        ``(pitch_deg, stamp_s)``, the time the pitch was measured on the
+        executor's clock. A missing pitch (no reader, a reader that raises
+        or returns None, or a camera whose ``pitch_measured`` is False), a
+        pitch measured before the look started, or one whose absolute value
         exceeds *level_tolerance_deg* makes the gate ``unavailable`` with the
         cause ``camera not level``, which cuts the lane
         (``lane_flight._level_off``). *level_tolerance_deg* None is the

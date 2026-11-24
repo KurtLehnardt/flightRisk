@@ -56,8 +56,9 @@ Obstacle sensing (design ``.claude/build/obstacle/design.md`` sections 3 and
    measurement (the Tello, whose ``cw``/``ccw`` reply arrives once the turn
    is flown) is gated exactly as before. A camera on a gimbal mount
    (``LaneExecutor.set_obstacle_camera``) must also look level, before and
-   after the look: when the pitch its reader reports is missing or its
-   absolute value exceeds the level tolerance (registry row
+   after the look: when the pitch its reader reports is missing, not
+   measured, read before the look started, or its absolute value exceeds
+   the level tolerance (registry row
    ``sensing.level_pitch_tolerance_deg``), the gate's result is
    ``unavailable`` (reason ``stale``, cause ``camera not level``), which cuts
    the lane as a stale view does. A fixed mount, and an executor given no
@@ -1496,35 +1497,42 @@ class FlightSequenceMixin:
             return True, None
         return True, float(value) % 360.0
 
-    def _camera_pitch_deg(self, camera: Any) -> float | None:
-        """The pitch the executor's pitch reader reports for *camera*, or None when it is unknown. Never raises.
+    def _camera_pitch_deg(self, camera: Any, after: float) -> float | None:
+        """The measured pitch of *camera* read no earlier than *after*, or None when it is unknown. Never raises.
 
-        No reader, a reader that raises, and a value that is not a finite
-        number all count as a missing pitch.
+        The executor's pitch reader returns ``(pitch_deg, stamp_s)``, the
+        stamp on the executor's clock. A camera whose pitch is not measured
+        (``pitch_measured`` False), no reader, a reader that raises, a value
+        that is not a finite number, and a pitch stamped before *after* (the
+        start of the look, so the pitch may be stale) all count as a missing
+        pitch.
         """
         reader = getattr(self, "_obstacle_pitch_reader", None)
-        if reader is None:
+        if reader is None or getattr(camera, "pitch_measured", False) is not True:
             return None
         try:
-            pitch = reader(camera.id)
+            pitch, stamp = reader(camera.id)
         except Exception:  # noqa: BLE001 - a pitch that cannot be read is a missing pitch
             return None
-        return float(pitch) if is_finite_number(pitch) else None
+        if not (is_finite_number(pitch) and is_finite_number(stamp)) or stamp < after:
+            return None
+        return float(pitch)
 
-    def _level_off(self) -> dict[str, Any] | None:
+    def _level_off(self, after: float) -> dict[str, Any] | None:
         """Why the sensing camera does not look level, as a ``SenseResult`` detail, or None when it does (ROLE-4).
 
         None for an executor given no camera and for a fixed mount, whose
         camera always points where it was built to. A gimbal mount looks
-        level only when its reader reports a pitch whose absolute value is
-        within the executor's level tolerance. A gimbal with no pitch has no
-        role at all (``role_unavailable_reason``), so a missing pitch is not
-        level either.
+        level only when its reader reports a measured pitch, read no earlier
+        than *after* (the start of the look), whose absolute value is within
+        the executor's level tolerance. A gimbal with no pitch has no role
+        at all (``role_unavailable_reason``), so a missing, unmeasured or
+        stale pitch is not level either.
         """
         camera = getattr(self, "_obstacle_camera", None)
         if camera is None or getattr(camera, "mount_kind", None) != "gimbal":
             return None
-        pitch = self._camera_pitch_deg(camera)
+        pitch = self._camera_pitch_deg(camera, after)
         tolerance = getattr(self, "_obstacle_level_tolerance_deg", None)
         if tolerance is None:
             tolerance = _features.default_level_tolerance_deg()
@@ -1704,17 +1712,18 @@ class FlightSequenceMixin:
         it: the view arrived between the two readings. Drones that do not
         measure their heading get the sensor's answer unchanged. A camera
         on a gimbal mount is held to its pitch the same way
-        (``_level_off``): a missing pitch, or one beyond the tolerance, is
+        (``_level_off``): a missing, unmeasured or stale pitch (one read
+        before *after*), or one beyond the tolerance, is
         ``unavailable`` (reason ``stale``, cause ``camera not level``), before
         the look and again after a ``clear`` one. *deadline* and
         *person_wait* are passed to ``_sense_once``.
         """
-        off = self._heading_off() or self._level_off()
+        off = self._heading_off() or self._level_off(after)
         if off is not None:
             return SenseResult.make_unavailable(REASON_STALE, detail=off), 0.0
         result, latency_ms = self._sense_once(after, deadline, person_wait=person_wait)
         if result.clear:
-            off = self._heading_off() or self._level_off()
+            off = self._heading_off() or self._level_off(after)
             if off is not None:
                 return SenseResult.make_unavailable(REASON_STALE, latency_ms=latency_ms, detail=off), latency_ms
         return result, latency_ms
