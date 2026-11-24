@@ -248,6 +248,17 @@ COUPLING_BASELINE: dict[str, dict[tuple[str, str, str, str], int]] = {
         ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_TEMP_REFUSE_C'): 2,
         ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_TEMP_WARN_C'): 2,
         ('flightrisk/params/table.py', '', 'model_default', 'tello'): 1,
+        # flightrisk/params/today.py: generated from the golden file; per-model registry data, not runtime coupling
+        ('flightrisk/params/today.py', '', 'literal', 'FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT'): 1,
+        ('flightrisk/params/today.py', '', 'literal', 'FLIGHTRISK_TELLO_REFUSAL_HOLD_S'): 1,
+        ('flightrisk/params/today.py', '', 'literal', 'FLIGHTRISK_TELLO_REFUSAL_RETRIES'): 1,
+        ('flightrisk/params/today.py', '', 'literal', 'FLIGHTRISK_TELLO_SETTLE_SAMPLES'): 1,
+        ('flightrisk/params/today.py', '', 'literal', 'FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S'): 1,
+        ('flightrisk/params/today.py', '', 'literal', 'FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM'): 1,
+        ('flightrisk/params/today.py', '', 'literal', 'FLIGHTRISK_TELLO_TAKEOFF_LATE_S'): 1,
+        ('flightrisk/params/today.py', '', 'literal', 'FLIGHTRISK_TELLO_TEMP_REFUSE_C'): 1,
+        ('flightrisk/params/today.py', '', 'literal', 'FLIGHTRISK_TELLO_TEMP_WARN_C'): 1,
+        ('flightrisk/params/today.py', '', 'literal', 'tello'): 37,
     },
     "permanent": {
         # flightrisk/main.py
