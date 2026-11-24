@@ -164,36 +164,89 @@ def test_the_allowed_leaf_imports_hold_no_registry_or_catalogue_value():
     assert not [n for n in ast.walk(package) if isinstance(n, (ast.Import, ast.ImportFrom))]
 
 
-def test_no_runtime_module_imports_params_or_hardware():
-    """CMP-1: nothing outside params, hardware and tests imports them at run time yet.
+def _runtime_param_imports(tree):
+    """The names a parsed module imports from params or hardware at run time.
 
     An import inside ``if TYPE_CHECKING:`` never runs, and the drone id pattern holds no registry or
     catalogue value, so neither counts.
     """
+    skipped = _type_checking_nodes(tree)
+    found = []
+    for node in ast.walk(tree):
+        if node in skipped:
+            continue
+        names = []
+        if isinstance(node, ast.Import):
+            names = [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            base = node.module or ""
+            names = [base] + [f"{base}.{a.name}" for a in node.names]
+            if node.level:
+                names = [("." * node.level) + n for n in names]
+        for n in names:
+            bare = n.lstrip(".")
+            if bare in LEAF_IMPORTS_ALLOWED:
+                continue
+            if re.match(r"(flightrisk\.)?(params|hardware)(\.|$)", bare) and (
+                not n.startswith(".") or bare.split(".")[0] in ("params", "hardware")
+            ):
+                found.append(n)
+    return found
+
+
+def test_no_runtime_module_imports_params_or_hardware():
+    """CMP-1 and AM-3: fails on any runtime import of params or hardware from a path that
+    ``tests/param_adopters.py`` names in no section.
+
+    Modules inside params and hardware are skipped, and the exemptions of ``_runtime_param_imports`` apply.
+    """
+    from tests.param_adopters import PARAM_ADOPTERS
+
+    named = set().union(*PARAM_ADOPTERS.values())
     offenders = []
     for path in (ROOT / "flightrisk").rglob("*.py"):
         rel = path.relative_to(ROOT).parts
-        if rel[1] in ("params", "hardware"):
+        if rel[1] in ("params", "hardware") or path.relative_to(ROOT).as_posix() in named:
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        skipped = _type_checking_nodes(tree)
-        for node in ast.walk(tree):
-            if node in skipped:
-                continue
-            names = []
-            if isinstance(node, ast.Import):
-                names = [a.name for a in node.names]
-            elif isinstance(node, ast.ImportFrom):
-                base = node.module or ""
-                names = [base] + [f"{base}.{a.name}" for a in node.names]
-                if node.level:
-                    names = [("." * node.level) + n for n in names]
-            for n in names:
-                bare = n.lstrip(".")
-                if bare in LEAF_IMPORTS_ALLOWED:
-                    continue
-                if re.match(r"(flightrisk\.)?(params|hardware)(\.|$)", bare) and (
-                    not n.startswith(".") or bare.split(".")[0] in ("params", "hardware")
-                ):
-                    offenders.append(f"{'/'.join(rel)}: {n}")
+        for n in _runtime_param_imports(ast.parse(path.read_text(encoding="utf-8"))):
+            offenders.append(f"{'/'.join(rel)}: {n}")
     assert not offenders, offenders
+
+
+def test_every_param_adopter_exists_and_imports_params_or_hardware():
+    """No dead ledger entries: each named path exists and still imports one of the two packages."""
+    from tests.param_adopters import PARAM_ADOPTERS
+
+    assert list(PARAM_ADOPTERS) == [
+        "X-core", "X-legacy", "A3", "A4", "A5", "B1", "B2", "B3", "B4", "D4",
+    ]
+    seen = set()
+    for section, paths in PARAM_ADOPTERS.items():
+        assert isinstance(paths, frozenset), section
+        for rel in paths:
+            assert rel.startswith("flightrisk/") and rel.endswith(".py"), rel
+            assert not rel.startswith(("flightrisk/params/", "flightrisk/hardware/")), rel
+            assert rel not in seen, f"{rel} sits in two sections"
+            seen.add(rel)
+            path = ROOT / rel
+            assert path.is_file(), f"{section}: {rel} does not exist"
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            assert _runtime_param_imports(tree), f"{section}: {rel} no longer imports params or hardware"
+
+
+def test_adopter_import_rule_flags_runtime_and_ignores_type_checking(tmp_path):
+    """The shared rule behind the guard and the dead-entry test, exercised while the ledger is empty."""
+    runtime = tmp_path / "runtime.py"
+    runtime.write_text("from flightrisk.params import TABLE\nimport flightrisk.hardware.profiles\n", encoding="utf-8")
+    assert _runtime_param_imports(ast.parse(runtime.read_text(encoding="utf-8"))) == [
+        "flightrisk.params",
+        "flightrisk.params.TABLE",
+        "flightrisk.hardware.profiles",
+    ]
+    typing_only = tmp_path / "typing_only.py"
+    typing_only.write_text(
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from flightrisk.params import TABLE\n"
+        "from flightrisk.hardware.ids import DRONE_ID\n",
+        encoding="utf-8",
+    )
+    assert _runtime_param_imports(ast.parse(typing_only.read_text(encoding="utf-8"))) == []
