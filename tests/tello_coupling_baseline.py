@@ -26,10 +26,6 @@ from __future__ import annotations
 
 COUPLING_BASELINE: dict[str, dict[tuple[str, str, str, str], int]] = {
     "X-core": {
-        # flightrisk/hardware/features.py
-        ('flightrisk/hardware/features.py', '', 'model_default', 'tello_sdk_udp'): 1,
-        ('flightrisk/hardware/features.py', '_is_tello', 'compare', 'TELLO_ADAPTER'): 1,
-        ('flightrisk/hardware/features.py', 'feature_reason', 'name', '_is_tello'): 3,
         # flightrisk/params/docs.py
         ('flightrisk/params/docs.py', '', 'literal', 'tello'): 1,
         ('flightrisk/params/docs.py', '_fact_table', 'literal', 'tello'): 1,
@@ -221,7 +217,7 @@ COUPLING_BASELINE: dict[str, dict[tuple[str, str, str, str], int]] = {
         ('flightrisk/hardware/catalogue.py', '', 'literal', 'tello'): 1,
         ('flightrisk/hardware/catalogue.py', '', 'literal', 'tello_edu'): 1,
         ('flightrisk/hardware/catalogue.py', '', 'literal', 'tello_sdk_udp'): 3,
-        ('flightrisk/hardware/catalogue.py', '', 'model_default', 'Tello'): 2,
+        ('flightrisk/hardware/catalogue.py', '', 'model_default', 'Tello'): 3,
         ('flightrisk/hardware/catalogue.py', '', 'model_default', 'tello'): 3,
         ('flightrisk/hardware/catalogue.py', '', 'model_default', 'tello_edu'): 1,
         ('flightrisk/hardware/catalogue.py', '', 'model_default', 'tello_sdk_udp'): 2,
@@ -252,6 +248,17 @@ COUPLING_BASELINE: dict[str, dict[tuple[str, str, str, str], int]] = {
         ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_TEMP_REFUSE_C'): 2,
         ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_TEMP_WARN_C'): 2,
         ('flightrisk/params/table.py', '', 'model_default', 'tello'): 1,
+        # flightrisk/params/today.py: generated from the golden file; per-model registry data, not runtime coupling
+        ('flightrisk/params/today.py', '', 'literal', 'FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT'): 1,
+        ('flightrisk/params/today.py', '', 'literal', 'FLIGHTRISK_TELLO_REFUSAL_HOLD_S'): 1,
+        ('flightrisk/params/today.py', '', 'literal', 'FLIGHTRISK_TELLO_REFUSAL_RETRIES'): 1,
+        ('flightrisk/params/today.py', '', 'literal', 'FLIGHTRISK_TELLO_SETTLE_SAMPLES'): 1,
+        ('flightrisk/params/today.py', '', 'literal', 'FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S'): 1,
+        ('flightrisk/params/today.py', '', 'literal', 'FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM'): 1,
+        ('flightrisk/params/today.py', '', 'literal', 'FLIGHTRISK_TELLO_TAKEOFF_LATE_S'): 1,
+        ('flightrisk/params/today.py', '', 'literal', 'FLIGHTRISK_TELLO_TEMP_REFUSE_C'): 1,
+        ('flightrisk/params/today.py', '', 'literal', 'FLIGHTRISK_TELLO_TEMP_WARN_C'): 1,
+        ('flightrisk/params/today.py', '', 'literal', 'tello'): 37,
     },
     "permanent": {
         # flightrisk/main.py
