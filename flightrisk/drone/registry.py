@@ -32,6 +32,7 @@ _BOOTSTRAP_MODULE = "flightrisk.drone.backends"
 BackendFactory = Callable[[str, str, Mapping[str, Any]], DroneController]
 OptionsParser = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 HostResolver = Callable[[Mapping[str, Any]], str]
+EdgeFactory = Callable[..., Any]
 
 
 def _no_options(settings: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -61,6 +62,9 @@ class BackendSpec:
     adapter: str = ""
     #: The catalogue model ids this backend can fly. Empty when not declared.
     models: tuple[str, ...] = ()
+    #: Builds the edge's drone for one unit of this backend. ``None`` when the
+    #: backend has no edge builder. The edge wiring (A3a) consumes it.
+    edge_factory: EdgeFactory | None = None
 
     def options(self, settings: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
         return self.options_from(settings or {})
@@ -98,6 +102,7 @@ def register(
     description: str = "",
     adapter: str = "",
     models: tuple[str, ...] = (),
+    edge_factory: EdgeFactory | None = None,
     replace: bool = False,
 ) -> BackendSpec:
     """Register a backend under ``name`` and return its spec.
@@ -114,6 +119,7 @@ def register(
         description=description,
         adapter=adapter,
         models=tuple(models),
+        edge_factory=edge_factory,
     )
     with _lock:
         if name in _specs and not replace:
@@ -174,10 +180,32 @@ def names() -> tuple[str, ...]:
         return tuple(_specs)
 
 
+def for_model(model_id: str) -> BackendSpec:
+    """The first registered backend whose ``models`` holds ``model_id``.
+
+    Raises :class:`UnknownBackendError` when no backend declares that model.
+    """
+    _ensure_bootstrapped()
+    with _lock:
+        for spec in _specs.values():
+            if model_id in spec.models:
+                return spec
+        raise UnknownBackendError(model_id)
+
+
+def edge_kinds() -> tuple[str, ...]:
+    """Names of backends that have an edge factory, in registration order."""
+    _ensure_bootstrapped()
+    with _lock:
+        return tuple(name for name, spec in _specs.items() if spec.edge_factory is not None)
+
+
 __all__ = [
     "DEFAULT_BACKEND",
     "BackendSpec",
     "UnknownBackendError",
+    "edge_kinds",
+    "for_model",
     "get",
     "is_registered",
     "names",
