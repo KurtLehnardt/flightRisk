@@ -268,20 +268,29 @@ def requested_role_conflict(model: DroneModel, wanted: Iterable[str]) -> Optiona
     return role_conflict(gimbals[0], needed)
 
 
+#: Refusal when a safety switch is switched off without the operator's confirmation (FEA-6, C5).
+CONFIRM_OFF_REASON = "switching {feature} off needs the operator's confirmation"
+
+
 def resolve_features(model: DroneModel, requested: Mapping[str, bool] = None,
-                     request_sources: Mapping[str, str] = None, **context) -> dict:
+                     request_sources: Mapping[str, str] = None, *, confirmed_off: bool = False,
+                     **context) -> dict:
     """The ``gates`` dictionary: ``{feature id: {"on", "ok", "why", "src"}}`` (plain dicts and scalars).
 
     ``requested`` states the features someone switched on or off; the others take their default.
     Switching on a statically unavailable feature, from any source, raises ``FeatureRefused`` with the
     feature's reason. An unavailable feature that was never switched on is reported off with its reason.
-    ``context`` is passed to ``feature_reason``.
+    Switching a safety switch off raises ``FeatureRefused`` unless ``confirmed_off`` is True, so a
+    caller cannot skip the operator's confirmation. ``context`` is passed to ``feature_reason``.
     """
     requested = requested or {}
     sources = request_sources or {}
     unknown = sorted(set(requested) - set(FEATURES))
     if unknown:
         raise KeyError(f"unknown feature {unknown[0]!r}")
+    for fid, on in requested.items():
+        if FEATURES[fid].safety_switch and not on and not confirmed_off:
+            raise FeatureRefused(fid, CONFIRM_OFF_REASON.format(feature=fid))
     conflict = requested_role_conflict(model, [fid for fid, on in requested.items() if on])
     if conflict:
         fid = next(f for f in (BIRDSEYE_SEARCH, LEVEL_SEARCH, FORWARD_OBSTACLE_SENSING) if requested.get(f))

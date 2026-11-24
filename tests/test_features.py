@@ -182,3 +182,11 @@ def test_role2_no_conflict_when_a_fixed_mount_serves_one_role():
     gates = resolve_features(two, {"forward_obstacle_sensing": True, "birdseye_search": True},
                              mission_pitch_deg={"gimbal": -90}, source="camera")
     assert gates["birdseye_search"]["on"] and gates["forward_obstacle_sensing"]["on"]
+
+
+def test_safety_switch_off_needs_confirmation():
+    """L3: forward_obstacle_sensing off is refused unless the caller passes the operator's confirmation."""
+    with pytest.raises(FeatureRefused, match="confirmation"):
+        resolve_features(TELLO, {FORWARD_OBSTACLE_SENSING: False})
+    gates = resolve_features(TELLO, {FORWARD_OBSTACLE_SENSING: False}, confirmed_off=True)
+    assert gates[FORWARD_OBSTACLE_SENSING]["on"] is False

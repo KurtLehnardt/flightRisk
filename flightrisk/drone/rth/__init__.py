@@ -2,6 +2,10 @@
 
 The state machine and the return methods of design section 10.1 are added in later phases.
 This package imports only the standard library.
+
+PROVISIONAL: ``ReturnMethod`` and ``HomeRecord`` are placeholders, not a stable seam. Section 10
+drives the methods from a pure, clocked machine and needs a home with a frame and an altitude, so
+the C-phase PR that adds the machine replaces both. They are kept out of ``__all__`` until then.
 """
 
 from __future__ import annotations
@@ -27,4 +31,4 @@ class HomeRecord(Protocol):
     def home(self) -> Optional[Tuple[float, float]]: ...
 
 
-__all__ = ["HomeRecord", "ReturnMethod"]
+__all__: list = []  # provisional protocols are not exported; see the module docstring
