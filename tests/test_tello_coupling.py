@@ -67,8 +67,8 @@ ALLOWED_PATTERN = re.compile(r"^flightrisk/drone/(tello\w*|registry|backends)\.p
 
 #: Files that stay coupled on purpose, with the reason.
 PERMANENT_EXEMPTIONS: dict[str, str] = {
-    "flightrisk/main.py": "XK-01: the legacy entry point names its own Tello default.",
-    "flightrisk/drone/mavlink.py": "XK-02, XK-03: the MAVLink backend states what it is not and refuses Tello names.",
+    "flightrisk/main.py": "XK-01: the single-process app imports the Tello controller directly and defaults its source to a Tello; kept by owner decision.",
+    "flightrisk/drone/mavlink.py": "XK-02, XK-03: the legacy MAVLink controller is kept unchanged by owner decision.",
     "scripts/demo_edge.sh": "XK-04: the edge demo script is a Tello demo, pinned by tests/test_demo_smoke.py.",
     "scripts/demo_edge.ps1": "XK-04: the edge demo script is a Tello demo, pinned by tests/test_demo_smoke.py.",
     "scripts/demo_edge_pair.ps1": "XK-04: the edge demo script is a Tello demo, pinned by tests/test_demo_smoke.py.",
