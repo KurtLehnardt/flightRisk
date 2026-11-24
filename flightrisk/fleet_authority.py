@@ -424,6 +424,9 @@ class EdgeAuthority:
 
     def _edge_hello(self, proto: int, snapshot: Mapping[str, Any]) -> dict[str, Any]:
         plan = self._plan[1] if self._plan is not None and self._plan[0] == self._epoch_seen else None
+        # A v2 hello carries the hash of the start-time resolution; with no resolution it carries none.
+        answerer = self._query_source() if self._query_source is not None else None
+        unit_rev = answerer.unit_rev if answerer is not None and proto >= 2 else None
         return fp.make_edge_hello(
             self.drone_id,
             self.node_id,
@@ -433,6 +436,7 @@ class EdgeAuthority:
             is_flying=snapshot.get("is_flying") is True,
             battery=_clean_battery(snapshot.get("battery")),
             proto=proto,
+            unit_rev=unit_rev,
         )
 
     def _before_hello(self, conn: _Conn, mtype: Any) -> Decision:

@@ -90,6 +90,12 @@ class EdgeQuery:
         self._log = log
         self.min_interval_s = min_interval_s
 
+    @property
+    def unit_rev(self) -> str | None:
+        """The ``unit_rev`` of the start-time report, which the edge ``hello`` carries (PROTO-2)."""
+        value = getattr(self._report, "unit_rev", None)
+        return value if fp.is_unit_rev(value) else None
+
     def answer(self, msg: Mapping[str, Any], state: ConnectionQueries, *, proto: Any, now: float) -> dict[str, Any] | None:
         """The reply to *msg* on the connection whose state is *state*, or None when it gets none."""
         try:

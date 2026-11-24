@@ -91,7 +91,11 @@ ALLOWED: dict[str, frozenset[tuple[str, str]]] = {
         ("make_describe_unit_nack", "_build"),
         ("make_describe_unit_nack", "_refuse"),
         ("make_describe_unit_nack", "answer"),
+        # Reads the report's unit_rev for the edge hello (PROTO-2); sends nothing itself.
+        ("unit_rev", "unit_rev"),
     }),
+    # The edge hello carries the unit_rev of the start-time resolution (PROTO-2).
+    "fleet_authority.py": frozenset({("unit_rev=", "_edge_hello")}),
 }
 
 #: The only tokens Phase A3 may add to ``ALLOWED``: the edge's ``describe_unit``
