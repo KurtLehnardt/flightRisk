@@ -114,6 +114,7 @@ from flightrisk.fleet_protocol.returns import (
     validate_assign_lanes_return_keys,
     validate_return_command,
     validate_return_reply,
+    validate_rth_object,
 )
 from flightrisk.fleet_protocol.unit import (
     is_describe_unit_reply,
@@ -251,6 +252,12 @@ def _validate_telemetry(msg: Mapping[str, Any], proto: int) -> None:
     # One object, so it costs one field of MAX_FIELDS.
     if "move_refusals" in msg:
         _validate_move_refusals(msg["move_refusals"])
+    # Optional, a protocol v2 field (``V2_FIELDS``, stripped on a v1 link):
+    # the return object with ``ap_link_loss`` inside it
+    # (``flightrisk/fleet_protocol/returns.py``). One object, so it costs
+    # one field of MAX_FIELDS.
+    if "rth" in msg:
+        validate_rth_object(msg["rth"])
 
 
 def _validate_move_refusals(value: Any) -> None:

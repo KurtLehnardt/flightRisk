@@ -246,8 +246,13 @@ def make_telemetry(
     takeoff_at_local_s: float | None,
     *,
     v2: TelemetryV2 | None = None,
+    rth: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Edge -> ground state report, sent every ``TELEMETRY_INTERVAL_S``."""
+    """Edge -> ground state report, sent every ``TELEMETRY_INTERVAL_S``.
+
+    *rth* is the optional return object (``make_rth_object``), a protocol v2
+    field, so it needs *v2*. Without it the message is unchanged.
+    """
     msg: dict[str, Any] = {
         "type": TELEMETRY,
         "drone_id": drone_id,
@@ -263,8 +268,12 @@ def make_telemetry(
         "takeoff_at_local_s": takeoff_at_local_s,
     }
     if v2 is None:
+        if rth is not None:
+            raise ProtocolError("telemetry field 'rth' is a protocol v2 field; pass v2 as well")
         return _checked(msg)
     msg.update(v2.fields())
+    if rth is not None:
+        msg["rth"] = dict(rth)
     return _checked(msg, 2)
 
 

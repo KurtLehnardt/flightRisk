@@ -1307,3 +1307,53 @@ older ground ignores the key, and `shape_for_peer` strips it for a v1 peer.
 **Logging (PROTO-7).** `flightrisk/obs_comm.py` counts `describe_unit` queries and their
 replies on every message and logs them as one aggregated event per side, direction, type and
 drone, like telemetry. Replies are aggregated as `ack:describe_unit` and `nack:describe_unit`.
+
+## rth telemetry
+
+Phase A2 defines the `rth` telemetry object (`flightrisk/fleet_protocol/returns.py`,
+`validate_rth_object` and `make_rth_object`; design section 18; requirement MAV-19). No code
+sends it yet: C1 is the first sender. It is the edge's return state, reported in its
+`telemetry`:
+
+```json
+{"type": "telemetry", "drone_id": "drone-1", "...": "...",
+ "rth": {"state": "rth_returning", "reason": "battery_cannot_reach_home",
+         "home": {"x_cm": 120, "y_cm": -40}, "distance_cm": 3400, "uncertainty_cm": 250,
+         "reserve_pct": 12, "threshold_pct": 38.5, "countdown_s": 0, "cannot_recall": false,
+         "landing_area_id": "pad-1", "landing_place": 0, "ap_link_loss": "land"}}
+```
+
+- `state` (required): from `RTH_STATES` (design section 10.3).
+- `reason`: why the drone lands in place instead of returning, from `RTH_REASONS` (design
+  section 10.5), or null.
+- `home`: a point object `{"x_cm", "y_cm"}` within `MAX_LANE_DISTANCE_CM` of the take-off
+  point, or null when the edge knows no home.
+- `distance_cm` (to home), `uncertainty_cm` (of the position) and `countdown_s` (of the
+  running countdown): numbers of 0 or more, or null.
+- `reserve_pct` (the battery reserve) and `threshold_pct` (the return threshold): numbers from
+  0 to 100, or null.
+- `cannot_recall`: true while the ground cannot recall the drone (the drone link is lost).
+- `landing_area_id` and `landing_place`: the landing area and the drone's place in its landing
+  order (0 to `MAX_ROSTER - 1`), each or null.
+- `ap_link_loss`: the autopilot's link-loss action, from `AP_LINK_LOSS_ACTIONS` (`return`,
+  `land` or `unknown`; `unknown` counts as `return`), as in the `describe_unit` reply (MAV-19,
+  B-3).
+
+Only `state` is required. Every other key is checked when present, and a key this version
+does not define is ignored, as an unknown top-level telemetry key is. Every number is a named
+key, so the object holds no list of numbers and never meets the privacy screen's number caps.
+Its depth is 3 (`telemetry`, `rth`, `home`), within `MAX_DEPTH`.
+
+**One field of the cap.** `rth` is one grouped top-level field, like `detection_profile`
+(#211), so it adds one field to the worst-case telemetry. With every optional group the
+producers can add (the bound of `tests/test_telemetry_field_cap.py`, which no real edge
+reaches) the worst case is 40 fields today and 41 with `rth`, within the headroom guard of
+`MAX_FIELDS - 5` (43). `tests/test_fleet_protocol_rth_telemetry.py` computes that count from
+the producers.
+
+**Builder.** `make_telemetry(..., v2=..., rth=make_rth_object(...))` adds the object; `rth`
+without `v2` is refused. Without `rth` the message is byte-identical to before.
+
+**Older peers.** `rth` is in `V2_FIELDS`, so `shape_for_peer` strips it, and the
+`ap_link_loss` inside it, for a v1 peer. An older v2 ground ignores it, because its telemetry
+validator checks named keys only.

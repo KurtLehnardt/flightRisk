@@ -47,6 +47,15 @@ Rules:
   while the drone lands), each carrying ``drone_id`` and ``cmd_id``.
 * **Landing is unaffected.** Nothing here touches ``land`` or
   ``emergency_land_all``.
+* **The ``rth`` telemetry object** (``validate_rth_object``,
+  ``make_rth_object``) is the edge's return state in its telemetry: one
+  top-level field, so it costs one of ``MAX_FIELDS``, with every number as
+  a named key (``home`` is a point object). It carries ``ap_link_loss``, the
+  autopilot's link-loss action (MAV-19, B-3). It is a protocol v2 field
+  (``V2_FIELDS``), so ``shape_for_peer`` strips it, and the
+  ``ap_link_loss`` inside it, on a v1 link. Only ``state`` is required;
+  every other key is checked when present, and a key this version does
+  not define is ignored, like an unknown top-level telemetry key.
 
 This module imports only ``checks`` and ``constants``; ``validate`` calls
 into it.
@@ -72,9 +81,11 @@ from flightrisk.fleet_protocol.checks import (
     _require_number,
     _require_text,
     _short,
+    is_identifier,
 )
 from flightrisk.fleet_protocol.constants import (
     ACK,
+    AP_LINK_LOSS_ACTIONS,
     ESCORT_SETPOINT,
     MAX_AREA_POINTS,
     MAX_CORRIDOR_POINTS,
@@ -92,6 +103,8 @@ from flightrisk.fleet_protocol.constants import (
     NO_ENTRY_KINDS,
     RETURN_COMMAND_TYPES,
     RETURN_HOME,
+    RTH_REASONS,
+    RTH_STATES,
     SET_NO_ENTRY,
     SET_SPEED,
 )
@@ -106,16 +119,19 @@ __all__ = [
     "MAX_SETPOINT_VALID_S",
     "MAX_SPEED_CM_S",
     "MIN_RETURN_HOVER_TIMEOUT_S",
+    "RTH_FIELDS",
     "is_return_reply",
     "make_escort_setpoint",
     "make_return_ack",
     "make_return_home",
     "make_return_nack",
+    "make_rth_object",
     "make_set_no_entry",
     "make_set_speed",
     "validate_assign_lanes_return_keys",
     "validate_return_command",
     "validate_return_reply",
+    "validate_rth_object",
 ]
 
 # Optional ``assign_lanes`` keys that exist only in protocol v2.
@@ -123,6 +139,23 @@ ASSIGN_LANES_RETURN_KEYS = ("corridor", "landing", "no_entry", "speed_cm_s")
 _POINT_FIELDS = frozenset({"x_cm", "y_cm"})
 _AREA_FIELDS = frozenset({"id", "kind", "points", "drone_id"})
 _LANDING_FIELDS = frozenset({"area_id", "place", "interval_s"})
+# The keys of the ``rth`` telemetry object, in the order ``make_rth_object``
+# writes them. Only ``state`` is required.
+RTH_FIELDS = (
+    "state",
+    "reason",
+    "home",
+    "distance_cm",
+    "uncertainty_cm",
+    "reserve_pct",
+    "threshold_pct",
+    "countdown_s",
+    "cannot_recall",
+    "landing_area_id",
+    "landing_place",
+    "ap_link_loss",
+)
+_RTH_WHAT = "'telemetry' field 'rth'"
 
 
 def _only(obj: Mapping[str, Any], allowed: frozenset[str], what: str) -> None:
@@ -415,3 +448,102 @@ def make_return_nack(
         msg["detail"] = detail
     validate_return_reply(msg, proto=2)
     return msg
+
+
+def _rth_optional_number(rth: Mapping[str, Any], key: str, high: float | None = None) -> None:
+    value = rth.get(key)
+    if value is None:
+        return
+    if not _is_number(value) or value < 0 or (high is not None and value > high):
+        bound = f" and at most {high}" if high is not None else ""
+        raise ProtocolError(
+            f"{_RTH_WHAT} key {key!r} must be a number of 0 or more{bound}, or null, got {_short(value)}"
+        )
+
+
+def validate_rth_object(rth: Any) -> None:
+    """Check the ``rth`` telemetry object; raise ``ProtocolError`` if it is malformed.
+
+    ``state`` (from ``RTH_STATES``) is required. When present: ``reason``
+    from ``RTH_REASONS`` or null; ``home`` a point object or null;
+    ``distance_cm``, ``uncertainty_cm`` and ``countdown_s`` at least 0 or
+    null; ``reserve_pct`` and ``threshold_pct`` from 0 to 100 or null;
+    ``cannot_recall`` a boolean; ``landing_area_id`` an identifier or null;
+    ``landing_place`` the drone's place in its landing order, 0 to
+    ``MAX_ROSTER - 1``, or null; ``ap_link_loss`` from
+    ``AP_LINK_LOSS_ACTIONS``. Keys this version does not define are ignored.
+    """
+    if not isinstance(rth, Mapping):
+        raise ProtocolError(f"{_RTH_WHAT} must be an object, got {_short(rth)}")
+    state = rth.get("state")
+    if not _is_member(state, RTH_STATES):
+        raise ProtocolError(f"{_RTH_WHAT} key 'state' must be one of {sorted(RTH_STATES)}, got {_short(state)}")
+    reason = rth.get("reason")
+    if reason is not None and not _is_member(reason, RTH_REASONS):
+        raise ProtocolError(
+            f"{_RTH_WHAT} key 'reason' must be one of {sorted(RTH_REASONS)} or null, got {_short(reason)}"
+        )
+    if rth.get("home") is not None:
+        _validate_point(rth["home"], f"{_RTH_WHAT} key 'home'")
+    for key in ("distance_cm", "uncertainty_cm", "countdown_s"):
+        _rth_optional_number(rth, key)
+    for key in ("reserve_pct", "threshold_pct"):
+        _rth_optional_number(rth, key, 100)
+    if "cannot_recall" in rth and not isinstance(rth["cannot_recall"], bool):
+        raise ProtocolError(f"{_RTH_WHAT} key 'cannot_recall' must be true or false, got {_short(rth['cannot_recall'])}")
+    area = rth.get("landing_area_id")
+    if area is not None and not is_identifier(area):
+        raise ProtocolError(f"{_RTH_WHAT} key 'landing_area_id' must be an identifier or null, got {_short(area)}")
+    place = rth.get("landing_place")
+    if place is not None and not (_is_int(place) and 0 <= place <= MAX_ROSTER - 1):
+        raise ProtocolError(
+            f"{_RTH_WHAT} key 'landing_place' must be a whole number from 0 to {MAX_ROSTER - 1} or null, "
+            f"got {_short(place)}"
+        )
+    if "ap_link_loss" in rth and not _is_member(rth["ap_link_loss"], AP_LINK_LOSS_ACTIONS):
+        raise ProtocolError(
+            f"{_RTH_WHAT} key 'ap_link_loss' must be one of {sorted(AP_LINK_LOSS_ACTIONS)}, "
+            f"got {_short(rth['ap_link_loss'])}"
+        )
+
+
+def make_rth_object(
+    state: str,
+    *,
+    reason: str | None = None,
+    home: tuple[float, float] | Mapping[str, float] | None = None,
+    distance_cm: float | None = None,
+    uncertainty_cm: float | None = None,
+    reserve_pct: float | None = None,
+    threshold_pct: float | None = None,
+    countdown_s: float | None = None,
+    cannot_recall: bool | None = None,
+    landing_area_id: str | None = None,
+    landing_place: int | None = None,
+    ap_link_loss: str | None = None,
+) -> dict[str, Any]:
+    """The ``rth`` telemetry object, for ``make_telemetry(..., rth=...)``.
+
+    A key left as ``None`` is omitted. *home* is an ``(x_cm, y_cm)`` pair or
+    a point object. Nothing in A2 sends it (CMP-1); C1 is the first sender.
+    """
+    if home is not None and not isinstance(home, Mapping):
+        x_cm, y_cm = home
+        home = {"x_cm": x_cm, "y_cm": y_cm}
+    values = {
+        "state": state,
+        "reason": reason,
+        "home": dict(home) if home is not None else None,
+        "distance_cm": distance_cm,
+        "uncertainty_cm": uncertainty_cm,
+        "reserve_pct": reserve_pct,
+        "threshold_pct": threshold_pct,
+        "countdown_s": countdown_s,
+        "cannot_recall": cannot_recall,
+        "landing_area_id": landing_area_id,
+        "landing_place": landing_place,
+        "ap_link_loss": ap_link_loss,
+    }
+    rth = {key: values[key] for key in RTH_FIELDS if values[key] is not None}
+    validate_rth_object(rth)
+    return rth
