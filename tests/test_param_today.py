@@ -159,6 +159,12 @@ def test_parity_probes_give_the_same_results_with_the_runtime_copy(monkeypatch):
 
 RESOLVER = "flightrisk.params.resolver"
 TODAY_ACCEPTS = "flightrisk.params.today.today_accepts"
+# Modules through which a target or today_accepts is reached; a name bound to one of them must not be rebound.
+REACHING_MODULES = {"flightrisk", "flightrisk.params", RESOLVER, "flightrisk.params.today"}
+
+# The rule follows names, imports, assignments and wrapper parameters inside one file. Its remaining
+# limit: a ``**mapping`` built elsewhere and passed to a wrapper is not followed, because only a dict
+# display or a dict() call that names today_accepts in the call itself can be seen.
 
 
 def _target_names() -> set[str]:
@@ -205,25 +211,29 @@ def _own_nodes(body: list[ast.AST]):
         stack.extend(reversed(list(ast.iter_child_nodes(node))))
 
 
-def _import_map(tree: ast.AST, package: str) -> tuple[dict[str, str], list[ast.ImportFrom]]:
-    """Map every name bound by an import, anywhere in the file, to its dotted target."""
-    names: dict[str, str] = {}
+def _import_map(tree: ast.AST, package: str) -> tuple[dict[str, dict[str, int]], list[ast.ImportFrom]]:
+    """Map every name bound by an import, anywhere in the file, to its dotted targets and their first line."""
+    names: dict[str, dict[str, int]] = {}
     stars: list[ast.ImportFrom] = []
+
+    def bind(name: str, target: str, node: ast.AST) -> None:
+        names.setdefault(name, {}).setdefault(target, node.lineno)
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.asname:
-                    names[alias.asname] = alias.name
+                    bind(alias.asname, alias.name, node)
                 else:
                     first = alias.name.split(".")[0]
-                    names[first] = first
+                    bind(first, first, node)
         elif isinstance(node, ast.ImportFrom):
             module = _absolute_module(node, package)
             for alias in node.names:
                 if alias.name == "*":
                     stars.append(node)
                 elif module:
-                    names[alias.asname or alias.name] = f"{module}.{alias.name}"
+                    bind(alias.asname or alias.name, f"{module}.{alias.name}", node)
     return names, stars
 
 
@@ -231,11 +241,64 @@ def today_accepts_problems(text: str, rel_path: str) -> list[str]:
     """Problems with how one source file calls the resolver; each names the file, the line and the reason."""
     targets = _target_names()
     tree = ast.parse(text.lstrip("\ufeff"), filename=rel_path)
-    names, stars = _import_map(tree, _package_of(rel_path))
+    bindings, stars = _import_map(tree, _package_of(rel_path))
     problems: list[str] = []
+    names: dict[str, str] = {}
 
     def problem(node: ast.AST, reason: str) -> None:
         problems.append(f"{rel_path}:{getattr(node, 'lineno', 0)}: {reason}")
+
+    parents: dict[ast.AST, ast.AST] = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parents[child] = parent
+
+    def enclosing_functions(node: ast.AST) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+        """Functions whose body holds ``node``, innermost first; a default or decorator is outside its function."""
+        found = []
+        while node in parents:
+            parent = parents[node]
+            if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)) and node in parent.body:
+                found.append(parent)
+            node = parent
+        return found
+
+    other_bound: dict[str, int] = {}
+
+    def note_other(name: str, node: ast.AST) -> None:
+        other_bound.setdefault(name, getattr(node, "lineno", 0))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            note_other(node.id, node)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            note_other(node.name, node)
+        elif isinstance(node, ast.arg):
+            owner = parents.get(parents.get(node))
+            keyword_only_today = (
+                isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node in owner.args.kwonlyargs
+                and node.arg == "today_accepts"
+                and isinstance(owner.args.kw_defaults[owner.args.kwonlyargs.index(node)], ast.Call)
+            )
+            if not keyword_only_today:
+                note_other(node.arg, node)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            note_other(node.name, node)
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            for name in node.names:
+                note_other(name, node)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+            note_other(node.name, node)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            note_other(node.rest, node)
+
+    relevant = targets | REACHING_MODULES | {TODAY_ACCEPTS}
+    for name, found in bindings.items():
+        if any(target in relevant for target in found) and (len(found) > 1 or name in other_bound):
+            problems.append(f"{rel_path}:{min(found.values())}: ambiguous binding of {name}")
+        else:
+            names[name] = next(iter(found))
 
     def dotted(node: ast.AST) -> str | None:
         if isinstance(node, ast.Name):
@@ -246,20 +309,13 @@ def today_accepts_problems(text: str, rel_path: str) -> list[str]:
         return None
 
     def is_today_call(node: ast.AST | None) -> bool:
-        return isinstance(node, ast.Call) and dotted(node.func) == TODAY_ACCEPTS
-
-    parents: dict[ast.AST, ast.AST] = {}
-    for parent in ast.walk(tree):
-        for child in ast.iter_child_nodes(parent):
-            parents[child] = parent
-
-    def enclosing_functions(node: ast.AST) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
-        found = []
-        while node in parents:
-            node = parents[node]
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                found.append(node)
-        return found
+        if not isinstance(node, ast.Call) or dotted(node.func) != TODAY_ACCEPTS:
+            return False
+        root = node.func
+        while isinstance(root, ast.Attribute):
+            root = root.value
+        # A parameter of an enclosing function that shares the name is not the import.
+        return not any(param_default(fn, root.id)[0] for fn in enclosing_functions(node))
 
     def param_default(fn: ast.FunctionDef | ast.AsyncFunctionDef, name: str) -> tuple[bool, ast.AST | None]:
         """Whether ``name`` is a parameter of ``fn``, and its default expression, if any."""
@@ -314,9 +370,14 @@ def today_accepts_problems(text: str, rel_path: str) -> list[str]:
             is_param, default = param_default(fn, value.id)
             own = scope_bindings(fn.body, value.id)
             if is_param or own:
-                if is_param and not is_today_call(default):
-                    problem(call, f"wrapper {fn.name} forwards its parameter {value.id}, "
-                                  "whose default is not flightrisk.params.today.today_accepts()")
+                if is_param and not (
+                    value.id == "today_accepts"
+                    and any(arg.arg == value.id for arg in fn.args.kwonlyargs)
+                    and is_today_call(default)
+                ):
+                    problem(call, f"wrapper {fn.name} forwards its parameter {value.id}, which must be a "
+                                  "keyword-only parameter named today_accepts defaulting to "
+                                  "flightrisk.params.today.today_accepts()")
                     return
                 if any(not is_today_call(v) for v in own):
                     problem(call, f"{value.id} in {fn.name} is also bound to something other than today_accepts()")
@@ -337,16 +398,22 @@ def today_accepts_problems(text: str, rel_path: str) -> list[str]:
             func_nodes.add(id(node.func))
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
-            if dotted(node.func) in targets:
-                if any(kw.arg is None for kw in node.keywords):
-                    problem(node, "call passes ** arguments, so today_accepts cannot be checked")
-                    continue
-                keyword = next((kw for kw in node.keywords if kw.arg == "today_accepts"), None)
-                if keyword is None:
-                    problem(node, "call does not name the today_accepts keyword (default None)")
-                else:
-                    check_value(node, keyword.value)
-            elif isinstance(node.func, ast.Name) and node.func.id == "getattr":
+            is_target = dotted(node.func) in targets
+            double_star = [kw for kw in node.keywords if kw.arg is None]
+            keyword = next((kw for kw in node.keywords if kw.arg == "today_accepts"), None)
+            if is_target and double_star:
+                problem(node, "call passes ** arguments, so today_accepts cannot be checked")
+            for kw in double_star:
+                if isinstance(kw.value, ast.Dict) and any(
+                        isinstance(k, ast.Constant) and k.value == "today_accepts" for k in kw.value.keys):
+                    problem(node, "today_accepts passed through a dict display with **")
+            if keyword is not None and isinstance(node.func, ast.Name) and node.func.id == "dict":
+                problem(node, "today_accepts passed through dict(), which hides it from the rule")
+            elif keyword is not None:
+                check_value(node, keyword.value)
+            elif is_target and not double_star:
+                problem(node, "call does not name the today_accepts keyword (default None)")
+            if isinstance(node.func, ast.Name) and node.func.id == "getattr":
                 for arg in node.args[1:]:
                     if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and any(
                             t.rsplit(".", 1)[1] == arg.value for t in targets):
@@ -394,7 +461,8 @@ GOOD_CALLS = [
     "from flightrisk.params.resolver import resolve_unit\nfrom flightrisk.params.today import today_accepts\n"
     "RANGES = today_accepts()\ndef f():\n    return resolve_unit('m', 'u', {}, today_accepts=RANGES)\n",
     "from flightrisk.params.resolver import resolve_unit\nfrom flightrisk.params.today import today_accepts\n"
-    "def wrap(ranges=today_accepts()):\n    return resolve_unit('m', 'u', {}, today_accepts=ranges)\n",
+    "def wrap(*, today_accepts=today_accepts()):\n    return resolve_unit('m', 'u', {}, today_accepts=today_accepts)\n"
+    "wrap()\n",
     "def f():\n    from flightrisk.params.resolver import resolve_unit\n"
     "    from flightrisk.params.today import today_accepts\n"
     "    return resolve_unit('m', 'u', {}, today_accepts=today_accepts())\n",
@@ -416,6 +484,28 @@ BAD_CALLS = [
     ("from ..params.resolver import resolve_unit\nresolve_unit('m', 'u', {})\n", "does not name"),
     ("from ..params import resolver\nresolver.resolve_unit('m', 'u', {})\n", "does not name"),
     ("from flightrisk.params import resolve_unit\nresolve_unit('m', 'u', {})\n", "does not name"),
+    ("from flightrisk.params.resolver import resolve_unit\nfrom flightrisk.params.today import today_accepts\n"
+     "def wrap(ranges=today_accepts()):\n    return resolve_unit('m', 'u', {}, today_accepts=ranges)\n",
+     "wrapper wrap"),
+    ("from flightrisk.params.resolver import resolve_unit\nfrom flightrisk.params.today import today_accepts\n"
+     "def wrap(today_accepts=today_accepts()):\n    return resolve_unit('m', 'u', {}, today_accepts=today_accepts)\n",
+     "wrapper wrap"),
+    ("from flightrisk.params.resolver import resolve_unit\nfrom flightrisk.params.today import today_accepts\n"
+     "def wrap(*, today_accepts=today_accepts()):\n    return resolve_unit('m', 'u', {}, today_accepts=today_accepts)\n"
+     "wrap(today_accepts=None)\n", "is None"),
+    ("from flightrisk.params.resolver import resolve_unit\nfrom flightrisk.params.today import today_accepts\n"
+     "def today_accepts():\n    return None\n"
+     "resolve_unit('m', 'u', {}, today_accepts=today_accepts())\n", "ambiguous binding of today_accepts"),
+    ("from flightrisk.params.resolver import resolve_unit\nfrom flightrisk.params.today import today_accepts\n"
+     "today_accepts = lambda: None\n"
+     "resolve_unit('m', 'u', {}, today_accepts=today_accepts())\n", "ambiguous binding of today_accepts"),
+    ("from flightrisk.params.resolver import resolve_unit\nfrom flightrisk.other import today_accepts\n"
+     "def g():\n    from flightrisk.params.today import today_accepts\n"
+     "resolve_unit('m', 'u', {}, today_accepts=today_accepts())\n", "ambiguous binding of today_accepts"),
+    ("from flightrisk.params.resolver import resolve_unit\nfrom flightrisk.params.today import today_accepts\n"
+     "resolve_unit('m', 'u', {}, **{'today_accepts': today_accepts()})\n", "dict display"),
+    ("from flightrisk.params.today import today_accepts\nx = dict(today_accepts=today_accepts())\n", "dict()"),
+    ("def other(**kw):\n    return 1\nother(today_accepts=None)\n", "is None"),
     ("from flightrisk.params.resolver import resolve_unit\n"
      "def wrap(ranges=None):\n    return resolve_unit('m', 'u', {}, today_accepts=ranges)\n", "wrapper wrap"),
     ("from flightrisk.params.resolver import resolve_unit\n"
@@ -456,20 +546,21 @@ def test_the_rule_rejects_bad_forms(source, reason):
 def test_the_rule_follows_a_wrapper_that_forwards_a_none_default_through_an_alias():
     source = (
         "from flightrisk.params import resolver as r\n"
-        "def wrap(model, ranges=None):\n"
-        "    return r.resolve_unit(model, 'u', {}, today_accepts=ranges)\n"
+        "def wrap(model, *, today_accepts=None):\n"
+        "    return r.resolve_unit(model, 'u', {}, today_accepts=today_accepts)\n"
     )
     found = today_accepts_problems(source, "flightrisk/x.py")
     assert len(found) == 1 and "wrapper wrap" in found[0] and ":3:" in found[0]
 
 
-def test_the_rule_ignores_the_parameters_default_only_when_it_is_today_accepts():
+def test_the_rule_rejects_a_call_of_a_good_wrapper_that_passes_none():
     source = (
         "from flightrisk.params.resolver import resolve_unit\n"
         "from flightrisk.params.today import today_accepts\n"
-        "def wrap(a=today_accepts(), b=None):\n"
-        "    resolve_unit('m', 'u', {}, today_accepts=a)\n"
-        "    resolve_unit('m', 'u', {}, today_accepts=b)\n"
+        "def wrap(*, today_accepts=today_accepts()):\n"
+        "    return resolve_unit('m', 'u', {}, today_accepts=today_accepts)\n"
+        "wrap()\n"
+        "wrap(today_accepts=None)\n"
     )
     found = today_accepts_problems(source, "flightrisk/x.py")
-    assert len(found) == 1 and ":5:" in found[0]
+    assert len(found) == 1 and ":6:" in found[0]
