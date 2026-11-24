@@ -36,6 +36,7 @@ import numpy as np
 
 if TYPE_CHECKING:  # pragma: no cover - import only for annotations
     from flightrisk.drone.snapshot import TelemetrySnapshot
+    from flightrisk.hardware.catalogue import CameraSpec
 
 
 @dataclass
@@ -408,6 +409,18 @@ class Navigation(Protocol):
 class VideoSource(Protocol):
     def get_frame(self) -> np.ndarray | None: ...
     def on_frame(self, cb: Callable[[np.ndarray], None]) -> None: ...
+
+
+@runtime_checkable
+class CameraSource(Protocol):
+    """Optional role: a backend that knows its cameras and where each one points.
+
+    A backend that does not implement it is still a valid drone. The frame
+    wrapper then falls back to the fixed mount's pitch, and to unknown.
+    """
+
+    def cameras(self) -> "tuple[CameraSpec, ...]": ...
+    def camera_pitch_deg(self, camera_id: str) -> float | None: ...
 
 
 @runtime_checkable
