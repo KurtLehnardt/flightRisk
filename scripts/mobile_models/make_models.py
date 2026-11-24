@@ -331,7 +331,7 @@ PERSON_CROP_MIN_SCORE = 0.5
 #: every unit listed. The fp32 detector matches PyTorch on every unit, so it is gated
 #: on all four and the app may use any. On the Neural Engine the fp16 detector's
 #: scores move by up to about 0.13 against PyTorch on small objects (measured on an
-#: M1 Max), so it is gated on the CPU and GPU, and an app that installs it must load
+#: Apple silicon laptop), so it is gated on the CPU and GPU, and an app that installs it must load
 #: it with ``computeUnits = .cpuAndGPU`` (``COREML_COMPUTE_UNITS``). The embedders stay
 #: within tolerance on every unit and are gated on ``ALL``.
 COREML_ALL_UNITS = ("CPU_AND_GPU", "ALL", "CPU_AND_NE", "CPU_ONLY")
