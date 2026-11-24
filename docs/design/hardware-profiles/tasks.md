@@ -49,8 +49,9 @@ file is a follow-up after the fast path's acceptance and keeps its order. D4's e
 unchanged; an edit that cannot be additive moves to F1. Without D1 to D3, D4 plans field fleets through
 `scripts/field_fleet_ground.py`. Each A, B and D phase is split into stacked pull requests of about 1,500
 changed lines or fewer with one risk area each; `plan/PLAN.md` of the planning pass lists them.
-SITL gates run natively on the Mac only (ArduCopter 4.6.3 and 4.7.3, PX4 v1.17.0 SIH); the Windows laptop
-runs only the unit suite, and MAVLink phases may merge without a Windows run.
+SITL gates run natively on the ground-station laptop (macOS) only (ArduCopter 4.6.3 and 4.7.3, PX4 v1.17.0
+SIH); the edge-2 laptop (Windows) runs only the unit suite, and MAVLink phases may merge without a Windows
+run.
 
 **Runtime-import guard.** XCP replaces the assertion in `tests/test_param_change_control.py`
 (`test_no_runtime_module_imports_params_or_hardware`, today a ban on any run-time import of `flightrisk.params` or
