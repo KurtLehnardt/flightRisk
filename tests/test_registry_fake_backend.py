@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 from flightrisk.drone import registry
+
+_REGISTRY_SOURCE = Path(registry.__file__)
 
 
 def test_fake_drone_backend_is_tello():
@@ -13,6 +18,14 @@ def test_fake_drone_backend_is_registered():
     assert registry.is_registered(registry.FAKE_DRONE_BACKEND)
 
 
-def test_fake_drone_backend_ignores_default_backend(monkeypatch):
-    monkeypatch.setattr(registry, "DEFAULT_BACKEND", "something_else")
-    assert registry.FAKE_DRONE_BACKEND == "tello"
+def test_fake_drone_backend_is_a_string_literal():
+    tree = ast.parse(_REGISTRY_SOURCE.read_text(encoding="utf-8"))
+    values = [
+        node.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "FAKE_DRONE_BACKEND" for t in node.targets)
+    ]
+    assert len(values) == 1
+    assert isinstance(values[0], ast.Constant)
+    assert values[0].value == "tello"

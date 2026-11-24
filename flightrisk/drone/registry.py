@@ -26,9 +26,9 @@ from flightrisk.drone.controller import DroneController
 #: registration while the dashboard is replaying a video file).
 DEFAULT_BACKEND = "tello"
 
-#: Backend the fake drone simulates. The fake drone simulates a Tello, and this
-#: is independent of DEFAULT_BACKEND, so changing the default never changes
-#: what the fake drone stands in for.
+#: Backend the fake drone simulates. The fake drone simulates a Tello. Callers
+#: that need the fake drone's backend look it up through this name, so it stays
+#: a Tello whatever DEFAULT_BACKEND is.
 FAKE_DRONE_BACKEND = "tello"
 
 #: Module that registers the built-in backends.
