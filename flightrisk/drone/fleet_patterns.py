@@ -1,11 +1,12 @@
 """Axis-aligned search patterns for a fleet of relative-move drones.
 
 Every pattern here is built only from the four horizontal moves the edge lane
-executor accepts (``forward``, ``back``, ``left`` and ``right``, 20-500 cm
-each). Nothing rotates, so each drone keeps the fixed-heading dead-reckoning
-frame described in ``flightrisk.drone.safety``. The legacy generators in
-``flightrisk.drone.search`` turn with ``rotate_degrees`` and are left
-unchanged for the single-drone path.
+executor accepts (``forward``, ``back``, ``left`` and ``right``, each within
+the drone's move range: 20-500 cm for the room profile, see "Per-unit
+limits" below). Nothing rotates, so each drone keeps the fixed-heading
+dead-reckoning frame described in ``flightrisk.drone.safety``. The legacy
+generators in ``flightrisk.drone.search`` turn with ``rotate_degrees`` and
+are left unchanged for the single-drone path.
 
 Frame, takeoff and zone
 -----------------------
@@ -49,7 +50,8 @@ Separation rule
 Every multi-drone plan gives each drone a closed, axis-aligned region
 (``DronePlan.region``) that contains its whole path: the takeoff point, the
 transit to the pattern start, every lane end, and the extra point of any
-overshoot pair used for a leg shorter than the 20 cm minimum move. Because
+overshoot pair used for a leg shorter than the drone's minimum move (20 cm
+for the room profile). Because
 lanes are straight axis-aligned moves and a rectangle is convex, a path whose
 waypoints are all inside the region stays inside it between waypoints too.
 Regions span the same ``y`` range and are pairwise at least ``gap_cm`` apart
@@ -68,16 +70,42 @@ plus twice the placement tolerance, so it still holds if each drone is placed
 up to ``placement_tolerance_cm`` toward the other (hence the 170 cm default
 gap). Dead-reckoning drift is not part of the rule: size ``gap_cm`` with
 ``required_gap_cm`` once the drift fraction has been measured (rung L3).
+
+Per-unit limits
+---------------
+Each drone flies within its own ``safety.EnvelopeLimits`` profile. Every
+plan builder takes ``unit_limits``, a mapping from each drone id of the plan
+to its profile: ``None``, the default, is ``ROOM_LIMITS`` for every drone,
+a mapping that lacks a drone of the plan is refused with ``ValueError``, and
+ids the plan does not use are ignored. Each drone's lanes are split into
+moves within its own move range, and each altitude slot must lie within the
+slot range of every drone that flies it (a slot no drone flies, within the
+range of every drone). What the drones share uses the largest minimum move
+of the fleet: the shortest area side, the shortest parallel lane and the
+split square's takeoff offset. ``max_area_side_cm`` caps the area sides and
+the plan's distances (``MAX_AREA_SIDE_CM`` by default, ``None`` for no cap).
+The builders that derive a planning footprint also take ``min_sweep_cm``,
+``altitude_deadband_cm`` and ``altitude_tolerance_cm`` (see
+``planning_footprint``); the ring patterns need an area and an along-track
+window of at least ``min_sweep_cm``. Altitude slots are an argument too
+(``alt_slots_cm``, ``DEFAULT_ALT_SLOTS_CM`` by default), so a caller passes
+the slots its coordinator flies. Every default is the room profile's, so a
+plan built without these arguments is the plan built before they existed.
+
+A plan is checked with the limits it was built with. To check it again or
+to send it, give ``check_plan`` and ``FleetSearchPlan.assign_lanes_message``
+the same ``unit_limits`` and ``max_area_side_cm``.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
 from flightrisk.drone.fleet_plan_check import (
+    _MAX_SWEEP_CM,
     ALTITUDE_DEADBAND_CM,
     ALTITUDE_MARGIN_CM,
     ALTITUDE_TOLERANCE_CM,
@@ -97,10 +125,14 @@ from flightrisk.drone.fleet_plan_check import (
     STANDOFF_FROM_GEOFENCE,
     PlanningFootprint,
     _area,
+    _area_cap,
     _check,
+    _fleet_min_move_cm,
     _ids,
     _int_cm,
     _lkp,
+    _move_range,
+    _per_drone_limits,
     _safety_inputs,
     _slots,
     _stagger,
@@ -124,7 +156,13 @@ from flightrisk.drone.fleet_plan_model import (
     _simplify,  # noqa: F401 - re-exported: tests and callers of the single-module layout use it
     _split_distance,
 )
-from flightrisk.drone.safety import DEFAULT_ALT_SLOTS_CM, MAX_MOVE_CM, MIN_MOVE_CM
+from flightrisk.drone.safety import (
+    DEFAULT_ALT_SLOTS_CM,
+    MAX_MOVE_CM,  # noqa: F401 - kept importable here: the room profile's longest move, now read from the limits
+    MIN_MOVE_CM,
+    ROOM_LIMITS,
+    EnvelopeLimits,
+)
 
 __all__ = [
     "ALTITUDE_DEADBAND_CM",
@@ -182,8 +220,42 @@ def _alts(slots: Sequence[int], n: int) -> list[int]:
     return [slots[i % len(slots)] for i in range(n)]
 
 
-def _finish(plan: FleetSearchPlan) -> FleetSearchPlan:
-    problems, coverage = _check(plan)
+def _fleet(unit_limits: Any, ids: Sequence[str]) -> tuple[list[EnvelopeLimits], dict[str, EnvelopeLimits] | None]:
+    """Each drone's envelope profile in the order of ``ids``, and the plan's own ``unit_limits``.
+
+    The mapping keeps only the drones of the plan, so a unit the plan does
+    not fly never sets a fleet bound; it is None when ``unit_limits`` is None
+    (``ROOM_LIMITS`` for every drone).
+    """
+    profiles = _per_drone_limits(unit_limits, ids)
+    return profiles, None if unit_limits is None else dict(zip(ids, profiles))
+
+
+def _unit_slots(alt_slots_cm: Sequence[int], profiles: Sequence[EnvelopeLimits]) -> list[int]:
+    """Whole-centimetre altitude slots, each within the slot range of every drone that flies it.
+
+    Drone ``i`` flies slot ``i`` modulo the number of slots (``_alts``). A
+    slot no drone flies must lie within the range of every drone, so with
+    one profile for the whole fleet every slot is checked as ``_slots``
+    checks it.
+    """
+    slots = [_int_cm("altitude slot", a) for a in alt_slots_cm]
+    if not slots:
+        return _slots(slots)  # refuses the empty list
+    for index, slot in enumerate(slots):
+        for limits in profiles[index::len(slots)] or profiles:
+            _slots([slot], limits=limits)
+    return slots
+
+
+def _finish(
+    plan: FleetSearchPlan,
+    *,
+    unit_limits: Mapping[str, EnvelopeLimits] | None = None,
+    max_area_side_cm: float | None = MAX_AREA_SIDE_CM,
+) -> FleetSearchPlan:
+    """Check ``plan`` with the limits it was built with and record the result."""
+    problems, coverage = _check(plan, unit_limits=unit_limits, max_area_side_cm=max_area_side_cm)
     return replace(plan, problems=tuple(problems), coverage=coverage, checked_digest=plan.content_digest())
 
 
@@ -195,14 +267,26 @@ def _path_bounds(extent: int, sweep: int) -> tuple[int, int]:
     return extent // 2, extent // 2
 
 
-def _ring_footprint(pf: PlanningFootprint, width: int, depth: int, pattern: str) -> None:
-    """Refuse areas and footprints the ring patterns cannot fly (they fall back to the parallel split)."""
-    if min(width, depth) < MIN_SWEEP_CM:
-        raise ValueError(f"the {pattern} needs an area at least {MIN_SWEEP_CM} cm on each side, got {width} x {depth}")
-    if pf.along_cm < MIN_SWEEP_CM:
+def _min_sweep(min_sweep_cm: Any) -> int:
+    """The narrowest sweep accepted, validated as ``planning_footprint`` validates it."""
+    return _int_cm("min_sweep_cm", min_sweep_cm, 1, _MAX_SWEEP_CM)
+
+
+def _ring_footprint(
+    pf: PlanningFootprint, width: int, depth: int, pattern: str, *, min_sweep_cm: int = MIN_SWEEP_CM
+) -> None:
+    """Refuse areas and footprints the ring patterns cannot fly (they fall back to the parallel split).
+
+    Both the area's sides and the along-track window must be at least
+    ``min_sweep_cm`` (``MIN_SWEEP_CM``, the room profile's, by default).
+    """
+    min_sweep = _min_sweep(min_sweep_cm)
+    if min(width, depth) < min_sweep:
+        raise ValueError(f"the {pattern} needs an area at least {min_sweep} cm on each side, got {width} x {depth}")
+    if pf.along_cm < min_sweep:
         raise ValueError(
             f"the camera's along-track window is {pf.along_cm} cm at a {pf.lateral_cm} cm lane spacing, "
-            f"below the {MIN_SWEEP_CM} cm the {pattern} needs"
+            f"below the {min_sweep} cm the {pattern} needs"
         )
 
 
@@ -211,10 +295,13 @@ def _floor_y(points: Iterable[Point]) -> int:
     return min([0, *(y for _, y in points)])
 
 
-def _offset(placement_offset_cm: Any) -> int:
-    offset = _int_cm("placement_offset_cm", placement_offset_cm, 0, MAX_AREA_SIDE_CM)
-    if 0 < offset < MIN_MOVE_CM:
-        raise ValueError(f"placement_offset_cm must be 0 or at least {MIN_MOVE_CM} cm, got {offset}")
+def _offset(
+    placement_offset_cm: Any, *, min_move_cm: int = MIN_MOVE_CM, max_cm: int | None = MAX_AREA_SIDE_CM
+) -> int:
+    """The split square's takeoff offset: 0, or at least the fleet's largest minimum move, and at most ``max_cm``."""
+    offset = _int_cm("placement_offset_cm", placement_offset_cm, 0, max_cm)
+    if 0 < offset < min_move_cm:
+        raise ValueError(f"placement_offset_cm must be 0 or at least {min_move_cm} cm, got {offset}")
     return offset
 
 
@@ -223,7 +310,14 @@ def _offset(placement_offset_cm: Any) -> int:
 # ----------------------------------------------------------------------
 
 
-def expanding_square_lanes(initial_side_cm: int = 100, growth_cm: int = 100, num_expansions: int = 4) -> list[dict]:
+def expanding_square_lanes(
+    initial_side_cm: int = 100,
+    growth_cm: int = 100,
+    num_expansions: int = 4,
+    *,
+    limits: EnvelopeLimits = ROOM_LIMITS,
+    max_area_side_cm: float | None = MAX_AREA_SIDE_CM,
+) -> list[dict]:
     """Axis-aligned rewrite of ``search.generate_expanding_square``.
 
     The legacy generator flies ``forward`` and turns 90 degrees clockwise
@@ -232,28 +326,39 @@ def expanding_square_lanes(initial_side_cm: int = 100, growth_cm: int = 100, num
     direction instead of turning: ``forward``, ``right``, ``back``, ``left``.
     The heading never changes, so the lane executor accepts it. Patterns
     above ``MAX_MOVES_PER_DRONE`` moves are refused before they are built.
+
+    The lanes are for one drone, so they take its envelope profile as
+    ``limits`` (``ROOM_LIMITS`` by default): the first side is at least its
+    minimum move and every leg is split into moves within its move range.
+    ``initial_side_cm`` and ``growth_cm`` are at most ``max_area_side_cm``
+    (``MAX_AREA_SIDE_CM`` by default, ``None`` for no cap).
     """
-    side = _int_cm("initial_side_cm", initial_side_cm, MIN_MOVE_CM, MAX_AREA_SIDE_CM)
-    growth = _int_cm("growth_cm", growth_cm, 0, MAX_AREA_SIDE_CM)
+    shortest, longest = _move_range(limits)
+    cap = _area_cap(max_area_side_cm)
+    side = _int_cm("initial_side_cm", initial_side_cm, shortest, cap)
+    growth = _int_cm("growth_cm", growth_cm, 0, cap)
     if isinstance(num_expansions, bool) or not isinstance(num_expansions, int) or not 1 <= num_expansions <= 100:
         raise ValueError(f"num_expansions must be an integer within 1-100, got {num_expansions!r}")
     order = ("forward", "right", "back", "left")
     lengths = [side + (leg // 2) * growth for leg in range(4 * num_expansions)]
     # Count the moves before building them, so an oversized pattern is refused without allocating it.
-    _check_move_cap(sum(max(1, math.ceil(length / MAX_MOVE_CM)) for length in lengths))
+    _check_move_cap(sum(max(1, math.ceil(length / longest)) for length in lengths))
     lanes: list[dict] = []
     for leg, length in enumerate(lengths):
-        lanes.extend(_split_distance(order[leg % 4], length))
+        lanes.extend(_split_distance(order[leg % 4], length, limits=limits))
     return lanes
 
 
-def _lane_positions(lo: float, hi: float, zone_lo: int, zone_hi: int, sweep: int) -> list[int]:
+def _lane_positions(
+    lo: float, hi: float, zone_lo: int, zone_hi: int, sweep: int, *, min_move_cm: int = MIN_MOVE_CM
+) -> list[int]:
     """Lane x positions whose passes cover ``[lo, hi]``, kept inside ``[zone_lo, zone_hi]``.
 
     Lanes are evenly spaced, at most ``sweep`` apart, with the first pass
     reaching ``lo`` and the last reaching ``hi``. The count rounds up, so a
     remainder narrower than one sweep still gets a lane (the floor division
-    in ``search.generate_parallel_track`` leaves it uncovered).
+    in ``search.generate_parallel_track`` leaves it uncovered). Two lanes are
+    never closer than the drone's minimum move ``min_move_cm``.
     """
     half = sweep // 2
     first = math.floor(lo) + half
@@ -269,38 +374,41 @@ def _lane_positions(lo: float, hi: float, zone_lo: int, zone_hi: int, sweep: int
     span = last - first
     if span == 0:
         return [first]
-    if span < MIN_MOVE_CM:
+    if span < min_move_cm:
         # Two lanes closer than the minimum move: spread them to exactly the
         # minimum, which stays within one sweep, and keep them in the zone.
-        left = first - (MIN_MOVE_CM - span) // 2
-        left = min(max(left, zone_lo), zone_hi - MIN_MOVE_CM)
-        return [left, left + MIN_MOVE_CM]
+        left = first - (min_move_cm - span) // 2
+        left = min(max(left, zone_lo), zone_hi - min_move_cm)
+        return [left, left + min_move_cm]
     gaps = math.ceil(span / sweep)
     return [first + (k * span) // gaps for k in range(gaps + 1)]
 
 
-def _parallel_lane_ends(pf: PlanningFootprint, depth: int, inset: int) -> tuple[int, int]:
+def _parallel_lane_ends(
+    pf: PlanningFootprint, depth: int, inset: int, *, min_move_cm: int = MIN_MOVE_CM
+) -> tuple[int, int]:
     """Where each lane along ``y`` starts and ends so the passes cover ``[inset, depth - inset]``.
 
     The square model keeps the plan's convention of lanes from edge to edge.
     A forward camera first sees the ground ``near_cm`` ahead and still sees
     ``far_cm`` ahead, so its lanes start ``near_cm`` before the near edge
     (behind the area) and stop once the far edge of the view has reached the
-    far edge of the area.
+    far edge of the area. Every drone flies the same lane ends, so
+    ``min_move_cm`` is the fleet's largest minimum move.
     """
     if pf.kind == SQUARE_FOOTPRINT:
         start, end = inset, depth - inset
-        if end - start < MIN_MOVE_CM:
-            raise ValueError(f"lanes of {end - start} cm are shorter than the {MIN_MOVE_CM} cm minimum move")
+        if end - start < min_move_cm:
+            raise ValueError(f"lanes of {end - start} cm are shorter than the {min_move_cm} cm minimum move")
         return start, end
     if depth - 2 * inset < 0:
         raise ValueError(f"end_inset_cm {inset} leaves nothing of the {depth} cm depth to search")
     start = inset - int(pf.near_cm)
     end = max(start, depth - inset - int(pf.far_cm))
-    if 0 < end - start < MIN_MOVE_CM:
+    if 0 < end - start < min_move_cm:
         # Too short for one move: fly the minimum move if the area allows it,
         # else hover (the coverage check reports anything left unseen).
-        end = start + MIN_MOVE_CM if start + MIN_MOVE_CM <= depth else start
+        end = start + min_move_cm if start + min_move_cm <= depth else start
     return start, end
 
 
@@ -317,6 +425,11 @@ def plan_parallel_split(
     min_separation_cm: float | None = DEFAULT_MIN_SEPARATION_CM,
     placement_tolerance_cm: float = DEFAULT_PLACEMENT_TOLERANCE_CM,
     max_standoff_cm: float | str | None = STANDOFF_FROM_GEOFENCE,
+    unit_limits: Mapping[str, EnvelopeLimits] | None = None,
+    max_area_side_cm: float | None = MAX_AREA_SIDE_CM,
+    min_sweep_cm: int = MIN_SWEEP_CM,
+    altitude_deadband_cm: float = ALTITUDE_DEADBAND_CM,
+    altitude_tolerance_cm: float = ALTITUDE_TOLERANCE_CM,
 ) -> FleetSearchPlan:
     """Parallel-track (boustrophedon) split: one vertical strip per drone.
 
@@ -333,34 +446,48 @@ def plan_parallel_split(
 
     For two drones the equal split is already balanced in estimated time,
     because the two strips mirror each other.
+
+    Each strip must be at least its drone's minimum move, and each drone's
+    lanes are spaced and split within its own move range (``unit_limits``,
+    see "Per-unit limits" in the module docstring).
     """
     ids = _ids(drone_ids)
-    width, depth = _area(area_cm)
+    profiles, fleet = _fleet(unit_limits, ids)
+    width, depth = _area(area_cm, unit_limits=fleet, max_area_side_cm=max_area_side_cm)
+    cap = _area_cap(max_area_side_cm)
     n = len(ids)
-    gap = _int_cm("gap_cm", gap_cm, 1 if n > 1 else 0, MAX_AREA_SIDE_CM)
-    inset = _int_cm("end_inset_cm", end_inset_cm, 0, MAX_AREA_SIDE_CM)
-    slots = _slots(alt_slots_cm)
-    limits = _safety_inputs(geofence_cm, min_separation_cm, placement_tolerance_cm, max_standoff_cm)
+    gap = _int_cm("gap_cm", gap_cm, 1 if n > 1 else 0, cap)
+    inset = _int_cm("end_inset_cm", end_inset_cm, 0, cap)
+    slots = _unit_slots(alt_slots_cm, profiles)
+    limits = _safety_inputs(
+        geofence_cm, min_separation_cm, placement_tolerance_cm, max_standoff_cm, max_area_side_cm=max_area_side_cm
+    )
     alts = _alts(slots, n)
-    pf = planning_footprint(footprint, sweep_cm, alts, depth, limits["placement_tolerance_cm"])
+    pf = planning_footprint(
+        footprint, sweep_cm, alts, depth, limits["placement_tolerance_cm"],
+        min_sweep_cm=min_sweep_cm, altitude_deadband_cm=altitude_deadband_cm,
+        altitude_tolerance_cm=altitude_tolerance_cm,
+    )
     sweep = pf.lateral_cm
-    y_start, y_end = _parallel_lane_ends(pf, depth, inset)
+    shortest = [_move_range(profile)[0] for profile in profiles]
+    y_start, y_end = _parallel_lane_ends(pf, depth, inset, min_move_cm=max(shortest))
     total = width - gap * (n - 1)
-    if total < n * MIN_MOVE_CM:
-        raise ValueError(f"area width {width} cm is too narrow for {n} strips with {gap} cm gaps")
     base, extra = divmod(total, n)
+    strips = [base + (1 if i < extra else 0) for i in range(n)]
+    if any(strip < low for strip, low in zip(strips, shortest)):
+        raise ValueError(f"area width {width} cm is too narrow for {n} strips with {gap} cm gaps")
     half_gap = (gap + 1) // 2
     floor_y = min(0, y_start)
     drones = []
     x = 0
     for i, drone_id in enumerate(ids):
-        strip = base + (1 if i < extra else 0)
+        strip = strips[i]
         zone_lo, zone_hi = x, x + strip
         x = zone_hi + gap
         lo = zone_lo - (half_gap if i > 0 else 0)
         hi = zone_hi + (half_gap if i < n - 1 else 0)
         points: list[Point] = []
-        for k, lane_x in enumerate(_lane_positions(lo, hi, zone_lo, zone_hi, sweep)):
+        for k, lane_x in enumerate(_lane_positions(lo, hi, zone_lo, zone_hi, sweep, min_move_cm=shortest[i])):
             ends = (y_start, y_end) if k % 2 == 0 else (y_end, y_start)
             points.extend([(lane_x, ends[0]), (lane_x, ends[1])])
         region = Region(zone_lo, floor_y, zone_hi, depth)
@@ -369,7 +496,7 @@ def plan_parallel_split(
             takeoff_cm=points[0],
             region=region,
             alt_cm=alts[i],
-            lanes=tuple(_polyline_lanes(points, region)),
+            lanes=tuple(_polyline_lanes(points, region, limits=profiles[i])),
         ))
     plan = FleetSearchPlan(
         pattern=PatternKind.PARALLEL_SPLIT,
@@ -381,7 +508,7 @@ def plan_parallel_split(
         standoff_cm=-floor_y,
         **limits,
     )
-    return _finish(plan)
+    return _finish(plan, unit_limits=fleet, max_area_side_cm=max_area_side_cm)
 
 
 def _half_ring_points(
@@ -457,6 +584,11 @@ def plan_split_expanding_square(
     min_separation_cm: float | None = DEFAULT_MIN_SEPARATION_CM,
     placement_tolerance_cm: float = DEFAULT_PLACEMENT_TOLERANCE_CM,
     max_standoff_cm: float | str | None = STANDOFF_FROM_GEOFENCE,
+    unit_limits: Mapping[str, EnvelopeLimits] | None = None,
+    max_area_side_cm: float | None = MAX_AREA_SIDE_CM,
+    min_sweep_cm: int = MIN_SWEEP_CM,
+    altitude_deadband_cm: float = ALTITUDE_DEADBAND_CM,
+    altitude_tolerance_cm: float = ALTITUDE_TOLERANCE_CM,
 ) -> FleetSearchPlan:
     """Split expanding square: two half-plane U-ring patterns around the LKP.
 
@@ -483,20 +615,32 @@ def plan_split_expanding_square(
     rings), flies to the start of its first ring and then along it
     (``transit_lanes`` counts the moves before the ring). The second drone
     starts ``stagger_s`` later because the two take off close together.
+
+    Each drone's transit and rings are split within its own move range
+    (``unit_limits``, see "Per-unit limits" in the module docstring); the
+    placement offset is 0 or at least the larger of the two minimum moves.
     """
     ids = _ids(drone_ids)
     if len(ids) != 2:
         raise ValueError(f"the split expanding square is defined for exactly two drones, got {len(ids)}")
-    width, depth = _area(area_cm)
+    profiles, fleet = _fleet(unit_limits, ids)
+    width, depth = _area(area_cm, unit_limits=fleet, max_area_side_cm=max_area_side_cm)
+    cap = _area_cap(max_area_side_cm)
     lx, ly = _lkp(lkp_cm, width, depth)
-    gap = _int_cm("gap_cm", gap_cm, 1, MAX_AREA_SIDE_CM)
-    offset = _offset(placement_offset_cm)
+    gap = _int_cm("gap_cm", gap_cm, 1, cap)
+    offset = _offset(placement_offset_cm, min_move_cm=_fleet_min_move_cm(fleet), max_cm=cap)
     stagger = _stagger(stagger_s)
-    slots = _slots(alt_slots_cm)
-    limits = _safety_inputs(geofence_cm, min_separation_cm, placement_tolerance_cm, max_standoff_cm)
+    slots = _unit_slots(alt_slots_cm, profiles)
+    limits = _safety_inputs(
+        geofence_cm, min_separation_cm, placement_tolerance_cm, max_standoff_cm, max_area_side_cm=max_area_side_cm
+    )
     alts = _alts(slots, 2)
-    pf = planning_footprint(footprint, sweep_cm, alts, depth, limits["placement_tolerance_cm"])
-    _ring_footprint(pf, width, depth, "split expanding square")
+    pf = planning_footprint(
+        footprint, sweep_cm, alts, depth, limits["placement_tolerance_cm"],
+        min_sweep_cm=min_sweep_cm, altitude_deadband_cm=altitude_deadband_cm,
+        altitude_tolerance_cm=altitude_tolerance_cm,
+    )
+    _ring_footprint(pf, width, depth, "split expanding square", min_sweep_cm=min_sweep_cm)
     seams = _split_square_seams(lx, width, gap, pf.lateral_cm, offset)
     if seams is None:
         raise ValueError(
@@ -529,8 +673,8 @@ def plan_split_expanding_square(
     regions = (Region(0, floor_y, e1, depth), Region(e2, floor_y, width, depth))
     drones = []
     for i, ((drone_id, transit, corners), region) in enumerate(zip(layouts, regions)):
-        transit_lanes = _polyline_lanes(transit, region)
-        pattern_lanes = _polyline_lanes(corners, region)
+        transit_lanes = _polyline_lanes(transit, region, limits=profiles[i])
+        pattern_lanes = _polyline_lanes(corners, region, limits=profiles[i])
         drones.append(DronePlan(
             drone_id=drone_id,
             takeoff_cm=transit[0],
@@ -551,7 +695,7 @@ def plan_split_expanding_square(
         standoff_cm=-floor_y,
         **limits,
     )
-    return _finish(plan)
+    return _finish(plan, unit_limits=fleet, max_area_side_cm=max_area_side_cm)
 
 
 def plan_square_spiral(
@@ -565,6 +709,11 @@ def plan_square_spiral(
     geofence_cm: float | None = DEFAULT_PLAN_GEOFENCE_CM,
     placement_tolerance_cm: float = DEFAULT_PLACEMENT_TOLERANCE_CM,
     max_standoff_cm: float | str | None = STANDOFF_FROM_GEOFENCE,
+    unit_limits: Mapping[str, EnvelopeLimits] | None = None,
+    max_area_side_cm: float | None = MAX_AREA_SIDE_CM,
+    min_sweep_cm: int = MIN_SWEEP_CM,
+    altitude_deadband_cm: float = ALTITUDE_DEADBAND_CM,
+    altitude_tolerance_cm: float = ALTITUDE_TOLERANCE_CM,
 ) -> FleetSearchPlan:
     """Single-drone expanding square as an axis-aligned square spiral, bounded by the area.
 
@@ -576,14 +725,25 @@ def plan_square_spiral(
     corner is clamped to the path bounds, which keeps every pass's footprint
     reaching the area edge, and the spiral stops once its latest leg on each
     of the four sides has reached the bounds.
+
+    ``alt_cm`` must lie within the slot range of the drone's envelope profile
+    and its legs are split within its move range (``unit_limits``, see
+    "Per-unit limits" in the module docstring).
     """
     ids = _ids([drone_id])
-    width, depth = _area(area_cm)
+    profiles, fleet = _fleet(unit_limits, ids)
+    width, depth = _area(area_cm, unit_limits=fleet, max_area_side_cm=max_area_side_cm)
     lx, ly = _lkp(lkp_cm, width, depth)
-    slot = _slots([alt_cm])[0]
-    limits = _safety_inputs(geofence_cm, None, placement_tolerance_cm, max_standoff_cm)
-    pf = planning_footprint(footprint, sweep_cm, [slot], depth, limits["placement_tolerance_cm"])
-    _ring_footprint(pf, width, depth, "square spiral")
+    slot = _slots([alt_cm], limits=profiles[0])[0]
+    limits = _safety_inputs(
+        geofence_cm, None, placement_tolerance_cm, max_standoff_cm, max_area_side_cm=max_area_side_cm
+    )
+    pf = planning_footprint(
+        footprint, sweep_cm, [slot], depth, limits["placement_tolerance_cm"],
+        min_sweep_cm=min_sweep_cm, altitude_deadband_cm=altitude_deadband_cm,
+        altitude_tolerance_cm=altitude_tolerance_cm,
+    )
+    _ring_footprint(pf, width, depth, "square spiral", min_sweep_cm=min_sweep_cm)
     step_x, step_y = pf.lateral_cm, pf.along_cm
     x_lo, x_hi = _path_bounds(width, step_x)
     y_lo, y_hi = _path_bounds(depth, step_y)
@@ -625,14 +785,14 @@ def plan_square_spiral(
             takeoff_cm=points[0],
             region=region,
             alt_cm=slot,
-            lanes=tuple(_polyline_lanes(points, region)),
+            lanes=tuple(_polyline_lanes(points, region, limits=profiles[0])),
         ),),
         lkp_cm=(lx, ly),
         footprint=pf,
         standoff_cm=-floor_y,
         **limits,
     )
-    return _finish(plan)
+    return _finish(plan, unit_limits=fleet, max_area_side_cm=max_area_side_cm)
 
 
 # ----------------------------------------------------------------------
@@ -648,6 +808,9 @@ def choose_pattern(
     gap_cm: int = DEFAULT_GAP_CM,
     placement_offset_cm: int = DEFAULT_PLACEMENT_OFFSET_CM,
     sweep_cm: int | None = None,
+    unit_limits: Mapping[str, EnvelopeLimits] | None = None,
+    max_area_side_cm: float | None = MAX_AREA_SIDE_CM,
+    min_sweep_cm: int = MIN_SWEEP_CM,
 ) -> PatternChoice:
     """Pick a pattern by the decision table in plan section 3.4.
 
@@ -655,7 +818,7 @@ def choose_pattern(
       which minimises the expected time to first detection under a prior
       centred on the LKP. If the LKP is too close to a side edge for the two
       regions and their takeoff placements, or the area is shallower than
-      ``MIN_SWEEP_CM``, the parallel split instead. ``sweep_cm`` is the
+      ``min_sweep_cm``, the parallel split instead. ``sweep_cm`` is the
       lateral sweep used to place the seam (``_split_square_seams``); without
       it only the centred seam is tried.
     * No LKP: the parallel-track split, which minimises makespan.
@@ -667,16 +830,24 @@ def choose_pattern(
     allows, flown as a split square out to a radius and then parallel
     tracks) is not implemented: the split square is still chosen and the
     built plan reports the geofence problem, so it is refused.
+
+    ``unit_limits`` holds the envelope profiles of the fleet's units
+    (``ROOM_LIMITS`` for every drone when None): the area's shortest side and
+    the placement offset are at least their largest minimum move.
+    ``max_area_side_cm`` caps the area and the distances, and
+    ``min_sweep_cm`` is the narrowest area and sweep the rings accept (see
+    "Per-unit limits" in the module docstring).
     """
     if isinstance(n_drones, bool) or not isinstance(n_drones, int) or n_drones < 1:
         raise ValueError(f"n_drones must be a positive integer, got {n_drones!r}")
-    width, depth = _area(area_cm)
+    width, depth = _area(area_cm, unit_limits=unit_limits, max_area_side_cm=max_area_side_cm)
+    min_sweep = _min_sweep(min_sweep_cm)
     if lkp_cm is None:
         return PatternChoice(PatternKind.PARALLEL_SPLIT, "no last-known point: the parallel split minimises makespan")
     lx, _ = _lkp(lkp_cm, width, depth)
-    if min(width, depth) < MIN_SWEEP_CM:
+    if min(width, depth) < min_sweep:
         return PatternChoice(
-            PatternKind.PARALLEL_SPLIT, f"the area is narrower than {MIN_SWEEP_CM} cm for rings; parallel split"
+            PatternKind.PARALLEL_SPLIT, f"the area is narrower than {min_sweep} cm for rings; parallel split"
         )
     if n_drones == 1:
         return PatternChoice(PatternKind.SQUARE_SPIRAL, "one drone with a last-known point: square spiral from the LKP")
@@ -684,10 +855,11 @@ def choose_pattern(
         return PatternChoice(
             PatternKind.PARALLEL_SPLIT, "the split expanding square is defined for two drones; parallel split"
         )
-    gap = _int_cm("gap_cm", gap_cm, 1, MAX_AREA_SIDE_CM)
-    offset = _offset(placement_offset_cm)
+    cap = _area_cap(max_area_side_cm)
+    gap = _int_cm("gap_cm", gap_cm, 1, cap)
+    offset = _offset(placement_offset_cm, min_move_cm=_fleet_min_move_cm(unit_limits), max_cm=cap)
     # Without a sweep, 2 * gap is wide enough that only the centred seam is tried.
-    lateral = 2 * gap if sweep_cm is None else _int_cm("sweep_cm", sweep_cm, MIN_SWEEP_CM)
+    lateral = 2 * gap if sweep_cm is None else _int_cm("sweep_cm", sweep_cm, min_sweep)
     if _split_square_seams(lx, width, gap, lateral, offset) is None:
         return PatternChoice(
             PatternKind.PARALLEL_SPLIT,
@@ -715,6 +887,11 @@ def plan_search(
     min_separation_cm: float | None = DEFAULT_MIN_SEPARATION_CM,
     placement_tolerance_cm: float = DEFAULT_PLACEMENT_TOLERANCE_CM,
     max_standoff_cm: float | str | None = STANDOFF_FROM_GEOFENCE,
+    unit_limits: Mapping[str, EnvelopeLimits] | None = None,
+    max_area_side_cm: float | None = MAX_AREA_SIDE_CM,
+    min_sweep_cm: int = MIN_SWEEP_CM,
+    altitude_deadband_cm: float = ALTITUDE_DEADBAND_CM,
+    altitude_tolerance_cm: float = ALTITUDE_TOLERANCE_CM,
 ) -> FleetSearchPlan:
     """Choose a pattern with ``choose_pattern`` and build it; ``reason`` records the choice.
 
@@ -723,23 +900,46 @@ def plan_search(
     study. If the chosen ring pattern cannot be built for this area and
     footprint (for example the camera's along-track window is too short),
     the parallel split is built instead and ``reason`` says why.
+
+    ``alt_slots_cm`` are the slots the drones fly (``DEFAULT_ALT_SLOTS_CM``
+    by default; pass the coordinator's). ``unit_limits``,
+    ``max_area_side_cm``, ``min_sweep_cm``, ``altitude_deadband_cm`` and
+    ``altitude_tolerance_cm`` go to every step, the chosen builder and its
+    check alike (see "Per-unit limits" in the module docstring).
     """
     ids = _ids(drone_ids)
-    width, depth = _area(area_cm)
-    slots = _slots(alt_slots_cm)
+    profiles, fleet = _fleet(unit_limits, ids)
+    width, depth = _area(area_cm, unit_limits=fleet, max_area_side_cm=max_area_side_cm)
+    slots = _unit_slots(alt_slots_cm, profiles)
     # Validate everything up front, so a fallback below can never hide a bad input.
-    limits = _safety_inputs(geofence_cm, min_separation_cm, placement_tolerance_cm, max_standoff_cm)
-    _offset(placement_offset_cm)
+    limits = _safety_inputs(
+        geofence_cm, min_separation_cm, placement_tolerance_cm, max_standoff_cm, max_area_side_cm=max_area_side_cm
+    )
+    cap = _area_cap(max_area_side_cm)
+    _offset(placement_offset_cm, min_move_cm=_fleet_min_move_cm(fleet), max_cm=cap)
     _stagger(stagger_s)
-    _int_cm("end_inset_cm", end_inset_cm, 0, MAX_AREA_SIDE_CM)
-    pf = planning_footprint(footprint, sweep_cm, _alts(slots, len(ids)), depth, limits["placement_tolerance_cm"])
+    _int_cm("end_inset_cm", end_inset_cm, 0, cap)
+    pf = planning_footprint(
+        footprint, sweep_cm, _alts(slots, len(ids)), depth, limits["placement_tolerance_cm"],
+        min_sweep_cm=min_sweep_cm, altitude_deadband_cm=altitude_deadband_cm,
+        altitude_tolerance_cm=altitude_tolerance_cm,
+    )
     safety = {
         "geofence_cm": geofence_cm,
         "placement_tolerance_cm": placement_tolerance_cm,
         "max_standoff_cm": max_standoff_cm,
     }
+    # The same per-unit limits and footprint margins for the chosen builder and its check.
+    per_unit = {
+        "unit_limits": fleet,
+        "max_area_side_cm": max_area_side_cm,
+        "min_sweep_cm": min_sweep_cm,
+        "altitude_deadband_cm": altitude_deadband_cm,
+        "altitude_tolerance_cm": altitude_tolerance_cm,
+    }
     choice = choose_pattern(
-        len(ids), area_cm, lkp_cm, gap_cm=gap_cm, placement_offset_cm=placement_offset_cm, sweep_cm=pf.lateral_cm
+        len(ids), area_cm, lkp_cm, gap_cm=gap_cm, placement_offset_cm=placement_offset_cm, sweep_cm=pf.lateral_cm,
+        unit_limits=fleet, max_area_side_cm=max_area_side_cm, min_sweep_cm=min_sweep_cm,
     )
     reason = choice.reason
 
@@ -747,7 +947,7 @@ def plan_search(
         built = plan_parallel_split(
             ids, area_cm, sweep_cm, footprint=footprint,
             gap_cm=gap_cm, end_inset_cm=end_inset_cm, alt_slots_cm=alt_slots_cm,
-            min_separation_cm=min_separation_cm, **safety,
+            min_separation_cm=min_separation_cm, **safety, **per_unit,
         )
         return built if lkp_cm is None else replace(built, lkp_cm=_lkp(lkp_cm, width, depth))
 
@@ -756,10 +956,12 @@ def plan_search(
             plan = plan_split_expanding_square(
                 ids, area_cm, lkp_cm, sweep_cm, footprint=footprint,
                 gap_cm=gap_cm, placement_offset_cm=placement_offset_cm, stagger_s=stagger_s,
-                alt_slots_cm=alt_slots_cm, min_separation_cm=min_separation_cm, **safety,
+                alt_slots_cm=alt_slots_cm, min_separation_cm=min_separation_cm, **safety, **per_unit,
             )
         elif choice.kind is PatternKind.SQUARE_SPIRAL:
-            plan = plan_square_spiral(ids[0], area_cm, lkp_cm, sweep_cm, footprint=footprint, alt_cm=slots[0], **safety)
+            plan = plan_square_spiral(
+                ids[0], area_cm, lkp_cm, sweep_cm, footprint=footprint, alt_cm=slots[0], **safety, **per_unit
+            )
         else:
             plan = parallel()
     except ValueError as exc:
