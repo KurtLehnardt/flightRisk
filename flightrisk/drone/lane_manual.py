@@ -92,6 +92,7 @@ from flightrisk.drone.lane_flight import MoveNotExecutedError
 from flightrisk.drone.lane_plan import split_lane_moves
 from flightrisk.drone.safety import (
     HORIZONTAL_DIRECTIONS,
+    MAX_MOVE_CM,
     MIN_MOVE_CM,
     RelativePose,
     format_cm,
@@ -142,19 +143,29 @@ def _round(value: float) -> float:
     return round(float(value), 1)
 
 
-def _axis_moves(component_cm: float, positive: str, negative: str, *, exact: bool) -> list[tuple[str, int]]:
-    """Tello-sized moves along one axis whose net displacement is *component_cm*.
+def _axis_moves(
+    component_cm: float,
+    positive: str,
+    negative: str,
+    *,
+    exact: bool,
+    min_move_cm: float = MIN_MOVE_CM,
+    max_move_cm: float = MAX_MOVE_CM,
+) -> list[tuple[str, int]]:
+    """Moves within the unit's move range along one axis whose net displacement is *component_cm*.
 
-    A component shorter than the 20 cm minimum is flown as an overshoot and a
-    20 cm return when *exact*, and skipped otherwise (at most 20 cm short).
+    *min_move_cm* and *max_move_cm* are the unit's shortest and longest move
+    (20 and 500 cm by default). A component shorter than the minimum is flown
+    as an overshoot and a minimum-length return when *exact*, and skipped
+    otherwise (at most the minimum short).
     """
     distance = round(abs(component_cm))
     if distance == 0:
         return []
     direction, opposite = (positive, negative) if component_cm > 0 else (negative, positive)
-    if distance < MIN_MOVE_CM:
-        return [(direction, distance + MIN_MOVE_CM), (opposite, MIN_MOVE_CM)] if exact else []
-    return [(direction, part) for part in split_lane_moves(distance)]
+    if distance < min_move_cm:
+        return [(direction, distance + min_move_cm), (opposite, min_move_cm)] if exact else []
+    return [(direction, part) for part in split_lane_moves(distance, min_move_cm, max_move_cm)]
 
 
 class ManualControlMixin:
@@ -612,8 +623,8 @@ class ManualControlMixin:
         """Steps from the current pose back to *target*, inside the geofence, or None. Caller holds ``_lock``.
 
         A rotation to the target heading, then a move along that heading's
-        forward axis and one along its right axis (each split into Tello
-        moves), in whichever order keeps every point inside the geofence.
+        forward axis and one along its right axis (each split into moves
+        of the unit's move range), in whichever order keeps every point inside the geofence.
         Exact paths (short components flown as an overshoot and a return) are
         tried first, then paths that skip components under 20 cm.
         """

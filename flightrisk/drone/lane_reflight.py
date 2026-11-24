@@ -60,30 +60,51 @@ def _lane(direction: str, distance_cm: int) -> dict:
     return {"direction": direction, "distance_cm": int(distance_cm)}
 
 
-def _axis_moves(delta_cm: int, positive: str, negative: str) -> list[dict]:
-    """Tello-valid moves (20 to 500 cm each) whose net displacement is ``delta_cm``.
+def _axis_moves(
+    delta_cm: int,
+    positive: str,
+    negative: str,
+    *,
+    min_move_cm: float = MIN_MOVE_CM,
+    max_move_cm: float = MAX_MOVE_CM,
+) -> list[dict]:
+    """Moves within the unit's move range whose net displacement is ``delta_cm``.
 
-    A displacement shorter than the Tello minimum is flown as an overshoot
-    followed by a minimum-length return, so the net result stays exact.
+    *min_move_cm* and *max_move_cm* are the unit's shortest and longest move;
+    they default to 20 and 500 cm. A displacement shorter than the minimum is
+    flown as an overshoot followed by a minimum-length return, so the net
+    result stays exact.
     """
     if delta_cm == 0:
         return []
     direction, opposite = (positive, negative) if delta_cm > 0 else (negative, positive)
     distance = abs(delta_cm)
-    if distance < MIN_MOVE_CM:
-        return [_lane(direction, distance + MIN_MOVE_CM), _lane(opposite, MIN_MOVE_CM)]
-    segments = math.ceil(distance / MAX_MOVE_CM)
+    if distance < min_move_cm:
+        return [_lane(direction, distance + min_move_cm), _lane(opposite, min_move_cm)]
+    segments = math.ceil(distance / max_move_cm)
     base, remainder = divmod(distance, segments)
     return [_lane(direction, base + (1 if i < remainder else 0)) for i in range(segments)]
 
 
-def transit(start: tuple[int, int], end: tuple[int, int]) -> list[dict]:
+def transit(
+    start: tuple[int, int],
+    end: tuple[int, int],
+    *,
+    min_move_cm: float = MIN_MOVE_CM,
+    max_move_cm: float = MAX_MOVE_CM,
+) -> list[dict]:
     """Moves from ``start`` to ``end``: forward or back first, then sideways.
+
+    *min_move_cm* and *max_move_cm* are the unit's move range (20 and 500 cm
+    by default).
 
     Matching the forward position first keeps the drone inside its own zone
     until it crosses the gap sideways at the target's forward position.
     """
-    return _axis_moves(end[1] - start[1], "forward", "back") + _axis_moves(end[0] - start[0], "right", "left")
+    limits = {"min_move_cm": min_move_cm, "max_move_cm": max_move_cm}
+    return _axis_moves(end[1] - start[1], "forward", "back", **limits) + _axis_moves(
+        end[0] - start[0], "right", "left", **limits
+    )
 
 
 # ---------------------------------------------------------------------------
