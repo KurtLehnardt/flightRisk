@@ -61,12 +61,16 @@ def _lane(direction: str, distance_cm: int) -> dict:
 
 
 def _check_move_range(min_move_cm: int, max_move_cm: int) -> None:
-    """Raise ``ValueError`` unless the limits are whole centimetres with ``0 < min <= max``."""
+    """Raise ``ValueError`` unless the limits are whole centimetres with ``0 < min <= max`` and ``max >= 2 * min - 1``."""
     for name, value in (("min_move_cm", min_move_cm), ("max_move_cm", max_move_cm)):
         if isinstance(value, bool) or not isinstance(value, int):
             raise ValueError(f"{name} must be a whole number of centimetres, got {value!r}")
     if not 0 < min_move_cm <= max_move_cm:
         raise ValueError(f"need 0 < min_move_cm <= max_move_cm, got {min_move_cm} and {max_move_cm}")
+    if max_move_cm < 2 * min_move_cm - 1:
+        raise ValueError(
+            f"need max_move_cm >= 2 * min_move_cm - 1 so every split move stays in range, got {min_move_cm} and {max_move_cm}"
+        )
 
 
 def _axis_moves(
@@ -83,7 +87,7 @@ def _axis_moves(
     they default to 20 and 500 cm. A displacement shorter than the minimum is
     flown as an overshoot followed by a minimum-length return, so the net
     result stays exact. Both limits are whole centimetres with
-    ``0 < min_move_cm <= max_move_cm``; anything else raises ``ValueError``.
+    ``0 < min_move_cm <= max_move_cm`` and ``max_move_cm >= 2 * min_move_cm - 1``; anything else raises ``ValueError``.
     """
     _check_move_range(min_move_cm, max_move_cm)
     if delta_cm == 0:
