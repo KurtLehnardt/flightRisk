@@ -572,7 +572,7 @@ def test_refusal_reports_the_fence_narrowed_by_a_refused_step():
 
 
 def test_ground_plans_against_the_effective_fence_and_an_old_edge_still_works(executor_fleet):
-    coord, edges, _events = executor_fleet()
+    coord, edges, _events = executor_fleet(geofence_cm=700.0)
     drone_id = "drone-1"
     _geofence_nack(coord, drone_id, geofence_cm=500.0, effective_geofence_cm=400.0)
     assert coord._fence_cm(drone_id) == 400.0
@@ -580,7 +580,35 @@ def test_ground_plans_against_the_effective_fence_and_an_old_edge_still_works(ex
     _geofence_nack(coord, drone_id, geofence_cm=500.0, effective_geofence_cm=450.0)
     assert coord._fence_cm(drone_id) == 450.0
     # An old edge sends only the full width, and the ground still takes the smaller.
+    # The ground's own fence (700) differs from the edge's (500), so the smaller-of rule is real.
     _geofence_nack(coord, "drone-2", geofence_cm=500.0)
     assert coord._fence_cm("drone-2") == 500.0
     _geofence_nack(coord, "drone-2", geofence_cm=420.0)
     assert coord._fence_cm("drone-2") == 420.0
+
+
+def test_effective_fence_of_zero_is_accepted_and_one_above_the_full_width_is_capped(executor_fleet):
+    coord, _edges, _events = executor_fleet(geofence_cm=700.0)
+    _geofence_nack(coord, "drone-1", geofence_cm=500.0, effective_geofence_cm=0.0)
+    assert coord._fence_cm("drone-1") == 0.0
+    _geofence_nack(coord, "drone-2", geofence_cm=500.0, effective_geofence_cm=900.0)
+    assert coord._fence_cm("drone-2") == 500.0
+
+
+def test_new_mission_forgets_the_effective_fence_but_keeps_the_full_width(executor_fleet):
+    coord, _edges, _events = executor_fleet(geofence_cm=700.0)
+    coord.plan()
+    _geofence_nack(coord, "drone-1", geofence_cm=500.0, effective_geofence_cm=460.0)
+    assert coord._fence_cm("drone-1") == 460.0
+    coord.plan()
+    assert coord._drones["drone-1"].effective_fence_cm is None
+    assert coord._fence_cm("drone-1") == 500.0
+
+
+def test_refusal_text_shows_the_effective_fence_and_the_margin():
+    text = FleetCoordinator._describe_refusal(
+        "drone-1", "geofence",
+        {"x_cm": 480.0, "y_cm": 0.0, "geofence_cm": 500.0, "effective_geofence_cm": 460.0})
+    assert "outside its 460 cm geofence (500 cm less a 40 cm margin after a refused step)" in text
+    plain = FleetCoordinator._describe_refusal("drone-1", "geofence", {"x_cm": 480.0, "y_cm": 0.0, "geofence_cm": 500.0})
+    assert "outside its 500 cm geofence" in plain

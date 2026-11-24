@@ -589,6 +589,9 @@ class _DroneState:
     # The smallest fence half-width this edge reported in a geofence nack; later re-tasks are planned
     # against the smaller of it and the coordinator's own fence.
     reported_fence_cm: float | None = None
+    # The edge's fence after its refused-step margin, from its last geofence nack. The margin resets
+    # at takeoff, so a new mission forgets this value but keeps ``reported_fence_cm``.
+    effective_fence_cm: float | None = None
     ping_t1: float | None = None
     ping_event: threading.Event | None = None
     pong: tuple[float, float, float] | None = None
@@ -1213,9 +1216,9 @@ class FleetCoordinator:
                 state.lanes = [dict(lane) for lane in zone.lanes]
                 state.lost = False
                 state.lost_at = None
-                # A new mission starts from the edge's own fence again; a margin it
-                # still holds comes back in its next geofence nack.
-                state.reported_fence_cm = None
+                # The refused-step margin resets at takeoff, not at a new mission, so only
+                # the effective fence is forgotten; the full width the edge reported stays.
+                state.effective_fence_cm = None
                 state.offer = None
                 state.nack_reason = None
                 state.executed_at_ground_s = None
@@ -1729,14 +1732,16 @@ class FleetCoordinator:
             logger.warning("%s refused its assign_lanes (%s)", drone_id, described)
             reported = _number(msg.get("geofence_cm")) if reason == "geofence" else None
             effective = _number(msg.get("effective_geofence_cm")) if reason == "geofence" else None
-            if effective is not None and effective > 0:
-                # The edge's current fence, after its refused-step margin. It is the
-                # truth now, so it replaces an older (possibly narrower) report.
-                state.reported_fence_cm = effective
-            elif reported is not None and reported > 0:
+            if reported is not None and reported > 0:
                 state.reported_fence_cm = (
                     reported if state.reported_fence_cm is None else min(state.reported_fence_cm, reported)
                 )
+            if effective is not None and effective >= 0:
+                # The edge's current fence, after its refused-step margin. It is the truth now,
+                # so it replaces an older report, but it never widens past the full width.
+                if reported is not None and reported > 0:
+                    effective = min(effective, reported)
+                state.effective_fence_cm = effective
             if state.offer is not None:
                 # Whether the refusal is transient depends on the bare reason;
                 # what is recorded and shown is the described one.
@@ -1763,15 +1768,20 @@ class FleetCoordinator:
             return reason
         x, y = _number(msg.get("x_cm")), _number(msg.get("y_cm"))
         fence = _number(msg.get("geofence_cm"))
+        effective = _number(msg.get("effective_geofence_cm"))
+        if fence is not None and effective is not None and 0 <= effective < fence:
+            fence_text = f"{effective:g} cm geofence ({fence:g} cm less a {fence - effective:g} cm margin after a refused step)"
+        else:
+            fence_text = f"{fence:g} cm geofence" if fence is not None else ""
         here_x, here_y = _number(msg.get("rel_x_cm")), _number(msg.get("rel_y_cm"))
         parts = []
         if x is not None and y is not None:
             outside = f"the path would reach ({x:g}, {y:g}) cm from {drone_id}'s takeoff point"
-            if fence is not None:
-                outside += f", outside its {fence:g} cm geofence"
+            if fence_text:
+                outside += f", outside its {fence_text}"
             parts.append(outside)
-        elif fence is not None:
-            parts.append(f"{drone_id}'s geofence is {fence:g} cm")
+        elif fence_text:
+            parts.append(f"{drone_id}'s geofence is {fence_text.replace(' geofence', '', 1)}")
         if here_x is not None and here_y is not None:
             parts.append(f"{drone_id} is at ({here_x:g}, {here_y:g}) cm from its takeoff point")
         return reason + (": " + "; ".join(parts) if parts else "")
@@ -2921,8 +2931,9 @@ class FleetCoordinator:
         return f"waiting for {rid} to finish its own lanes"
 
     def _fence_cm(self, drone_id: str) -> float | None:
-        """The fence half-width to plan against: the smaller of the configured one and the edge's reported one."""
-        known = [f for f in (self._geofence_cm, self._drones[drone_id].reported_fence_cm) if f is not None]
+        """The fence half-width to plan against: the smallest of the configured, reported and effective ones."""
+        state = self._drones[drone_id]
+        known = [f for f in (self._geofence_cm, state.reported_fence_cm, state.effective_fence_cm) if f is not None]
         return min(known) if known else None
 
     def _inside_fence(self, drone_id: str, point: tuple[float, float]) -> bool:

@@ -227,6 +227,9 @@ def common_corpus(fp: ModuleType) -> list[Sample]:
     for reason in sorted(fp.NACK_REASONS):
         geo = {"geofence": {"geofence_cm": 450.0}} if reason == "geofence" else {}
         add(f"nack_assign_lanes_{reason}", e2g, lambda r=reason, g=geo: fp.make_nack_assign_lanes("drone-1", r, 8, **g))
+    add("nack_assign_lanes_geofence_effective", e2g, lambda: {
+        **fp.make_nack_assign_lanes("drone-1", "geofence", 8, geofence={"geofence_cm": 450.0}),
+        "effective_geofence_cm": 410.0})
     add("ack_hold", e2g, lambda: fp.make_ack("hold", "drone-1", "c-h", epoch_seen=7))
     add("ack_land", e2g, lambda: fp.make_ack("land", "drone-1", None))
     add("ack_takeoff", e2g, lambda: fp.make_ack("takeoff", "drone-1", "c-to", epoch_seen=7))
