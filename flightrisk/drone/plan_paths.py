@@ -81,6 +81,7 @@ __all__ = [
     "pattern_vertices",
     "simplify",
     "snap_path",
+    "snap_tolerance_cm",
     "split_area",
     "staircase",
     "trace_lanes",
@@ -217,6 +218,22 @@ def staircase(start: Sequence[int], end: Sequence[int], *, limits: EnvelopeLimit
             x += sx * step_x
         points.append((x, y))
     return points
+
+
+def snap_tolerance_cm(limits: EnvelopeLimits | Iterable[EnvelopeLimits] = ROOM_LIMITS) -> int:
+    """The bound ``staircase`` guarantees for the given profile, or the largest bound over several.
+
+    A profile with the room profile's minimum move keeps every corner less
+    than ``SNAP_TOLERANCE_CM`` from the drawn segment; a profile with a longer
+    one keeps it less than twice that minimum move. The result is the larger
+    of the two, in whole centimetres, so it is exactly ``SNAP_TOLERANCE_CM``
+    for the room profile.
+    """
+    profiles = [limits] if isinstance(limits, EnvelopeLimits) else list(limits)
+    bound = SNAP_TOLERANCE_CM
+    for profile in profiles:
+        bound = max(bound, 2 * _move_range(profile)[0])
+    return int(bound)
 
 
 def simplify(points: Iterable[Sequence[float]]) -> list[Point]:
