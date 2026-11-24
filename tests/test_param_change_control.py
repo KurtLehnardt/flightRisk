@@ -34,6 +34,7 @@ CHECKER_PATHS = (
     "tests/tools/make_edge_baseline.py",
     "docs/design/hardware-profiles/safety-value-changes.md",
     "flightrisk/params/legacy.py",
+    "tests/test_params_legacy.py",
 )
 # The A1 baseline entry. Editing it needs an edit here too, which CODEOWNERS makes owned (F6, F7).
 MIN_ENTRIES = 1
@@ -88,8 +89,9 @@ def test_codeowners_names_the_owned_paths():
 
 def test_legacy_mavlink_limits_are_owner_reviewed():
     """The legacy MAVLink move and altitude limits live in flightrisk/params/legacy.py, which CODEOWNERS gives an
-    owner. A value change there also fails tests/test_params_legacy.py, which pins the three values, so it cannot
-    land without the owner's review."""
+    owner. A value change there also fails tests/test_params_legacy.py, which pins the three values, and that file
+    is owned too. CODEOWNERS requests the owner's review. The repository's ruleset does not enforce code-owner
+    review or status checks, so the guard relies on that review being read."""
     assert "flightrisk/params/legacy.py" in CHECKER_PATHS
     owners = {}
     for line in (ROOT / ".github" / "CODEOWNERS").read_text(encoding="utf-8").splitlines():
@@ -342,6 +344,31 @@ def test_phase_sections_stay_inside_their_allowance():
     assert phase_cap_problems(PARAM_ADOPTERS, PHASE_ADOPTED, A3_ADOPTED) == []
 
 
+def shared_path_problems(name: str, phases: dict[str, frozenset[str]]) -> list[str]:
+    """One message per path that two phases of ``phases`` both hold, for every pair of phases."""
+    problems = []
+    ordered = sorted(phases)
+    for i, first in enumerate(ordered):
+        for second in ordered[i + 1:]:
+            for rel in sorted(phases[first] & phases[second]):
+                problems.append(f"{rel} sits in the {name} of both {first} and {second}")
+    return problems
+
+
+def test_phase_allowances_share_no_path():
+    """No path sits in the allowance of two phases, so each adopter belongs to exactly one phase."""
+    assert shared_path_problems("allowance", PHASE_ADOPTED) == []
+
+
+def test_shared_path_rule_catches_a_path_in_two_phases():
+    """The reviewer's repro: the same path in two phases' caps or planned sets fails."""
+    path = "flightrisk/drone/mavlink.py"
+    caps = {**PHASE_ADOPTED, "A4": PHASE_ADOPTED["A4"] | {path}}
+    assert shared_path_problems("allowance", caps) == [f"{path} sits in the allowance of both A4 and X-legacy"]
+    planned = {**PHASE_PLANNED_ADOPTERS, "A4": PHASE_PLANNED_ADOPTERS["A4"] | {path}}
+    assert shared_path_problems("planned set", planned) == [f"{path} sits in the planned set of both A4 and X-legacy"]
+
+
 def test_phase_cap_rule_catches_each_violation():
     """The cap rule on synthetic ledgers: a phase section outside its allowance fails, and so does a cap that
     overlaps A3_ADOPTED. Sections the caps do not name are left to the A3_ADOPTED check."""
@@ -399,6 +426,12 @@ def test_planned_adopters_sit_inside_their_phase_cap():
         assert not adopters & A3_ADOPTED, sorted(adopters & A3_ADOPTED)
     assert len(PHASE_PLANNED_ADOPTERS["A4"]) == 3
     assert len(PHASE_PLANNED_ADOPTERS["X-legacy"]) == 1
+
+
+def test_planned_adopters_share_no_path():
+    """No path sits in the planned adopters of two phases."""
+    assert shared_path_problems("planned set", PHASE_PLANNED_ADOPTERS) == []
+    assert not PHASE_PLANNED_ADOPTERS["X-legacy"] & PHASE_PLANNED_ADOPTERS["A4"]
 
 
 def test_phase_sections_name_only_their_planned_adopters():
