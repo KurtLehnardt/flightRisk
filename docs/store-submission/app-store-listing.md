@@ -71,7 +71,7 @@ missing child,search,find person,drone,lost child,rescue aid,camera,reunite,sear
 
 **Marketing URL:** `https://<OWNER: optional product page URL>`
 
-**Privacy Policy URL:** `https://<OWNER: hosted copy of docs/privacy-policy.md>` (required; the same address as the `FLIGHTRISK_PRIVACY_POLICY_URL` build setting)
+**Privacy Policy URL:** `https://github.com/KurtLehnardt/flightRisk/blob/main/docs/privacy-policy.md` (required; the same address as the `FLIGHTRISK_PRIVACY_POLICY_URL` build setting)
 
 **Copyright:** `© 2026 Kurt Lehnardt`
 

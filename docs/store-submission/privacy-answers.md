@@ -78,7 +78,7 @@ Draft position: **not collected.** It sends no user data. Hugging Face sees the 
 
 ### Other App Store Connect items
 
-- Privacy policy URL: required. Hosting is still open (item 1).
+- Privacy policy URL: `https://github.com/KurtLehnardt/flightRisk/blob/main/docs/privacy-policy.md` (hosted; item 3 is done).
 - Age rating and the Guideline 5.1.3 (health) and 2.5.13 (Face ID) answers in `docs/app-store-compliance.md` stand. The app has no face recognition, so the "own face recognition pipeline" sentence in the Guideline 2.5.13 compliance text is obsolete. Remove it (item 6).
 
 ## 2. Google Play Data Safety (Android)

@@ -63,7 +63,7 @@ IMPORTANT LIMITS
 
 **Phone:** `<OWNER: optional>`
 
-**Privacy policy URL:** `https://<OWNER: hosted copy of docs/privacy-policy.md>` (required; must be a public web page, not a PDF or source file; the same address as the `flightrisk.privacyPolicyUrl` Gradle property)
+**Privacy policy URL:** `https://github.com/KurtLehnardt/flightRisk/blob/main/docs/privacy-policy.md` (required; must be a public web page, not a PDF or source file; the same address as the `flightrisk.privacyPolicyUrl` Gradle property)
 
 ## App access
 

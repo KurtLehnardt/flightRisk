@@ -1,7 +1,7 @@
 # FlightRisk Mobile -- Privacy Policy
 
-**Effective Date:** September 4, 2026
-**Last Updated:** November 22, 2026
+**Effective Date:** November 24, 2026
+**Last updated:** November 24, 2026
 **Contact:** krlehnardt@gmail.com
 
 ---
