@@ -7,7 +7,7 @@ import hashlib
 import re
 from pathlib import Path
 
-from flightrisk.params.docs import is_fact_row, render_flight_parameters_markdown
+from flightrisk.params.docs import is_fact_row, is_read_only_row, render_flight_parameters_markdown
 from flightrisk.params.table import TABLE
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -47,6 +47,17 @@ def test_doc_never_presents_a_fact_as_a_setting():
                     assert name not in text, name
     for word in ("tun", "calibrat", "threshold"):
         assert word not in facts.lower(), word
+
+
+def test_doc_lists_read_only_rows_only_under_read_only_headings():
+    sections = render_flight_parameters_markdown().split("\n## ")
+    settings = "\n".join(s for s in sections if s.startswith("Settings: "))
+    read_only = "\n".join(s for s in sections if s.startswith("Read-only values: "))
+    for row in TABLE:
+        if is_read_only_row(row) or is_fact_row(row):
+            assert f"`{row.id}`" not in settings, row.id
+        if is_read_only_row(row):
+            assert f"`{row.id}`" in read_only, row.id
 
 
 def test_codeowners_names_the_owned_paths():

@@ -29,6 +29,11 @@ def is_fact_row(row: ParamSpec) -> bool:
     return any(e is Edit.FACT for e in row.edit.values())
 
 
+def is_read_only_row(row: ParamSpec) -> bool:
+    """True when no profile can change the row and it is not a fact."""
+    return not is_fact_row(row) and all(e is Edit.READ_ONLY for e in row.edit.values())
+
+
 def _value(value: Any) -> str:
     """One value as plain text."""
     if value is None:
@@ -80,7 +85,8 @@ def _fact_table(rows: list[ParamSpec]) -> list[str]:
 
 def render_flight_parameters_markdown() -> str:
     """Render the registry as the text of ``docs/flight-parameters.md``."""
-    settings = [r for r in TABLE if not is_fact_row(r)]
+    settings = [r for r in TABLE if not is_fact_row(r) and not is_read_only_row(r)]
+    read_only = [r for r in TABLE if is_read_only_row(r)]
     facts = [r for r in TABLE if is_fact_row(r)]
     out = [
         "# Flight parameters",
@@ -90,16 +96,18 @@ def render_flight_parameters_markdown() -> str:
         "Distances are in centimetres and times in seconds, unless the unit column says otherwise. "
         "A default of `not applicable` means the row does not apply to that model.",
         "",
-        f"The registry holds {len(TABLE)} rows: {len(settings)} settings and {len(facts)} test-adapter facts.",
+        f"The registry holds {len(TABLE)} rows: {len(settings)} settings, {len(read_only)} read-only values "
+        f"and {len(facts)} test-adapter facts.",
     ]
-    groups: dict[str, list[ParamSpec]] = {}
-    for r in settings:
-        groups.setdefault(r.group, []).append(r)
-    for group, rows in groups.items():
-        out += ["", f"## Settings: {group}", ""] + _settings_table(rows)
+    for heading, subset in (("Settings", settings), ("Read-only values", read_only)):
+        groups: dict[str, list[ParamSpec]] = {}
+        for r in subset:
+            groups.setdefault(r.group, []).append(r)
+        for group, rows in groups.items():
+            out += ["", f"## {heading}: {group}", ""] + _settings_table(rows)
     out += [
         "",
-        "## Test-adapter facts",
+        "## Test-adapter facts (read-only)",
         "",
         "These values are read-only. They describe what the test adapter does today and are listed so "
         "that readers know them. They are not settings.",
