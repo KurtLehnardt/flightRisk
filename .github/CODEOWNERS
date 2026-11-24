@@ -2,6 +2,8 @@
 # A change to any of these also needs an entry in
 # docs/design/hardware-profiles/safety-value-changes.md.
 /flightrisk/params/table.py @KurtLehnardt
+/flightrisk/params/altitude.py @KurtLehnardt
+/flightrisk/params/resolver.py @KurtLehnardt
 /flightrisk/params/legacy.py @KurtLehnardt
 /tests/golden/flight_params.json @KurtLehnardt
 /tests/param_literal_allowlist.py @KurtLehnardt

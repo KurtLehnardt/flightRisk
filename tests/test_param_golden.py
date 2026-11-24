@@ -52,10 +52,10 @@ def _entries():
                 yield pytest.param(row, profile, entry, id=f"{row['row']}-{row['id']}-{profile}")
 
 
-def test_golden_holds_the_160_rows_and_the_schema_keys():
+def test_golden_holds_the_162_rows_and_the_schema_keys():
     data = _load()
-    assert len(data["rows"]) == 160
-    assert len({row["id"] for row in data["rows"]}) == 160
+    assert len(data["rows"]) == 162
+    assert len({row["id"] for row in data["rows"]}) == 162
     keys = {"default", "lo", "hi", "safer", "confirm", "edit", "off_value", "safety_switch", "origin"}
     for row in data["rows"]:
         assert set(row["profiles"]) == set(PROFILES)

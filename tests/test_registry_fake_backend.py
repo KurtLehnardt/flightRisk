@@ -29,3 +29,9 @@ def test_fake_drone_backend_is_a_string_literal():
     assert len(values) == 1
     assert isinstance(values[0], ast.Constant)
     assert values[0].value == "tello"
+
+
+def test_edge_fake_drone_maps_to_the_fake_backend_constant():
+    from flightrisk import edge_resolution
+
+    assert edge_resolution._backend_spec(edge_resolution.FAKE_DRONE).name == registry.FAKE_DRONE_BACKEND == "tello"
