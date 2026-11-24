@@ -1177,7 +1177,21 @@ lines there before work starts, and any other failing assertion stops the PR. Th
 (`tests/test_param_parity.py`) fails on any acceptance difference not listed here, and a test checks that
 every "from <PR>" tag in `parameters.md` matches an item below naming that PR and that row.
 
-- **A1, A2, A3, B1:** none.
+- **A1, A2, B1:** none.
+- **A3:** 47. The edge resolves its unit at start with `resolve_unit`, so before it contacts the drone it
+  refuses these inputs, which a real edge start accepts today. K-3 on the Tello: `FLIGHTRISK_MIN_TAKEOFF_BATTERY`
+  of 15, 19 or 20 %, because a takeoff minimum at or under the 25 % return floor lets a drone take off with
+  its battery already at the level where it must return. K-6 on a Tello or a MAVLink unit:
+  `FLIGHTRISK_LINK_LOSS_LAND_S` of 1.4 s, because a detect time under 1.5 times the 1 s heartbeat interval
+  can trigger on one missed heartbeat plus 0.5 s of jitter. K-8 on the Tello: `FLIGHTRISK_CEILING_MARGIN_CM`
+  of 900 cm under a `FLIGHTRISK_CEILING_CM` of 1000 cm, because the 100 cm left under the ceiling is below
+  the 130 cm altitude slot. K-12 and the Tello temperature pair: none newly refused, because today's start
+  checks already refuse every input the probes find. Today's start checks also refuse the other inputs of
+  `ACCEPTED_TODAY_REFUSED_BY_RESOLVE_UNIT` in `tests/test_param_parity.py`, so refusing them changes nothing;
+  `tests/test_edge_a3_changes.py` pins the split. A production MAVLink unit also ignores the 9 overrides of
+  the Tello obstacle-sensor facts that a MAVLink edge honours today, and logs one line naming each ignored
+  variable (FACT-3, N-10). Until B1 adds the SITL board identity check (CAP-6), only the fake adapter counts
+  as simulated, so every MAVLink unit counts as production.
 - **A4:** 1. A fleet mixing indoor and field units is refused at Plan (nitpick 12).
 - **A5:** none. Assertions: `tests/test_launcher_commands.py:67`, `:119-121`.
 - **B2:** 2. Field Start is refused without a 3D fix, with too few satellites, with receiver accuracy above
