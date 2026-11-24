@@ -1,0 +1,1006 @@
+{
+  "assign_lanes": {
+    "d1": [
+      {
+        "alt_cm": 1500,
+        "drone_id": "d1",
+        "lanes": [
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 435
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 435
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 435
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 435
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 435
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 435
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 435
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          }
+        ],
+        "type": "assign_lanes",
+        "zone": {
+          "h_cm": 6000,
+          "w_cm": 11480,
+          "x_cm": 0,
+          "y_cm": 0
+        }
+      }
+    ]
+  },
+  "drone_ids": [
+    "d1"
+  ],
+  "edge_settings": [
+    {
+      "alt_slot_m": 15.0,
+      "geofence_m": 105.45,
+      "zone_x_m": 9.741113897962657
+    }
+  ],
+  "plan": {
+    "gap_cm": 520,
+    "grid": {
+      "h_cm": 6000,
+      "w_cm": 11480,
+      "x_cm": 0,
+      "y_cm": 0
+    },
+    "strip_cm": 1435,
+    "zones": [
+      {
+        "alt_cm": 1500,
+        "drone_id": "d1",
+        "h_cm": 6000,
+        "lanes": [
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 435
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 435
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 435
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 435
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 435
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 435
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 435
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          }
+        ],
+        "w_cm": 11480,
+        "x_cm": 0,
+        "y_cm": 0
+      }
+    ]
+  },
+  "scale": {
+    "alt_slots_cm": [
+      1500
+    ],
+    "area_cm": [
+      11480,
+      6000
+    ],
+    "coverage_fraction": 0.9994352316327111,
+    "coverage_note": "the lanes cover the whole area at the lowest slot",
+    "geofence_cm": 10545.0,
+    "profile": "field",
+    "strip_cm": 1435,
+    "swath_cm": 1948.2227795925314,
+    "takeoff_x_cm": [
+      974.1113897962657
+    ],
+    "zone_gap_cm": 520
+  }
+}
