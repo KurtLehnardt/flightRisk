@@ -138,7 +138,7 @@ def loki_annotation(name: str, expr: str, color: str, title_field: str = "event"
 def var_node() -> dict[str, Any]:
     return {
         "name": "node", "label": "Node",
-        "description": "service.instance.id of the sending laptop (OTEL_RESOURCE_ATTRIBUTES), e.g. mac-ground or edge-2",
+        "description": "service.instance.id of the sending laptop (OTEL_RESOURCE_ATTRIBUTES), e.g. ground or edge-2",
         "type": "query", "datasource": LOKI,
         "query": {"type": 1, "label": "service_instance_id", "stream": '{service_name=~"flightrisk.*"}',
                   "refId": "LokiVariableQueryEditor-VariableQuery"},

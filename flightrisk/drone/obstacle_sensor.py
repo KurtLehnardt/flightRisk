@@ -655,7 +655,7 @@ def to_sensor_frame(frame: Any, channel_order: str) -> Any:
 
     The channels are reversed with OpenCV's ``cvtColor`` when it can take the
     array (a contiguous SIMD swap, several times cheaper than NumPy's strided
-    copy of a reversed view, which matters at 30 frames a second on the ZBook);
+    copy of a reversed view, which matters at 30 frames a second on the edge laptop);
     otherwise with NumPy. Both give the same pixels.
     """
     if channel_order not in (CHANNEL_ORDER_RGB, CHANNEL_ORDER_BGR):
