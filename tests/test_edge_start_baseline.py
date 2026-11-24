@@ -89,7 +89,9 @@ def _build_with_mavsdk(available: bool):
         assert (mavsdk_link.System is None) is not available
         return _same_json({"start_objects": maker.start_objects(), "methods": maker.method_results()})
     finally:
-        for name in [n for n in sys.modules if n not in saved]:
+        # Drop only the flightrisk and mavsdk modules this rebuild imported. Third-party extension
+        # modules such as torch, numpy and cv2 cannot be imported twice in one process, so they stay.
+        for name in [n for n in sys.modules if n not in saved and n.split(".")[0] in ("flightrisk", "mavsdk")]:
             del sys.modules[name]
         sys.modules.update(saved)
 
