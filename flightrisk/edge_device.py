@@ -1911,6 +1911,10 @@ class ObstacleSettings:
     limits, default 500 cm) on a MAVLink edge, the room profile (20 to 100 cm,
     default 50) otherwise. ``non_default`` lists ``(variable, value, default)``
     for every setting that differs from its default.
+
+    The edge's start path builds them with ``ObstacleSettings.resolved``, which rebuilds each setting
+    of ``edge_resolution.OBSTACLE_ROWS`` from the start resolution (EDGE-2); a direct call keeps
+    exactly today's settings.
     """
 
     def __init__(self, kind: str | None, envelope: SafetyEnvelope, environ: Any):
@@ -1945,6 +1949,23 @@ class ObstacleSettings:
         self.avoid_budget_s = _obstacle_number(
             ENV_OBSTACLE_AVOID_BUDGET_S, OBSTACLE_AVOID_BUDGET_S, *OBSTACLE_AVOID_BUDGET_RANGE_S, environ,
         )
+        self._list_non_default(step_default)
+
+    @classmethod
+    def resolved(cls, kind: str | None, envelope: SafetyEnvelope, environ: Any, resolution: Any) -> "ObstacleSettings":
+        """The settings of ``environ``, rebuilt from ``resolution`` (``args.edge_resolution``) when there is one.
+
+        Without a resolution they are exactly today's. With one, each setting of
+        ``edge_resolution.OBSTACLE_ROWS`` comes from ``edge_resolution.obstacle_arguments``. Raises
+        ``SystemExit`` on a refusal.
+        """
+        settings = cls(kind, envelope, environ)
+        if resolution is not None:
+            settings._apply_resolution(resolution, environ)
+            settings._list_non_default(OBSTACLE_STEP_FIELD_CM if kind == "mavlink" else OBSTACLE_STEP_CM)
+        return settings
+
+    def _list_non_default(self, step_default: int) -> None:
         self.non_default: list[tuple[str, Any, Any]] = [
             (name, value, default)
             for name, value, default in (
@@ -1964,6 +1985,23 @@ class ObstacleSettings:
             )
             if value != default
         ]
+
+    def _apply_resolution(self, resolution: Any, environ: Any) -> None:
+        """Take each setting of ``OBSTACLE_ROWS`` from the resolved values. Raises ``SystemExit``."""
+        from flightrisk.edge_resolution import OBSTACLE_ROWS, EdgeStartRefused, obstacle_arguments
+
+        today = {name: getattr(self, name) for name in OBSTACLE_ROWS}
+        try:
+            arguments = obstacle_arguments(resolution, today, environ)
+        except EdgeStartRefused as exc:
+            raise SystemExit(f"edge_device: {exc}") from None
+        if arguments.get("mode") not in (SENSING_ENV_REQUIRED, SENSING_ENV_OFF):
+            raise SystemExit(
+                f"edge_device: the resolved obstacle sensing mode {arguments.get('mode')!r} is not valid. "
+                "Refusing to start."
+            )
+        for name, value in arguments.items():
+            setattr(self, name, value)
 
     def avoid_kwargs(self) -> dict[str, Any]:
         """The ``LaneExecutor`` keyword arguments of the clear votes, the re-look and the sidestep."""
@@ -2196,7 +2234,8 @@ def _build_obstacle_wiring(
     env = os.environ if environ is None else environ
     kind = _drone_kind(args)
     drone_id = getattr(args, "drone_id", None)
-    settings = ObstacleSettings(kind, envelope, env)
+    resolution = getattr(args, "edge_resolution", None)
+    settings = ObstacleSettings.resolved(kind, envelope, env, resolution)
     settings.warn_non_default(log, drone_id)
     mode, turn, step_cm, settle_s = settings.mode, settings.turn, settings.step_cm, settings.settle_s
     if mode == SENSING_ENV_OFF:
@@ -2220,6 +2259,25 @@ def _build_obstacle_wiring(
             avoid=settings.avoid_kwargs(),
         )
 
+    from flightrisk.edge_resolution import forward_sensing_on
+
+    if resolution is not None and not forward_sensing_on(resolution):
+        # SEAM-4: no camera sensor unless forward obstacle sensing is available and on. On a MAVLink
+        # unit required sensing then needs the autopilot's avoidance at takeoff (FEA-7): the drone
+        # refuses a takeoff until ONBOARD_AVOIDANCE is present (``_tell_mavlink_drone``). The start was
+        # refused already when the unit can never declare it (``static_feature_gates``). Any other
+        # drone has no such check, so the executor gets the error and refuses to take off.
+        if kind == "mavlink":
+            log.warning(
+                "edge_obstacle_sensing_unavailable", drone_id=drone_id,
+                detail="forward obstacle sensing is not available on this unit; a takeoff needs the "
+                       "autopilot's own obstacle avoidance",
+            )
+            return ObstacleWiring(turn=turn)
+        error = "forward obstacle sensing is not available on this unit"
+        log.error("edge_obstacle_sensor_unavailable", drone_id=drone_id, error=error)
+        return ObstacleWiring(sensor_error=error, step_cm=step_cm, turn=turn, settle_s=settle_s,
+                              avoid=settings.avoid_kwargs())
     min_safe_depth, person_fraction = settings.min_safe_depth, settings.person_fraction
     holder = LatestFrame(time.monotonic)
     try:
