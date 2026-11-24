@@ -460,7 +460,8 @@ def plan_parallel_split(
     inset = _int_cm("end_inset_cm", end_inset_cm, 0, cap)
     slots = _unit_slots(alt_slots_cm, profiles)
     limits = _safety_inputs(
-        geofence_cm, min_separation_cm, placement_tolerance_cm, max_standoff_cm, max_area_side_cm=max_area_side_cm
+        geofence_cm, min_separation_cm, placement_tolerance_cm, max_standoff_cm, max_area_side_cm=max_area_side_cm,
+        unit_limits=fleet,
     )
     alts = _alts(slots, n)
     pf = planning_footprint(
@@ -632,7 +633,8 @@ def plan_split_expanding_square(
     stagger = _stagger(stagger_s)
     slots = _unit_slots(alt_slots_cm, profiles)
     limits = _safety_inputs(
-        geofence_cm, min_separation_cm, placement_tolerance_cm, max_standoff_cm, max_area_side_cm=max_area_side_cm
+        geofence_cm, min_separation_cm, placement_tolerance_cm, max_standoff_cm, max_area_side_cm=max_area_side_cm,
+        unit_limits=fleet,
     )
     alts = _alts(slots, 2)
     pf = planning_footprint(
@@ -736,7 +738,8 @@ def plan_square_spiral(
     lx, ly = _lkp(lkp_cm, width, depth)
     slot = _slots([alt_cm], limits=profiles[0])[0]
     limits = _safety_inputs(
-        geofence_cm, None, placement_tolerance_cm, max_standoff_cm, max_area_side_cm=max_area_side_cm
+        geofence_cm, None, placement_tolerance_cm, max_standoff_cm, max_area_side_cm=max_area_side_cm,
+        unit_limits=fleet,
     )
     pf = planning_footprint(
         footprint, sweep_cm, [slot], depth, limits["placement_tolerance_cm"],
@@ -913,7 +916,8 @@ def plan_search(
     slots = _unit_slots(alt_slots_cm, profiles)
     # Validate everything up front, so a fallback below can never hide a bad input.
     limits = _safety_inputs(
-        geofence_cm, min_separation_cm, placement_tolerance_cm, max_standoff_cm, max_area_side_cm=max_area_side_cm
+        geofence_cm, min_separation_cm, placement_tolerance_cm, max_standoff_cm, max_area_side_cm=max_area_side_cm,
+        unit_limits=fleet,
     )
     cap = _area_cap(max_area_side_cm)
     _offset(placement_offset_cm, min_move_cm=_fleet_min_move_cm(fleet), max_cm=cap)
