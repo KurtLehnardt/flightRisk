@@ -648,6 +648,21 @@ class MavlinkFleetDrone:
             return None
         return round(st.rel_alt_m * 100)
 
+    def commanded_height_cm(self) -> float | None:
+        """The height above home the autopilot is commanded to hold, in centimetres, or None before the first takeoff.
+
+        Every vertical ``move`` is added to this commanded height, not to
+        the measured one. ``takeoff`` and ``move`` return once the measured
+        height is within ``arrival_alt_m`` of the commanded one, so right
+        after they return the two can differ by up to that tolerance. A
+        vertical move that must end at a given height, such as the climb to
+        the altitude slot, is therefore sized from this height.
+        """
+        with self._lock:
+            if self._frame is None:
+                return None
+            return float(self._target.alt_cm)
+
     def measured_pose(self) -> RelativePose | None:
         """The autopilot's measured position in the plan frame, or None before the first takeoff."""
         st = self._autopilot_state()
