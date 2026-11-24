@@ -1529,6 +1529,16 @@ def _parse_drone_id(raw: str) -> str:
     return raw
 
 
+def _parse_confirm_less_safe(raw: str) -> tuple[str, str]:
+    """Parse one ``--confirm-less-safe id=value``: a parameter id and the exact value it confirms."""
+    key, sep, value = raw.partition("=")
+    key, value = key.strip(), value.strip()
+    if not sep or not key or not value:
+        raise argparse.ArgumentTypeError("--confirm-less-safe takes id=value: a parameter id and the exact "
+                                         "value it confirms, both non-empty")
+    return key, value
+
+
 def _parse_frame_stride(raw: str) -> int:
     """Parse ``--frame-stride``: a whole number from 1 to ``MAX_FRAME_STRIDE``."""
     try:
@@ -1575,6 +1585,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="The drone this edge flies: tello, fake (simulated Tello) or mavlink (a PX4 or ArduPilot "
              "autopilot; run the edge on the drone's companion computer). Default: --source tello or fake "
              "picks the drone as before; camera, file and url fly nothing",
+    )
+    parser.add_argument(
+        "--model", type=str, default=None,
+        help="The drone model this edge flies, a built-in model or one defined in the inventory (default: $"
+             "FLIGHTRISK_MODEL, else --airframe, else the inventory unit for --drone-id, else the launcher's "
+             "model, else the backend's default: tello for --drone tello and fake, generic_multirotor for "
+             "--drone mavlink). The edge refuses to start when the model's scale, adapter or frame path "
+             "differs from the backend's",
+    )
+    parser.add_argument(
+        "--airframe", type=str, default=None,
+        help="The drone model, when neither --model nor $FLIGHTRISK_MODEL names one",
+    )
+    parser.add_argument(
+        "--confirm-less-safe", type=_parse_confirm_less_safe, action="append", default=None, metavar="ID=VALUE",
+        help="Confirm one less-safe value, as the parameter id and the exact value; repeat for each value",
     )
     mav = parser.add_argument_group("MAVLink drone (--drone mavlink)", "See docs/open-drone-support.md")
     mav.add_argument(
@@ -2648,7 +2674,9 @@ def _resolve_drone_and_source(args: argparse.Namespace, parser: argparse.Argumen
     same name and may not be another). ``--drone mavlink`` needs
     ``--source`` camera, file or url (default camera) and the outdoor
     settings in metres; the indoor ``--alt-slot`` (centimetres) and the Tello
-    options do not apply to it.
+    options do not apply to it. Once they are settled, the edge chooses its
+    model and checks it against the backend (``_resolve_model``), still before
+    it contacts any drone.
     """
     drone = args.drone
     explicit_source = not isinstance(args.source, _Default)
@@ -2667,11 +2695,13 @@ def _resolve_drone_and_source(args: argparse.Namespace, parser: argparse.Argumen
         parser.error(f"{', '.join(mavlink_only)} only apply to --drone mavlink")
     if drone is None:
         args.source = str(args.source)
+        _resolve_model(args, parser)
         return
     if drone in ("tello", "fake"):
         if explicit_source and args.source != drone:
             parser.error(f"--drone {drone} takes its frames from the drone; use --source {drone} or leave it out")
         args.source = drone
+        _resolve_model(args, parser)
         return
     # --drone mavlink
     if explicit_source and args.source not in _CAPTURE_SOURCES:
@@ -2700,6 +2730,31 @@ def _resolve_drone_and_source(args: argparse.Namespace, parser: argparse.Argumen
             failsafe_action=_failsafe_action(args),
         )
     except ValueError as exc:
+        parser.error(str(exc))
+    _resolve_model(args, parser)
+
+
+def _resolve_model(args: argparse.Namespace, parser: argparse.ArgumentParser, environ: Any = None) -> None:
+    """Choose the model of a flying edge and check it against its backend; ``parser.error`` on a mismatch.
+
+    Runs before the edge contacts any drone. An edge that flies nothing has no
+    backend to check, so it chooses no model. Without ``--model``,
+    ``FLIGHTRISK_MODEL``, ``--airframe``, an inventory unit or a launcher model,
+    the model is the backend's default, which always matches.
+    """
+    from flightrisk.edge_resolution import ModelRefused, resolve_model
+
+    args.model_choice = None
+    drone = _drone_kind(args)
+    if drone is None:
+        return
+    frame_path = "drone_video" if args.source in _FLIGHT_SOURCES else "capture_source"
+    try:
+        args.model_choice = resolve_model(
+            drone=drone, drone_id=args.drone_id, frame_path=frame_path, model_flag=getattr(args, "model", None),
+            airframe_flag=getattr(args, "airframe", None), environ=os.environ if environ is None else environ,
+        )
+    except ModelRefused as exc:
         parser.error(str(exc))
 
 
