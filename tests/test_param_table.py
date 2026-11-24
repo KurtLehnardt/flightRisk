@@ -1,4 +1,4 @@
-"""Tests for the parameter registry table: its 160 rows, and that it equals the golden file."""
+"""Tests for the parameter registry table: its 162 rows, and that it equals the golden file."""
 
 from __future__ import annotations
 
@@ -131,6 +131,8 @@ def test_non_numeric_defaults_are_the_known_set() -> None:
         ("plan.camera_footprint_cm", "tello"),
         ("plan.camera_footprint_cm", "generic_multirotor"),
         ("plan.snap_target_cm", "generic_multirotor"),
+        # Design section 27 item 53: the generic airframe maximum is unknown unless the inventory states it.
+        ("envelope.max_altitude_cm", "generic_multirotor"),
     }
 
 
@@ -234,10 +236,10 @@ def _golden_rows() -> list[dict]:
     return json.loads(GOLDEN.read_text(encoding="utf-8"))["rows"]
 
 
-def test_table_has_160_rows() -> None:
-    assert len(TABLE) == 160
-    assert len(_golden_rows()) == 160
-    assert len({row.id for row in TABLE}) == 160
+def test_table_has_162_rows() -> None:
+    assert len(TABLE) == 162
+    assert len(_golden_rows()) == 162
+    assert len({row.id for row in TABLE}) == 162
 
 
 def test_table_and_golden_hold_the_same_rows_in_order() -> None:

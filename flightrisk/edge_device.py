@@ -2644,22 +2644,31 @@ def _resolved_envelope(args: argparse.Namespace, envelope: SafetyEnvelope) -> Sa
 
     Without a resolution (an envelope built before or without the edge's start resolution), or when
     every resolved value equals today's, it is ``envelope`` itself, today's. ``envelope_arguments``
-    says which value comes from where; the envelope keeps today's limits for its scale.
+    says which value comes from where. The envelope keeps today's limits for its scale, except the
+    field ceiling and slot upper bounds, which ``envelope_limits`` takes from the unit's altitude limit
+    (item 53): the airframe maximum with the cap off and an accepted acknowledgement, or a known airframe
+    maximum below the cap with the cap on.
     """
     resolution = getattr(args, "edge_resolution", None)
     if resolution is None:
         return envelope
-    from flightrisk.edge_resolution import EdgeStartRefused, envelope_arguments, todays_envelope_arguments
+    from flightrisk.edge_resolution import (
+        EdgeStartRefused,
+        envelope_arguments,
+        envelope_limits,
+        todays_envelope_arguments,
+    )
 
     today = todays_envelope_arguments(envelope)
     try:
         arguments = envelope_arguments(resolution, today)
+        limits = envelope_limits(resolution, envelope.limits)
     except EdgeStartRefused as exc:
         raise SystemExit(f"edge_device: {exc}") from None
-    if arguments == today:
+    if arguments == today and limits is envelope.limits:
         return envelope
     try:
-        return SafetyEnvelope(**arguments, limits=envelope.limits)
+        return SafetyEnvelope(**arguments, limits=limits)
     except ValueError as exc:
         raise SystemExit(f"edge_device: the resolved envelope is invalid: {exc}. Refusing to start.") from None
 
