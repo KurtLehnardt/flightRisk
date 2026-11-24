@@ -47,3 +47,18 @@ unless every later hash is also recomputed; CODEOWNERS review of this file is th
 - SHA-256 table: f949df64f14cee5c1c025d683cabea1d56a493941db05c214c33f7deac628378
 - SHA-256 golden: 7403c28493386027b0c383326d30d2bb2645fa54c154e289276f9246289d2504
 - SHA-256 allowlist: 7b4539efd7be798d98e11aa03af4a962acab92f084b5e7d020cbe47b9a8904db
+
+## XL: legacy MAVLink limits from one params constant
+
+- Value: none changed. The legacy `MavlinkController` declares `LEGACY_MAVLINK_MIN_MOVE_CM`,
+  `LEGACY_MAVLINK_MAX_MOVE_CM` and `LEGACY_MAVLINK_MAX_ALTITUDE_M` from `flightrisk/params/legacy.py`.
+- Old and new: unchanged, 10 cm, 50000 cm and 120 m.
+- Reason: the three `DroneCapabilities` literals of the legacy `MavlinkController` moved into
+  `flightrisk/params/legacy.py`, so the allowlist drops their three legacy entries. The 120 m is the legacy
+  controller's own declaration, not row 8 and not the generic_multirotor airframe limit that section 27 item 53
+  removes.
+- Section 27 item: none.
+- SHA-256 previous: 79c17994057de59fb0abd4a575c978dad863b81ec39efdb6f9d0432d66acb710
+- SHA-256 table: f949df64f14cee5c1c025d683cabea1d56a493941db05c214c33f7deac628378
+- SHA-256 golden: 7403c28493386027b0c383326d30d2bb2645fa54c154e289276f9246289d2504
+- SHA-256 allowlist: ee4fe3ff88ae5ef9b87858fcf2ff36543053dc693bc6234bf1d3e051b2175469
