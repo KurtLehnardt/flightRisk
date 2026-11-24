@@ -68,10 +68,11 @@ UI-6, ROLES-1 to ROLES-12, MOB-9; AC-10 → PAR, RES, CONF, FACT and C5 items.
   voltage-only threshold is refused; `BATT_LOW_VOLT` is 0 when the capacity threshold is used; the field
   critical level is the autopilot's, and K-1 and K-2 are checked again with it (K-4, N-18). Test: unit;
   SITL slow drain (FlightRisk returns first).
-- [ ] MAV-13 [B4, C1] The autopilot's landing delay is written as min(the drone's place in its landing
-  order × `separation.landing_interval_s`, the autopilot's maximum: 60 s for `RTL_LOIT_TIME`) and read
-  back before arming: place 0 in B4; C1 consumes the order D1 sends in `assign_lanes.landing` (N-7, N-12).
-  Test: SITL (two drones, shared landing area arriving together, both edges killed, sequenced landings).
+- [ ] MAV-13 [B4, C1, D1] The autopilot's landing delay is written as min(the drone's place in its landing order ×
+  `separation.landing_interval_s`, the autopilot's maximum: 60 s for `RTL_LOIT_TIME`) and read back before arming:
+  place 0 in B4; C1 consumes the order D1 sends in `assign_lanes.landing` (N-7, N-12) and, on the fast path, C2's
+  fleet landing order, compressed to fit the 60 s cap for up to 8 units. Test: SITL (two drones, shared landing area
+  arriving together, both edges killed, sequenced landings).
 - [ ] MAV-14 [B4] `--allow-unverified-failsafes` and `link.require_failsafes = false` are accepted only for
   a verified simulated unit. Test: unit.
 - [ ] MAV-15 [B4] ArduPilot position faults (B-4): `FS_DR_ENABLE` 1 or 0 is required and 2 (the default),
@@ -122,7 +123,7 @@ UI-6, ROLES-1 to ROLES-12, MOB-9; AC-10 → PAR, RES, CONF, FACT and C5 items.
   for an operator (bounded, RTH-32) or land with `way_home_blocked_obstacle`. Test: fake.
 - [ ] RTH-8 [C1] Person cue on the way home: land after `return.person_cue_wait_s` without an answer. Test:
   fake.
-- [ ] RTH-9 [C1] After a long link loss the edge returns only inside its zone and corridor, outside every
+- [ ] RTH-9 [C1, D1] After a long link loss the edge returns only inside its zone and corridor, outside every
   known no-entry area other than its own, in its landing order, else lands with `no_cleared_route` (AC-6.2).
   Test: fake; SITL.
 - [ ] RTH-10 [C1] The `rth` telemetry object is one top-level field (38 of 48 at most). Test: field-cap test.
@@ -169,12 +170,12 @@ UI-6, ROLES-1 to ROLES-12, MOB-9; AC-10 → PAR, RES, CONF, FACT and C5 items.
   stranded countdowns, `on_complete` timers, a scheduled mission-end RETURN ALL and speed changes;
   cancellation never blocks or delays the send, and a sender that loses the race sees the mark and sends
   nothing; per-drone Land the same for one drone (C-1, N-2). Test: unit (a cancellation that blocks does
-  not delay the land); SITL (each sender active, then LAND ALL, within RTH-20's bounds; two vehicles with `field_fleet_ground.py`, each sender that exists on the fast
-  path).
+  not delay the land); SITL (each sender active, then LAND ALL, within RTH-20's bounds; two vehicles with
+  `field_fleet_ground.py`, each sender that exists on the fast path).
 - [ ] RTH-29 [C1] The MAVLink edge-guided return moves into the slot first, flies GUIDED to above home at the
   slot, holds until cleared, then lands. Test: SITL.
-- [ ] RTH-30 [C2] A returning drone holds above home until the ground clears its landing. Test: fake; SITL
-  (edge-guided, through C1's test seam until C6).
+- [ ] RTH-30 [C2] A returning drone holds above home until the ground clears its landing. Test: fake; SITL (edge-guided
+  through C1's test-only entry script).
 - [ ] RTH-31 [C1] The progress monitor runs only during horizontal return legs: a leg that gains less than
   `return.progress_min_cm` within `return.progress_timeout_s` is blocked; it is paused in waits, the hold
   above home, the move into the slot, the autopilot's climb and loiter phases, person-cue hovers and
@@ -184,29 +185,33 @@ UI-6, ROLES-1 to ROLES-12, MOB-9; AC-10 → PAR, RES, CONF, FACT and C5 items.
 - [ ] RTH-32 [D1] Every wait and hold is bounded by the energy model; if two bounds cannot both be met the
   earlier bound goes first, and the drone that cannot be scheduled lands with `no_return_order` (ties: higher
   unit id) (M-10). Test: unit.
-- [ ] RTH-33 [C2] `return_home` without `wait` is accepted from any authenticated ground, so a standby keeps
-  RETURN ALL; an edge without `return_home` is shown "cannot return" and held, never landed (M-5). Test:
-  multi-ground test; older-edge fake.
+- [ ] RTH-33 [C2] `return_home` without `wait` is accepted from any authenticated ground, so a standby keeps RETURN ALL;
+  an edge without `return_home` is shown "cannot return" and, on RETURN ALL and Return, held, never landed (M-5).
+  Task end is not affected: a unit that cannot return (a v1 link, or an edge whose `accepts` lacks
+  `on_complete.return_home` or `landing`) lands at task end as today and its card says so. Test: multi-ground test;
+  older-edge fake.
 - [ ] RTH-34 [C1 to C7] Every spec 6.2 row of section 10.4 has its own test, and every SITL-marked row its
   scenario (M-12). Test: a test that lists the rows and their tests.
 - [ ] RTH-35 [C1] External control is a terminal sub-state (B-1): after a mode change the edge did not make,
   no automatic land, no land retry, no move, return or takeoff; every motion command is nacked with
   `landing`; each operator land command sends exactly one LAND. Test: fake and SITL (a simulated pilot
   changes the mode during `rth_landing`: no second LAND until the next operator land, which sends one).
-- [ ] RTH-36 [C1] The edge checks, before takeoff and before accepting any assignment or re-task, that the
-  straight line from every point of the assignment's zone and corridor to home stays inside them; if not
-  and `ap_link_loss` is `return` (or `unknown`), it writes and reads back the land action, else refuses
-  the takeoff or nacks with `straight_line_home`; it refuses legs into known no-entry areas other than its
-  own (B-3, moved from D1, N-7). An assignment without `corridor` is not checked and is logged as
-  `edge_rth_corridor_check_skipped` (drone, flight, `plan_id`, `plan_seq`, `cmd_id`) until the flight (takeoff
-  to disarm) has accepted one; after that, an assignment without `corridor` is nacked with `straight_line_home`
-  and the current plan is kept. Test: unit and fake (skip line, nack after a corridor, reset at disarm); SITL
-  (a re-task with a corridor to a return-on-loss drone, escort when E4 exists; edge killed at the far corner of
-  a zone: the drone lands; end to end with generated records in D1).
-- [ ] RTH-37 [C2] The ground reads `task.end_action` (sent as `on_complete`) and `stranded.action`, with
-  today's default land for `stranded.action`; the field `task.end_action` default is return from C2 (item 32,
-  owner decision), and C6 and C7 change the other defaults (N-6). Test: unit (each value); SITL (acceptance item 1
-  with `task.end_action: return`).
+- [ ] RTH-36 [C1, D1] The edge checks, before takeoff and before accepting any assignment or re-task, that the straight
+  line from every point of the assignment's zone and corridor to home stays inside them; if not and `ap_link_loss`
+  is `return` (or `unknown`), it writes and reads back the land action, else refuses the takeoff or nacks with
+  `straight_line_home`; it refuses legs into known no-entry areas other than its own (B-3, moved from D1, N-7). An
+  assignment without `corridor` is not checked and is logged as `edge_rth_corridor_check_skipped` (drone, flight,
+  `plan_id`, `plan_seq`, `cmd_id`) until the flight took off with, or has since accepted, an assignment carrying
+  `corridor`; after that, an assignment without `corridor` counts as failing the straight-line check: the edge sets
+  its link-loss action to land and nacks with `straight_line_home` only when that fails, keeping the current plan.
+  Test: unit and fake (skip line, nack after a corridor, corridor accepted before takeoff, reset at disarm); SITL (a
+  re-task with a corridor to a return-on-loss drone, escort when E4 exists; edge killed at the far corner of a zone:
+  the drone lands; end to end with generated records in D1).
+- [ ] RTH-37 [C2] The ground reads `task.end_action` (sent as `on_complete`) and `stranded.action`, with today's default
+  land for `stranded.action`; the field `task.end_action` default is return from C2 (item 32, owner decision) and
+  land on the Tello until C7, and C6 and C7 change the other defaults (N-6). C2 sends every returning unit a fleet
+  `landing` record, lowest slot first. Test: unit (each value; each fallback to land); SITL (acceptance item 1 with
+  the new default).
 - [ ] RTH-38 [C1, C6] `return.field_method`: C1 implements the autopilot RTL and the edge-guided return for
   the returns a MAVLink edge starts; C6 switches the default to edge-guided (section 27 item 45, N-6).
   Test: SITL with each value.

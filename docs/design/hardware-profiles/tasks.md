@@ -27,7 +27,9 @@ A1 ─> A2 ─┬─> A3 ─┬─> B1 ─┐
 ```
 
 D5 follows D4, F2 and F3.
-After D4 the arrows are merge order, and here merge order is a dependency, because each file has one owner at a time and a later PR edits it only after the earlier one merged (File ownership, below): D1 depends on D4, and C3 depends on D3.
+After D4 the arrows are merge order, and here merge order is a dependency, because each file
+has one owner at a time and a later PR edits it only after the earlier one merged (File ownership, below): D1 depends on
+D4, and C3 depends on D3.
 
 - Phases in merge order: A (core; A1 and A2 change no behaviour, A3 carries items 47 and 53, A4 items 1, 47,
   48, 49 and 53, A5 items 47 and 53). B4 adds item 53 of section 27. The order then continues with B
@@ -35,38 +37,43 @@ After D4 the arrows are merge order, and here merge order is a dependency, becau
   D4 (tasks and the matcher, on the fast path), D1 to D3 (field airspace, lost
   drones and field planning, behind today's defaults), C3 to C7 (roles, then the switch in four
   steps), F (mobile), D5 (search speed, after D4, F2 and F3), E (on-find flows).
-- **Development may overlap where files do not:** C1 (edge files) merges right after B4 on the fast path, and
-  C2 right after C1; C7 (indoor defaults, gated by the edge laptop runs)
-  and F1 can proceed side by side after C6 (C7 changes defaults only); F2 and F3 run in parallel. D4 edits
-  fixtures the apps read (N-7): it merges before F1 and edits them additively only, and F1 later builds on it.
-  D5 depends on D4, F2 and F3, so D5 and E1 to E4 merge after F. D5 and E1 are sequential.
+- **Development may overlap where files do not:** C1 (edge files) merges right after B4 on the fast path, and starts
+  only once B2a and B4c have merged, because it builds on `rth/home.py`, `rth/uncertainty.py` and `rth/methods.py`, and
+  C2 right after C1; C7 (indoor defaults, gated by the edge laptop runs) and F1 can proceed side by side after C6 (C7
+  changes defaults only); F2 and F3 run in parallel. D4 edits fixtures the apps read (N-7): it merges before F1 and
+  edits them additively only, and F1 later builds on it. D5 depends on D4, F2 and F3, so D5 and E1 to E4 merge after F.
+  D5 and E1 are sequential.
 - SITL scenarios before D3 use `scripts/field_fleet_ground.py` as the ground (C2 and D1 may edit it for
   their scenarios); from D3 on they use the dashboard. Every scenario uses at most eight vehicles (`MAX_ROSTER`).
 
 ### Fast path (owner decision, November 2026)
 
-The fast path to a drone-agnostic, MAVLink-first FlightRisk is: X0, XCP, XCa and XCb, then A3 in parallel with
-A4 (A4a to A4f) and XL, then A5 (A5a to A5c) in parallel with B1 (B1a, B1b), then B2, B3 and B4 (B4a to B4f),
-then C1 and C2, then D4 (D4a to D4c), all pulled ahead of D1 to D3, C3 to C7 and F. C1 is built by the session
-that builds A3 and C2 by the other session, the one that builds the ground side. Without D1 to D3 no ground sends
-`corridor`, `landing` or `no_entry`. C1's item 43 checks the straight line home only for an assignment that
-carries `corridor`; one without it is accepted and logged as `edge_rth_corridor_check_skipped` (drone, flight,
-`plan_id`, `plan_seq`, `cmd_id`), and once a flight (takeoff to disarm) has accepted a corridor, a later assignment
-without one is nacked with `straight_line_home` and the current plan is kept. `return_home` and
-`on_complete: "return_home"` exist only on protocol v2 links and no ground is a v2 leader today
-(`docs/fleet-protocol-v2.md`, "Today's dashboard is a v1 ground"), so C2 adds an opt-in v2 leader mode to the
-dashboard and to `scripts/field_fleet_ground.py`. Acceptance item 1 returns home when the mission is complete:
-C2 makes `task.end_action` default to return for field units (item 32, task end only; owner decision), with a
-table and golden change and a safety-value log entry in its PR; the indoor Tello follows in C7. A3 is delivered as the A3.x pull requests that began
-with #230. Every other phase in this file is a follow-up after the fast path's acceptance and keeps its order.
-D4's edits to `tests/fixtures/mobile_contract/*` are additive only, so the current Android and iOS contract
-tests pass unchanged; an edit that cannot be additive moves to F1. Without D1 to D3, D4 plans field fleets
-through `scripts/field_fleet_ground.py`. Each A, B, C1, C2 and D phase is split into stacked pull requests of about
-1,500 changed lines or fewer with one risk area each; `plan/PLAN.md` of the planning pass lists them, except
-A3's, which are the A3.x pull requests, and C2's, which `plan/PLAN-C2.md` lists (C2a to C2d).
-SITL gates run natively on the ground-station laptop (macOS) only (ArduCopter 4.6.3 and 4.7.3, PX4 v1.17.0
-SIH); the edge-2 laptop (Windows) runs only the unit suite, and MAVLink phases may merge without a Windows
-run.
+The fast path to a drone-agnostic, MAVLink-first FlightRisk is: X0, XCP, XCa and XCb, then A3 in parallel with A4 (A4a
+to A4f) and XL, then A5 (A5a to A5c) in parallel with B1 (B1a, B1b), then B2, B3 and B4 (B4a to B4f), then C1 and C2,
+then D4 (D4a to D4c), all pulled ahead of D1 to D3, C3 to C7 and F. C1 is built by the session that builds A3 and C2 by
+the other session, the one that builds the ground side. Without D1 to D3 no ground sends `corridor`, `landing` or
+`no_entry`. C1's item 43 checks the straight line home only for an assignment that carries `corridor`; one without it is
+accepted and logged as `edge_rth_corridor_check_skipped` (drone, flight, `plan_id`, `plan_seq`, `cmd_id`), and once the
+flight took off with, or has since accepted, an assignment carrying `corridor`, a later assignment without one counts as
+failing the straight-line check: the edge sets its link-loss action to land and nacks with `straight_line_home` only
+when that fails, keeping the current plan. `return_home` and `on_complete: "return_home"` exist only on protocol v2
+links and no ground is a v2 leader today (`docs/fleet-protocol-v2.md`, "Today's dashboard is a v1 ground"), so C2 adds
+an opt-in v2 leader mode to the dashboard and to `scripts/field_fleet_ground.py`. Acceptance item 1 returns home when
+the mission is complete: C2 makes `task.end_action` default to return for field units (item 32, task end only; owner
+decision), with a table and golden change and a safety-value log entry in its PR; the indoor Tello follows in C7. Until
+D1, C2 sends every returning unit a `landing` record that treats the fleet as one landing area, lowest slot first, and
+C1 writes it into the autopilot's landing delay (compressed to fit ArduPilot's 60 s cap for up to 8 units; home
+separation stays D1's). A unit whose link or edge cannot take a task-end return (a v1 link, or an edge whose `accepts`
+lacks `on_complete.return_home` or `landing`) keeps today's land at task end and its card says so; only RETURN ALL and
+Return hold such a unit. A3 is delivered as the A3.x pull requests that began with #230. Every other phase in this file
+is a follow-up after the fast path's acceptance and keeps its order. D4's edits to `tests/fixtures/mobile_contract/*`
+are additive only, so the current Android and iOS contract tests pass unchanged; an edit that cannot be additive moves
+to F1. Without D1 to D3, D4 plans field fleets through `scripts/field_fleet_ground.py`. Each A, B, C1, C2 and D phase is
+split into stacked pull requests of about 1,500 changed lines or fewer with one risk area each; `plan/PLAN.md` of the
+planning pass lists them, except A3's, which are the A3.x pull requests, and C2's (C2a to C2d).
+SITL gates run natively
+on the ground-station laptop (macOS) only (ArduCopter 4.6.3 and 4.7.3, PX4 v1.17.0 SIH); the edge-2 laptop (Windows)
+runs only the unit suite, and MAVLink phases may merge without a Windows run.
 
 **Runtime-import guard.** XCP replaces the assertion in `tests/test_param_change_control.py`
 (`test_no_runtime_module_imports_params_or_hardware`, today a ban on any run-time import of `flightrisk.params` or
@@ -94,7 +101,7 @@ order guarantees. Shared, sectioned files: `tests/param_literal_allowlist.py` (o
 | `flightrisk/drone/{fleet_plan_check,fleet_plan_model,fleet_patterns,fleet_scale,plan_edit,plan_paths,coverage,coverage_sim,geolocate,search}.py` | A4 (read through the registry) | D1, D3, D4, D5 |
 | `flightrisk/mission/airspace.py` | D1 | D2, E2 to E4 (D4 merges before D1 on the fast path and does not edit it) |
 | `flightrisk/mission/lost.py` | D2 | |
-| `flightrisk/mission/returns.py` | C2 | D1 (ordering, shared landing areas, termination); E2 to E4 and D5 (each registers its senders with the LAND ALL cancellation) |
+| `flightrisk/mission/returns.py` | C2 | D1 (ordering, shared landing areas, termination); D2, D4, E2 to E4 and D5 (each registers its senders with the LAND ALL cancellation) |
 | `flightrisk/ground_leader.py` | C2 | PR-6 leader logic (follow-up) |
 | `flightrisk/dashboard/roles.py`, `flightrisk/dashboard/devices.py` | C3 | F1 |
 | `flightrisk/launcher/*` | A5 | C4, C5 |
@@ -207,7 +214,7 @@ order guarantees. Shared, sectioned files: `tests/param_literal_allowlist.py` (o
 - **Behaviour changes:** items 15 to 18 and 42. **Assertions:** as named for D2 in section 27.
 - **Test plan:** unit; fake (holding field drone not declared lost, link returning, link dropping again,
   hung edge, idle controller); #212's tests.
-- **Acceptance:** LOST-1 to LOST-6, LOST-8.
+- **Acceptance:** LOST-1 to LOST-6, LOST-8, RTH-28 (stranded countdowns).
 
 ### D3: field missions on the dashboard
 - **Tier:** opus, high. **Depends on:** D2.
@@ -218,32 +225,37 @@ order guarantees. Shared, sectioned files: `tests/param_literal_allowlist.py` (o
 ## Phase C: return machinery, roles, then the switch in four steps
 
 ### C1: edge return state machine (today's defaults) with terminal landing
-- **Tier:** opus, xhigh. **Depends on:** B4. It merges on the fast path, right after B4, built by the session that builds A3.
+- **Tier:** opus, xhigh. **Depends on:** B4 (with B2's `rth/home.py` and `rth/uncertainty.py`, B4c's `rth/methods.py`
+  and B4d's `ap_link_loss` reading) and A3.7 (`describe_unit` reply and `unit_rev`). It merges on the fast path, right
+  after B4, built by the session that builds A3.
 - **Behaviour changes:** items 19, 20 and 43.
-- **Test plan:** unit (every row), property test, fake (each command after LAND ALL; a pilot mode change
-  during `rth_landing`), SITL (edge-guided return, progress monitor on horizontal legs only, a place-1
-  drone holding above home, long loss inside and outside the zone with the return action set
-  explicitly, a re-task with a corridor to a return-on-loss drone (escort when E4 exists), edge killed at the
-  far corner of a zone); unit and fake: corridor skip-and-log, the nack after a corridor, the reset at
-  disarm; the zone SITL scenarios use a scripted test ground sending hand-built `corridor` and `landing`
-  records.
-- **Acceptance:** CAP-3, RTH-1 to RTH-10, RTH-18, RTH-21, RTH-23, RTH-24, RTH-26, RTH-27, RTH-29, RTH-31,
-  RTH-35, RTH-36, RTH-38 (both methods), MAV-7 (progress watch), MAV-13 (consuming the order), FEA-11
-  (start and takeoff).
+- **Test plan:** unit (every row), property test, fake (each command after LAND ALL; a pilot mode change during
+  `rth_landing`), SITL (edge-guided return, progress monitor on horizontal legs only, a place-1 drone holding above
+  home, long loss inside and outside the zone with the return action set explicitly, a re-task with a corridor to a
+  return-on-loss drone (escort when E4 exists), edge killed at the far corner of a zone); unit and fake: corridor
+  skip-and-log, the nack after a corridor, a corridor accepted before takeoff latches the flight, the reset at disarm;
+  the edge-guided SITL scenarios start the edge through a test-only entry script under `tests/integration/` (constructor
+  injection; no flag or row); the zone SITL scenarios use a scripted test ground sending hand-built `corridor` and
+  `landing` records.
+- **Acceptance:** CAP-3, RTH-1 to RTH-10, RTH-18, RTH-21, RTH-23, RTH-24, RTH-26, RTH-27, RTH-29, RTH-31, RTH-35,
+  RTH-36, RTH-38 (both methods), MAV-7 (progress watch), MAV-13 (consuming C2's fleet order; D1's per-area orders
+  later), FEA-11 (start and takeoff).
 
 ### C2: ground returns, RETURN ALL, LAND ALL cancellation, landing clearance
 - **Tier:** opus, xhigh. **Depends on:** C1, A4f (file ownership) and B1c (scenario files). It merges on the
   fast path, right after C1, before D4, built by the other session.
-- **Behaviour changes:** items 21 to 23, and item 32 for task end only: field units' `task.end_action`
-  default becomes return, with a table and golden change and a safety-value log entry in its PR
-  (`stranded.action` is read with today's default, no change); an opt-in protocol v2 leader mode for the
-  dashboard and `field_fleet_ground.py` (off by default, no change).
-- **Test plan:** unit (a blocking cancellation does not delay LAND ALL; one landing at a time per area with an
-  injected area), fake; SITL with `field_fleet_ground.py` (acceptance item 1 returning home, RETURN ALL with
-  two vehicles, LAND ALL during returns with timing bounds, hold above home until cleared); browser check.
-- **Acceptance:** RTH-12, RTH-14 (unit), RTH-15, RTH-16, RTH-17 (payloads), RTH-20, RTH-28, RTH-30, RTH-33,
-  RTH-37, UI-1 to UI-3. Moved: RTH-13, RTH-14 (SITL), RTH-32 and MAV-7 (fixed highest-priority route) to D1;
-  RTH-17 (map) to D3; RTH-25 to C5.
+- **Behaviour changes:** items 21 to 23, and item 32 for task end only: field units' `task.end_action` default becomes
+  return, with a table and golden change and a safety-value log entry in its PR (`stranded.action` is read with today's
+  default, no change); every returning unit's `assign_lanes` carries a fleet `landing` record (lowest slot first); a
+  unit whose link or edge cannot take the task-end return keeps today's land and its card says so; an opt-in protocol v2
+  leader mode for the dashboard and `field_fleet_ground.py` (off by default, no change).
+- **Test plan:** unit (a blocking cancellation does not delay LAND ALL; one landing at a time per area with an injected
+  area), fake; SITL with `field_fleet_ground.py` (acceptance item 1 returning home, RETURN ALL with two vehicles, LAND
+  ALL during returns with timing bounds, hold above home until cleared); mixed fleet: a landing unit waits for
+  lower-slot returns; a v1 link and an edge lacking `on_complete.return_home` land at task end; browser check.
+- **Acceptance:** RTH-12, RTH-14 (unit), RTH-15, RTH-16, RTH-17 (payloads), RTH-19 (task end, field), RTH-20, RTH-28,
+  RTH-30, RTH-33, RTH-37, UI-1 to UI-3. Moved: RTH-13, RTH-14 (SITL), RTH-32 and MAV-7 (fixed highest-priority route) to
+  D1; RTH-17 (map) to D3; RTH-25 to C5.
 
 ### C3: roles, device pairing, TLS
 - **Tier:** opus, xhigh (security). **Depends on:** D3 (merge order; it also needs C2).
@@ -301,7 +313,7 @@ order guarantees. Shared, sectioned files: `tests/param_literal_allowlist.py` (o
 - **Tier:** opus, high. **Depends on:** C2 (and B4). It merges on the fast path, before F1, and edits the fixtures the
   apps read additively only (N-7).
 - **Behaviour changes:** item 36. **Test plan:** unit, replay from snapshots, fake; SITL mixed fleet.
-- **Acceptance:** TASK-1 to TASK-8, TASK-12, FEA-9, FEA-11 (Plan), INV-8, GND-3.
+- **Acceptance:** TASK-1 to TASK-8, TASK-12, RTH-28 (re-task offers), FEA-9, FEA-11 (Plan), INV-8, GND-3.
 
 ### D5: search-speed rule
 - **Tier:** opus, high. **Depends on:** D4, F2 and F3.

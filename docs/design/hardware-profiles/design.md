@@ -65,9 +65,10 @@ FlightRisk is loosely coupled: every rule names a capability, never a model.
     source: never a control, a preflight warning, a calibration request or a confirmation. Operator-facing
     settings are airframe-neutral mission and safety choices (sensing mode, return and land behaviour,
     separation, obstacle tops, the on-find policy) (section 7.5).
-11. **Order: core, then the production adapter, then the edge return machine and ground returns (C1,
-    C2), then tasks (D4), then the field airspace and planning, then roles and the switch in four steps (warn
-    only, bounds and confirmations, field defaults, indoor defaults), then mobile and the on-find flows.** 28 PRs (`tasks.md`).
+11. **Order: core, then the production adapter, then the edge return machine and ground returns (C1, C2), then tasks
+    (D4), then the field airspace and planning, then roles and the switch in four steps (warn only, bounds and
+    confirmations, field defaults, indoor defaults), then mobile, search speed (D5) and the on-find flows.** 28 PRs
+    (`tasks.md`).
 
 ## 2. Scope, environments and assumptions
 
@@ -385,10 +386,11 @@ the protocol command is `return_home`, because the executor already has a `retur
   command is refused with `landing`; each operator land command (LAND ALL, a ground `land`, the local
   land key, Ctrl+C) sends exactly one LAND (spec 6.2: "under external control, one LAND per press").
   The edge never fights the pilot or the autopilot.
-- **The MAVLink adapter never turns a decided landing into a return.** `land_for_reason` maps failsafe
-  reasons to RTL today (`mavlink_fleet.py:1234-1236`); from C1 the state machine decides between return
-  and land, and once land is decided every later call sends LAND only. A queued `wait: false` release
-  that arrives after a land is refused with `landing`.
+- **The MAVLink adapter never turns a decided landing into a return.** `land_for_reason` maps failsafe reasons to RTL
+  today (`mavlink_fleet.py:1234-1236`); from C1 the state machine decides between return and land, and once land is
+  decided every later call sends LAND only. A queued `wait: false` release that arrives after a land is refused with
+  `landing`. Long link loss, low battery and geofence breach are return decisions of the state machine when the unit's
+  link-loss action is return; only land decisions reach the adapter's landing call.
 - **LAND ALL marks, sends, then cancels (N-2).** The ground first sets the `landing` mark on every drone
   (a non-blocking flag that every sender checks before it sends), then sends the land to every drone,
   and only then cancels, asynchronously, the return queue and its pending releases, the escort
@@ -414,9 +416,9 @@ task states (keeping watch, converging, at viewpoint, local search, escorting) c
 
 ### 10.4 Event table (spec 6.2, one row each)
 
-"Field default" and "Indoor default" are the actions from C6 and C7; before them each row keeps today's
-action. Reason codes are those of section 10.5. Every row has a unit test of its default action and of
-each fallback reason (AC-6.1); "SITL" rows also have a scenario.
+"Field default" and "Indoor default" are the actions from C6 and C7, except the task-end return, which is C2's (item
+32); before them each row keeps today's action. Reason codes are those of section 10.5. Every row has a unit test of its
+default action and of each fallback reason (AC-6.1); "SITL" rows also have a scenario.
 
 | # | Spec 6.2 event | Detected by | Field default (C6) | Indoor default (C7) | Fallback reason | SITL |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -449,16 +451,16 @@ each fallback reason (AC-6.1); "SITL" rows also have a scenario.
 | 27 | Escorted subject lost from view | mission | hold, alert, local search | n/a | per drone | yes |
 | 28 | Escorted subject crosses a limit | mission | stop at the limit, keep watch, alert | n/a | then row 27 | yes |
 | 29 | Return makes no progress (H-2, B-2) | progress monitor, horizontal legs only (10.1) | edge-flown: row 13; autopilot-started: show the reason and alert, send nothing except operator commands (row 21) | row 13 | row 13 | yes |
-| 30 | Landing area not cleared | ground clearance, landing order | hold above home until cleared | same | wait bound reached: per 10.8 | yes |
+| 30 | Landing area not cleared | ground clearance, landing order | hold above home until cleared | same | maximum wait or energy bound reached: land at home | yes |
 
 ### 10.5 Fallback reasons (closed list)
 
-`critical_battery`, `battery_cannot_reach_home`, `fault_imu`, `fault_motor`, `fault_positioning`,
-`fault_unclassified`, `way_home_blocked_obstacle`, `way_home_blocked_person`, `no_known_home`,
-`uncertainty_above_bound`, `no_cleared_route`, `cannot_be_commanded`, `operator_land`, `land_all`,
-`on_find_land_all` (spec 6.3), plus `ceiling_breach` (spec 6.2, ceiling row) and `no_return_order`
-(spec 7.4, "if no order works"). An edge that cannot return (an older edge without `return_home`) is not
-landed: it is shown "cannot return (older edge)" and held (M-5).
+`critical_battery`, `battery_cannot_reach_home`, `fault_imu`, `fault_motor`, `fault_positioning`, `fault_unclassified`,
+`way_home_blocked_obstacle`, `way_home_blocked_person`, `no_known_home`, `uncertainty_above_bound`, `no_cleared_route`,
+`cannot_be_commanded`, `operator_land`, `land_all`, `on_find_land_all` (spec 6.3), plus `ceiling_breach` (spec 6.2,
+ceiling row) and `no_return_order` (spec 7.4, "if no order works"). An edge that cannot return (an older edge without
+`return_home`) is not landed: it is shown "cannot return (older edge)" and held (M-5) on RETURN ALL and Return; at task
+end such a unit lands as today (row 1).
 
 ### 10.6 Energy and the return threshold (H-8)
 
@@ -504,12 +506,15 @@ landed: it is shown "cannot return (older edge)" and held (M-5).
   highest priority; the others yield to it. Conflicts then go lowest battery margin first, then
   shortest route; waiting drones get `return_home {wait: true, max_wait_s}` and hold at their own slot,
   side by side.
-- **Landing clearance:** a returning drone holds above home (`rth_above_home`) until the ground clears
-  its landing; in a shared landing area one drone at a time. Without the ground, each drone uses its
-  precomputed landing order (10.9). Releases and landing clearances are never gated by a confirmation
-  (7.3(6)). The clearance is the authority's `return_home {wait: false}` received in `rth_above_home`; a
-  release is consumed only in `rth_waiting` or `rth_above_home` and is never latched. Until D1 makes landing
-  areas, the ground treats the fleet as one landing area.
+- **Landing clearance:** a returning drone holds above home (`rth_above_home`) until the ground clears its landing; in a
+  shared landing area one drone at a time. Without the ground, each drone uses its precomputed landing order (10.9).
+  Releases and landing clearances are never gated by a confirmation (7.3(6)). The clearance is the authority's
+  `return_home {wait: false}` received in `rth_above_home`; a release is consumed only in `rth_waiting` or
+  `rth_above_home` and is never latched. Until D1 makes landing areas, the ground treats the fleet as one landing area
+  and sends every returning unit a `landing` record, lowest slot first, which C1 writes into the autopilot's landing
+  delay (compressed to fit ArduPilot's 60 s cap for up to 8 units; home separation stays D1's). The hold above home ends
+  at the latest after 120 s plus the drone's place × the landing interval, or when the battery reaches
+  `battery.return_floor_pct` (or its reading is missing or stale), and the drone then lands at home.
 - **Termination (M-10):** every wait is bounded by the energy model: the bound is the moment the drone
   would drop below critical + reserve + energy to home. A waiting or holding drone is released before its
   bound; if two bounds cannot both be met, the drone with the earlier bound goes first, and the drone
@@ -1326,28 +1331,30 @@ every "from <PR>" tag in `parameters.md` matches an item below naming that PR an
   from #212, `tests/test_orphan_retask.py`, and the lost-drone tests of the coordinator suites), named in
   its description.
 - **D3:** none for existing flows (field missions become plannable on the dashboard).
-- **C1:** 19. While a drone lands, the edge refuses `return_home`, `escort_setpoint`, `assign_lanes`,
-  `start_at`, `resume`, `nudge`, manual moves and `set_speed` with `landing` (today `assign_lanes` and the
-  fenced commands already are; the rest are new). 20. The MAVLink adapter never turns a decided landing
-  into a return. 43. The edge refuses a takeoff or nacks an assignment with `straight_line_home` when
-  the straight line home of its autopilot's return leaves the assignment's zone and corridor and the
-  action cannot be set to land; it consumes the landing order of `assign_lanes.landing` for the
-  autopilot's landing delay; it refuses legs into known no-entry areas (moved from D1, N-7). Before D1 no
-  ground sends `corridor`: the straight-line check runs only for an assignment that carries `corridor`;
-  one without it is accepted and logged as `edge_rth_corridor_check_skipped` (drone, flight, `plan_id`,
-  `plan_seq`, `cmd_id`), unless the flight (takeoff to disarm) has already accepted a corridor, when it is
-  nacked with `straight_line_home` (`invalid` to a ground that has not sent `describe_unit`) and the
-  current plan is kept. The landing-order and no-entry parts apply only when `landing` and `no_entry` are
-  present.
-- **C2:** 21. RETURN ALL and per-drone Return exist; LAND ALL moves apart from RETURN ALL. 22. LAND ALL
-  marks every drone landing, sends the land, then cancels every other ground sender asynchronously. 23. A
-  returning drone holds above home until the ground clears its landing. C2 also reads `task.end_action`
-  and `stranded.action` (N-6). 32. Task end only: the default of `task.end_action` for field units becomes
-  return in C2, so a mission returns home when it is complete (owner decision, November 2026); the table
-  and the golden file change in that PR with a safety-value log entry, and `stranded.action` keeps today's
-  default (land) until C6. C2 also adds an opt-in protocol v2 leader mode to the dashboard and
-  `field_fleet_ground.py` (off by default, no change), because `return_home` exists only on v2 links.
-  Assertions: `tests/test_phase_a_no_new_senders.py:232-233` only if no earlier phase has replaced it.
+- **C1:** 19. While a drone lands, the edge refuses `return_home`, `escort_setpoint`, `assign_lanes`, `start_at`,
+  `resume`, `nudge`, manual moves and `set_speed` with `landing` (today `assign_lanes` and the fenced commands already
+  are; the rest are new). 20. The MAVLink adapter never turns a decided landing into a return. 43. The edge refuses a
+  takeoff or nacks an assignment with `straight_line_home` when the straight line home of its autopilot's return leaves
+  the assignment's zone and corridor and the action cannot be set to land; it advertises `assign_lanes.landing` and
+  consumes the landing order of that record, which C2 sends on the fast path, for the autopilot's landing delay
+  (compressed to fit ArduPilot's 60 s cap for up to 8 units; home separation stays D1's); it refuses legs into known
+  no-entry areas (moved from D1, N-7). Before D1 no ground sends `corridor`: the straight-line check runs only for an
+  assignment that carries `corridor`; one without it is accepted and logged as `edge_rth_corridor_check_skipped` (drone,
+  flight, `plan_id`, `plan_seq`, `cmd_id`), unless the flight took off with, or has since accepted, an assignment
+  carrying `corridor`, when it counts as failing the straight-line check: the edge sets its link-loss action to land and
+  nacks with `straight_line_home` (`invalid` to a ground that has not sent `describe_unit`) only when that fails,
+  keeping the current plan. The landing-order and no-entry parts apply only when `landing` and `no_entry` are present.
+- **C2:** 21. RETURN ALL and per-drone Return exist; LAND ALL moves apart from RETURN ALL. 22. LAND ALL marks every
+  drone landing, sends the land, then cancels every other ground sender asynchronously. 23. A returning drone holds
+  above home until the ground clears its landing. C2 makes the field default of `task.end_action` return (item 32, task
+  end only) and sends a fleet landing order; `stranded.action` keeps land (N-6). 32. Task end only: the default of
+  `task.end_action` for field units becomes return in C2, so a mission returns home when it is complete (owner decision,
+  November 2026); the table and the golden file change in that PR with a safety-value log entry, and `stranded.action`
+  keeps today's default (land) until C6. On a v1 link, or with an edge whose `accepts` lacks `on_complete.return_home`
+  or `landing`, task end keeps today's land and the card says so. C2's PR also moves the row's tag in `parameters.md`
+  from "from C6" to "from C2" for the generic profile. C2 also adds an opt-in protocol v2 leader mode to the dashboard
+  and `field_fleet_ground.py` (off by default, no change), because `return_home` exists only on v2 links. Assertions:
+  `tests/test_phase_a_no_new_senders.py:232-233` only if no earlier phase has replaced it.
 - **C3:** 24. The operator key works only on loopback; elsewhere it gives observer-phone rights (land only); supervisor and
   observer devices pair for tokens; supervisor tokens need TLS. 44. Dashboard observers lose LAND ALL and
   Land unless their token has the land right (R-3); cleartext observer sessions receive no imagery (R-4).
@@ -1419,7 +1426,7 @@ every "from <PR>" tag in `parameters.md` matches an item below naming that PR an
 | M-2 matching | Banded ranking, input snapshot, task order, no reassignment of running tasks | 14.3 |
 | M-3 escort | Hand-off before the return threshold; "in view" defined; allowed zones; deconfliction; ground-crash behaviour documented | 15.5 |
 | M-4 multi-target | Per-target thresholds, ambiguous state, locked attribution, false-alarm note; no edge change | 15.1 |
-| M-5 RETURN ALL availability | `return_home` without wait from any ground; older edges held, never landed | 10.8, 18 |
+| M-5 RETURN ALL availability | `return_home` without wait from any ground; older edges held on RETURN ALL and Return, never landed; task end lands them as today | 10.8, 18 |
 | M-6 search speed | Footprint for a level camera, initial rate, `set_speed` | 14.4 |
 | M-7 protocol shapes | `zone` exists; point objects; re-task window ≥ 1 s | 18 |
 | M-8 C4 blast radius | Split into C4 to C7; warn-only first; meaning of the old variable kept with warnings; field and indoor defaults separate | 23, 27; `tasks.md` |
@@ -1444,7 +1451,7 @@ every "from <PR>" tag in `parameters.md` matches an item below naming that PR an
 | N-4 #212 behaviour | Idle-controller countdown kept as the stranded event with `stranded.lost_idle_s`; Resume task refused once a lane was confirmed for another drone; Resume search stays refused | 12, row 12; D2; LOST-2, LOST-8 |
 | N-5 standby takeover gates releases | Releases and landing clearances never gated | 7.3(6), 10.8; C5; CONF-5 |
 | N-6 task-end and stranded actions | Rows `task.end_action`, `stranded.action`, `return.field_method`; C2 reads them and makes the field task-end default return (item 32); C6 switches MAVLink returns to edge-guided (item 45) | 10.4, 27; C2, C6, C7 |
-| N-7 ownership and dependencies | Edge-side items moved from D1 to C1; D1 may edit `field_fleet_ground.py`; MAV-6 and MAV-7 split across B4, C1, C2, D4; B2 and B4 first owners of `rth/home.py`, `rth/uncertainty.py`, `rth/methods.py`; C4 and C5 edit `params/*`; #213 before A1 and B1; D4 after F2 and F3 | `tasks.md` |
+| N-7 ownership and dependencies | Edge-side items moved from D1 to C1; D1 may edit `field_fleet_ground.py`; MAV-6 split across B4, C1, C2, D4 and MAV-7 across B4, C1, D1; B2 and B4 first owners of `rth/home.py`, `rth/uncertainty.py`, `rth/methods.py`; C4 and C5 edit `params/*`; #213 before A1 and B1; D4 after F2 and F3 | `tasks.md` |
 | N-8 PAR-1, PAR-6, K-3 | Counts fixed; PAR-6 points to `parameters.md` 1.1; K-3 tagged "from C6" | `requirements.md`, `parameters.md` |
 | N-9 `MAX_ROSTER` | Fleets and SITL scenarios capped at eight | 18, 21; D-B15 |
 | N-10 R-5 too broad | Overrides honoured only on test-adapter and verified simulated units; safety-switch off values confirmed | 7.5, 7.3(3); FACT-3, FACT-4 |
