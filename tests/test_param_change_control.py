@@ -172,10 +172,9 @@ def test_the_allowed_leaf_imports_hold_no_registry_or_catalogue_value():
     assert not [n for n in ast.walk(package) if isinstance(n, (ast.Import, ast.ImportFrom))]
 
 
-#: CMP-1 scope (plan step S3, risk R3): the cap on which modules outside params and hardware may import them at
-#: run time. A module must be named both in ``tests/param_adopters.py`` and here; this set alone lets nothing
-#: import. Exactly the ``flightrisk/*.py`` files of the tasks.md ownership rows whose first owner is A3, new
-#: files included. A4 and A5 widen this set in their own PRs, when they adopt; every other module stays forbidden.
+#: CMP-1 scope (plan step S3, risk R3): the only modules outside params and hardware that may import them at
+#: run time. Exactly the files PR A3 owns in tasks.md, plus the plan's new ``edge_resolution.py``. A4 and A5
+#: widen this set in their own PRs, when they adopt; every other module stays forbidden.
 A3_ADOPTED = frozenset({
     "flightrisk/edge_device.py",
     "flightrisk/edge.py",
@@ -199,18 +198,10 @@ A3_ADOPTED = frozenset({
     "flightrisk/drone/autopilot.py",
     "flightrisk/drone/mavsdk_link.py",
     "flightrisk/drone/autopilot_fence.py",
-    "flightrisk/drone/tello_edge.py",
-    "flightrisk/edge_params.py",
-    "flightrisk/drone/obstacle_camera.py",
-    "flightrisk/drone/template_backend.py",
-    "flightrisk/obs_events.py",
+    "flightrisk/edge_resolution.py",
 })
 #: New files A3 creates; they need not exist before the PR that adds them.
-A3_NEW_FILES = frozenset({
-    "flightrisk/drone/autopilot_fence.py",
-    "flightrisk/drone/tello_edge.py",
-    "flightrisk/edge_params.py",
-})
+A3_NEW_FILES = frozenset({"flightrisk/drone/autopilot_fence.py", "flightrisk/edge_resolution.py"})
 TASKS = ROOT / "docs" / "design" / "hardware-profiles" / "tasks.md"
 
 
@@ -229,10 +220,10 @@ def _a3_ownership_list() -> set[str]:
 
 
 def test_adopted_set_equals_the_a3_ownership_list():
-    """The allowance cannot quietly grow: it is exactly the ``flightrisk/*.py`` files of tasks.md's A3 rows."""
+    """The allowance cannot quietly grow: it is exactly tasks.md's A3 rows plus the plan's edge_resolution.py."""
     listed = _a3_ownership_list()
-    assert len([p for p in listed if p.startswith("flightrisk/drone/") and p not in A3_NEW_FILES]) == 17
-    assert A3_ADOPTED == listed
+    assert len([p for p in listed if p.startswith("flightrisk/drone/") and p not in A3_NEW_FILES]) == 15
+    assert A3_ADOPTED == listed | {"flightrisk/edge_resolution.py"}
     for rel in A3_ADOPTED - A3_NEW_FILES:
         assert (ROOT / rel).is_file(), rel
 

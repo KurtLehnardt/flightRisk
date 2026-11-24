@@ -41,14 +41,15 @@ A1 ─> A2 ─┬─> A3 ─┬─> B1 ─┐
 
 ### Fast path (owner decision, November 2026)
 
-The fast path to a drone-agnostic, MAVLink-first FlightRisk is: X0, XCP, XCa and XCb, then A3 (A3a to A3h)
-in parallel with A4 (A4a to A4f) and XL, then A5 (A5a to A5c) in parallel with B1 (B1a, B1b), then B2, B3
-and B4 (B4a to B4f), then D4 (D4a to D4c), pulled ahead of D1 to D3, C and F. Every other phase in this
-file is a follow-up after the fast path's acceptance and keeps its order. D4's edits to
-`tests/fixtures/mobile_contract/*` are additive only, so the current Android and iOS contract tests pass
-unchanged; an edit that cannot be additive moves to F1. Without D1 to D3, D4 plans field fleets through
-`scripts/field_fleet_ground.py`. Each A, B and D phase is split into stacked pull requests of about 1,500
-changed lines or fewer with one risk area each; `plan/PLAN.md` of the planning pass lists them.
+The fast path to a drone-agnostic, MAVLink-first FlightRisk is: X0, XCP, XCa and XCb, then A3 in parallel with
+A4 (A4a to A4f) and XL, then A5 (A5a to A5c) in parallel with B1 (B1a, B1b), then B2, B3 and B4 (B4a to B4f),
+then D4 (D4a to D4c), pulled ahead of D1 to D3, C and F. A3 is delivered as the A3.x pull requests that began
+with #230. Every other phase in this file is a follow-up after the fast path's acceptance and keeps its order.
+D4's edits to `tests/fixtures/mobile_contract/*` are additive only, so the current Android and iOS contract
+tests pass unchanged; an edit that cannot be additive moves to F1. Without D1 to D3, D4 plans field fleets
+through `scripts/field_fleet_ground.py`. Each A, B and D phase is split into stacked pull requests of about
+1,500 changed lines or fewer with one risk area each; `plan/PLAN.md` of the planning pass lists them, except
+A3's, which are the A3.x pull requests.
 SITL gates run natively on the ground-station laptop (macOS) only (ArduCopter 4.6.3 and 4.7.3, PX4 v1.17.0
 SIH); the edge-2 laptop (Windows) runs only the unit suite, and MAVLink phases may merge without a Windows
 run.
@@ -68,8 +69,8 @@ order guarantees. Shared, sectioned files: `tests/param_literal_allowlist.py` (o
 
 | File or area | First owner | Later editors |
 | --- | --- | --- |
-| `flightrisk/params/*`, `flightrisk/hardware/catalogue.py`, `scripts/make_param_golden.py`, `tests/golden/flight_params.json`, `.github/CODEOWNERS`, `docs/flight-parameters.md`, `docs/hardware-catalogue.md`, `safety-value-changes.md` | A1 | `flightrisk/params/legacy.py`: XL; every editor of the table regenerates `flightrisk/params/today_ranges.py` (the SEAM-10 test forces it), and the first phase that adds a profile updates `flightrisk/params/docs.py`; resolver: C4 (warnings), C5 (bounds, precedence, confirmations); table and golden file: B4, A3d (item 53 only: row 8, `envelope.max_altitude_cm` of generic_multirotor), D1, D2, C2, C5, C6, C7, D5, E1 to E4, each with a log entry (N-7); XCa (`catalogue.py`, `AdapterSpec` fields only); XCb (`params/docs.py`, `params/today.py`, `params/today_ranges.py`, `scripts/make_param_golden.py`, the `--today-module` output) |
-| `flightrisk/hardware/{inventory,features,frames}.py`, `flightrisk/params/report.py`, `flightrisk/mission/model.py` (types), `flightrisk/drone/rth/__init__.py` (protocols), `flightrisk/fleet_protocol/*` (every wire shape), `flightrisk/obs_comm.py`, `flightrisk/drone/controller.py` (`CameraSource`), `flightrisk/drone/registry.py`, `flightrisk/drone/backends.py`, `flightrisk/vision/profiles.py` (fields), `tests/fixtures/mobile_contract/catalogue.json` | A2 | `fleet_protocol/*`: A3 adds `describe_unit` to the edge's `validate_ground_to_edge`, and C1 adds the return commands there; no later PR changes a wire shape; A3d: `controller.py` (the `max_altitude_m` annotation and default handling for item 53 only); XCa: `controller.py` (new `Capability` members and their inference only), `registry.py` (the `edge_factory` hook, `for_model`, `edge_kinds`) and `features.py` |
+| `flightrisk/params/*`, `flightrisk/hardware/catalogue.py`, `scripts/make_param_golden.py`, `tests/golden/flight_params.json`, `.github/CODEOWNERS`, `docs/flight-parameters.md`, `docs/hardware-catalogue.md`, `safety-value-changes.md` | A1 | `flightrisk/params/legacy.py`: XL; every editor of the table regenerates `flightrisk/params/today_ranges.py` (the SEAM-10 test forces it), and the first phase that adds a profile updates `flightrisk/params/docs.py`; resolver: C4 (warnings), C5 (bounds, precedence, confirmations); table and golden file: B4, A3 (item 53 only: row 8, `envelope.max_altitude_cm` of generic_multirotor), D1, D2, C2, C5, C6, C7, D5, E1 to E4, each with a log entry (N-7); XCa (`catalogue.py`, `AdapterSpec` fields only); XCb (`params/docs.py`, `scripts/make_param_golden.py`, the `--today-module` output); A3 (`params/today.py`, `params/today_ranges.py`) |
+| `flightrisk/hardware/{inventory,features,frames}.py`, `flightrisk/params/report.py`, `flightrisk/mission/model.py` (types), `flightrisk/drone/rth/__init__.py` (protocols), `flightrisk/fleet_protocol/*` (every wire shape), `flightrisk/obs_comm.py`, `flightrisk/drone/controller.py` (`CameraSource`), `flightrisk/drone/registry.py`, `flightrisk/drone/backends.py`, `flightrisk/vision/profiles.py` (fields), `tests/fixtures/mobile_contract/catalogue.json` | A2 | `fleet_protocol/*`: A3 adds `describe_unit` to the edge's `validate_ground_to_edge`, and C1 adds the return commands there; no later PR changes a wire shape; A3: `controller.py` (the `max_altitude_m` annotation and default handling for item 53 only); XCa: `controller.py` (new `Capability` members and their inference only), `registry.py` (the `edge_factory` hook, `for_model`, `edge_kinds`) and `features.py` |
 | `flightrisk/edge_device.py`, `flightrisk/edge.py`, `flightrisk/edge_profiles.py`, `flightrisk/edge_uplink.py`, `flightrisk/fleet_authority.py`, `flightrisk/fleet_authority_types.py`, `flightrisk/drone/{safety,obstacle_sensor,obstacle,flight_guards,temp_preflight,tello,tello_bound,fake,lane_flight,lane_executor,lane_monitor,lane_avoid}.py`, `tests/test_telemetry_field_cap.py` | A3 | C1, D5 (`det_hz`, `set_speed`), E4 (escort setpoints) |
 | `flightrisk/drone/{mavlink_fleet,autopilot,mavsdk_link}.py`, new `flightrisk/drone/autopilot_fence.py` | A3 (options from params) | B2, B3, B4, C1 |
 | `flightrisk/drone/rth/home.py`, `flightrisk/drone/rth/uncertainty.py` | B2 | C1 |
@@ -93,11 +94,8 @@ order guarantees. Shared, sectioned files: `tests/param_literal_allowlist.py` (o
 | `tests/test_tello_coupling.py`; `tests/tello_coupling_baseline.py` (one section per owning phase); `tests/param_adopters.py` (one section per phase) | XCP | every phase deletes its own baseline entries and adds its own adopters (shared, sectioned files) |
 | `flightrisk/drone/{lane_reflight,lane_manual,lane_steps,lane_plan}.py` | XCb | C5 (XR-02, manual floor and band rows) |
 | `flightrisk/params/legacy.py`, `flightrisk/drone/mavlink.py` (lines 116-118 only), `flightrisk/drone/fleet.py` | XL | none |
-| `flightrisk/drone/backends.py` | A2 | A3 (A3a: the three edge registrations), A5 (A5b: one probe-hook entry per adapter) |
-| `flightrisk/drone/tello_edge.py` (new) | A3 | C1 |
+| `flightrisk/drone/backends.py` | A2 | A3 (the three edge registrations), A5 (A5b: one probe-hook entry per adapter) |
 | `flightrisk/drone/tello_link.py`, `flightrisk/drone/tello_probe.py` (new) | A5 | none |
-| `flightrisk/edge_params.py` (new) | A3 | C1, C4, C5 |
-| `flightrisk/drone/obstacle_camera.py`, `flightrisk/drone/template_backend.py`, `flightrisk/obs_events.py`, `docs/fleet-protocol-v2.md` | A3 | C1, C2 (protocol doc only) |
 | `flightrisk/ground_params.py`, `flightrisk/dashboard/unit_descriptions.py`, `flightrisk/dashboard/unit_cards.py` (new), `flightrisk/recorder.py`, `flightrisk/fleet_ground_link.py` | A4 | F1 (cards events, DSH-4), C2 |
 | `flightrisk/hardware/inventory.py` | A2 | A4 (A4c, `implicit_inventory` only, and only with item 49) |
 | `scripts/export_mobile_contract_fixtures.py` | D4 (fast path, additive cases only) | F1 |
@@ -126,8 +124,8 @@ order guarantees. Shared, sectioned files: `tests/param_literal_allowlist.py` (o
 
 ### A3: edge adoption
 - **Tier:** opus, xhigh. **Depends on:** A2. Parallel with A4.
-- **Behaviour changes:** section 27 items 47 (A3 adopters refuse the pinned combinations at their own start) and 53
-  (A3d). **Test plan:** unit, fake; existing edge suites unchanged except the named item 47 and 53 assertions; PROTO-6.
+- **Behaviour changes:** section 27 items 47 (A3 adopters refuse the pinned combinations at their own start) and 53.
+  **Test plan:** unit, fake; existing edge suites unchanged except the named item 47 and 53 assertions; PROTO-6.
 - **Acceptance:** PAR-8, RES-11 (edge), CAP-4, CAP-6 (fake part), FACT-3, EDGE-1 to EDGE-7, FEA-7, FEA-8
   (edge), FEA-10, ROLE-4, SEAM-1 (wrapping), SEAM-3, SEAM-4, SEAM-7, SEAM-8, PROTO-2 (edge), PROTO-4,
   PROTO-6, CMP-1.

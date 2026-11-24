@@ -1202,8 +1202,8 @@ every "from <PR>" tag in `parameters.md` matches an item below naming that PR an
   FlightRisk geofence is horizontal and does not bound height.
   Every consumer of the declared maximum altitude must handle 'no limit' without crashing and without falling back to a lower or default cap.
   `MavlinkFleetDrone` explicitly declares no limit (None), and the `DroneCapabilities` default of 120 m
-  (`flightrisk/drone/controller.py`) does not apply to it. A3d also corrects the stale "5 m" note at
-  `scripts/make_param_golden.py:178`. Phase: A3d.
+  (`flightrisk/drone/controller.py`) does not apply to it. A3 also corrects the stale "5 m" note at
+  `scripts/make_param_golden.py:178`. Phase: A3.
   Assertions: the tests that pin that declaration or row 8's 12000 cm for `generic_multirotor`, named in its
   description.
 - **A4:** 1. A fleet mixing indoor and field units is refused at Plan (nitpick 12).
