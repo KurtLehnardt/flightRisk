@@ -9,7 +9,7 @@ Kickoff is commit `798f21a`, tagged `hackathon/kickoff`. Before it, the reposito
 ## Hardware and roles
 
 - Two Tello EDU drones. Drone 1 is controlled from the ground-station laptop and drone 2 from the Windows laptop, one edge process per host, so the two video streams never collide on one port (`docs/fleet-setup.md`).
-- Mac: ground station and edge-1. It drives the projector with the dashboard and the deck (ASSUMPTION: an HDMI projector is available; organizer question).
+- Ground-station laptop: ground station and edge-1. It drives the projector with the dashboard and the deck (ASSUMPTION: an HDMI projector is available; organizer question).
 - Windows laptop: edge-2.
 - Station path: one 2.4 GHz router or phone hotspot that allows client-to-client traffic.
 - AP path: one USB-C Gigabit Ethernet adapter for the ground-station laptop, one for the Windows laptop if it has no RJ45 port, and one Cat5e or Cat6 patch cable.
@@ -31,7 +31,7 @@ Both paths:
 
 The drones are already on the router (one-time `ap` step in `docs/fleet-setup.md`). The IPs below are that guide's examples; use the ones discovery prints.
 
-Mac, hardware check report and settings:
+Ground-station laptop, hardware check report and settings:
 
 ```
 venv/bin/python scripts/tello_hw_check.py --discover 192.168.1.0/24
@@ -54,11 +54,11 @@ $env:FLIGHTRISK_TELLO_HOST = "192.168.1.51"
 
 ### Path 2: AP mode (`FLIGHTRISK_FLEET_NET=ap`)
 
-The static addresses (Mac 10.42.0.1, Windows 10.42.0.2, no gateway) and firewall rules are set once, as in `docs/fleet-setup.md` Path 2 steps 1 to 3. Each laptop joins its own drone's `TELLO-XXXXXX` network.
+The static addresses (ground-station laptop 10.42.0.1, Windows 10.42.0.2, no gateway) and firewall rules are set once, as in `docs/fleet-setup.md` Path 2 steps 1 to 3. Each laptop joins its own drone's `TELLO-XXXXXX` network.
 
 Cable link check: run `venv/bin/python scripts/check_fleet_link.py --role server` on the ground-station laptop, then `venv\Scripts\python.exe scripts\check_fleet_link.py --role client --peer 10.42.0.1` on Windows. Both must print `PASS`. Stop the server with Ctrl-C before launching, because the ground station needs port 9000.
 
-Mac, hardware check report and settings:
+Ground-station laptop, hardware check report and settings:
 
 ```
 venv/bin/python scripts/tello_hw_check.py --ap-mode-check
@@ -76,7 +76,7 @@ $env:FLIGHTRISK_FLEET_NET = "ap"
 
 ### Launch (both paths, three commands)
 
-Start the ground station first. Mac, one terminal each:
+Start the ground station first. Ground-station laptop, one terminal each:
 
 ```
 scripts/demo_ground.sh
@@ -113,7 +113,7 @@ Figures: recall 0.000, 0.142 and 0.602, precision 0.832, 32 px on 108 people (`d
 ### 0:35–2:35 · Show it working
 
 - 0:35 Say: "Show it working. Before kickoff, commit 798f21a, this repository had a single-drone pipeline and 676 tests. This week I added the benchmark, the fine-tune, a coverage planner and the fleet. Every new file is listed in docs/built-this-week.md."
-- 0:50 Do: switch to the dashboard. The drone status cards along the top show drone-1 (Mac) and drone-2 (Windows), each CONNECTED with its battery; clock offset and round-trip time are under "Link timing" in the sidebar's Advanced section. Open the Mission section in the right sidebar and press **Plan search**. Say: "The coordinator splits the floor into two zones, one per drone, at two altitude slots, 100 and 130 centimetres, so they share neither a zone nor an altitude."
+- 0:50 Do: switch to the dashboard. The drone status cards along the top show drone-1 (ground-station laptop) and drone-2 (Windows), each CONNECTED with its battery; clock offset and round-trip time are under "Link timing" in the sidebar's Advanced section. Open the Mission section in the right sidebar and press **Plan search**. Say: "The coordinator splits the floor into two zones, one per drone, at two altitude slots, 100 and 130 centimetres, so they share neither a zone nor an altitude."
 - 1:05 Do: press **Start search** and confirm the prompt for two drones. Say: "Each drone's clock is synced to the ground over the WebSocket, eight ping rounds each, and both get one scheduled start time two seconds out. The skew column shows how far apart they actually started."
 - 1:20 Do: let the lanes run. Each lane is now flown in sensed 50 centimetre steps, so a zone takes about 70 seconds instead of about 25 (the design's estimate: about 30 cm per second effective, including six turns; it is unmeasured on the drones, so time it in rehearsal 1 and adjust the later beats to what you see). The presenter walks to a spot at least 1.5 m beyond the far edge of the area, outside the geofence and never in a flight path, where a drone camera can see them. Say: "Each laptop stands in for a computer on board. Detections from both drones go onto one map, tagged with the drone that saw them, and pins within 80 centimetres of each other merge."
 - 1:35 Do (optional obstacle beat, about 20 seconds; skip it if the clock is tight): point at drone-1's card, which shows a SENSE badge such as `SENSE ok 220 ms`. Say: "Before every 50 centimetre step, each drone stops, looks with a depth model, and only then moves. If something is in the way it stops, skips the rest of that lane, and tells the ground." On the live Tello path the beat needs a real obstacle: a plant or a box placed in drone-1's first lane about 250 cm from its start, set up in the rehearsal and checked for the stop distance (hardware item H6 in `docs/obstacle-sensing.md`; the depth threshold has not been calibrated on the Tello camera yet). The dashboard shows the banner "OBSTACLE drone-1: lane 0 stopped at (0, 250) cm, 150 cm not searched", the NOT SEARCHED box lists the segment, and the map draws it as a red dashed line. Once drone-1 has finished its other lanes and drone-2 has finished its own, the segment is offered once to drone-2, and the banners and the box say who re-flies it. Until then the box says it is waiting. With a fake edge, the same beat is set up without any object (see the fake fallback in rung 2).

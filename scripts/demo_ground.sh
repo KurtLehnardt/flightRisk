@@ -7,7 +7,7 @@
 #
 # The edge WebSocket binds FLIGHTRISK_EDGE_HOST (derived by scripts/fleet_env.sh; in ap mode
 # the list "127.0.0.1,10.42.0.1", loopback plus the wired link) and needs FLIGHTRISK_EDGE_TOKEN. The dashboard itself stays on 127.0.0.1: open
-# http://127.0.0.1:5555 in a browser on this Mac. The demo runs appearance-only, writes
+# http://127.0.0.1:5555 in a browser on this machine. The demo runs appearance-only, writes
 # no match snapshots and starts no reasoning model.
 #
 # Optional: FLIGHTRISK_FLEET_DRONES (default drone-1,drone-2; these must match the drone

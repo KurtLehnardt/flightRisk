@@ -147,7 +147,7 @@ $env:FLIGHTRISK_TELLO_HOST = "192.168.1.51"
 . .\scripts\fleet_env.ps1
 ```
 
-The script sets `FLIGHTRISK_EDGE_HOST` to the ground-station laptop LAN IP (the ground station binds it) and `FLIGHTRISK_EDGE_WS` to `ws://<mac lan ip>:9000` (the edge connects to it). Allow the macOS firewall prompt for Python on first run, or see the firewall note in Path 2.
+The script sets `FLIGHTRISK_EDGE_HOST` to the ground-station laptop LAN IP (the ground station binds it) and `FLIGHTRISK_EDGE_WS` to `ws://<ground-station LAN IP>:9000` (the edge connects to it). Allow the macOS firewall prompt for Python on first run, or see the firewall note in Path 2.
 
 Continue at "Launch" below.
 
@@ -167,7 +167,7 @@ Each laptop joins one Tello's own Wi-Fi, so that Wi-Fi radio is busy and cannot 
 | Item | Value |
 |---|---|
 | Subnet | 10.42.0.0/24, static, no gateway, no DNS |
-| Mac (ground station, edge-1) | 10.42.0.1 |
+| Ground-station laptop, macOS (ground station, edge-1) | 10.42.0.1 |
 | Windows (edge-2) | 10.42.0.2 |
 | Ground WebSocket | binds `127.0.0.1` and `10.42.0.1`; edge-1 on the ground-station laptop uses `ws://127.0.0.1:9000`, edge-2 on Windows uses `ws://10.42.0.1:9000` |
 | Tello address on both laptops | 192.168.10.1 (each laptop sees only its own drone) |
@@ -298,7 +298,7 @@ Status: this path is UNVERIFIED on our hardware. Mac to Windows IP over Thunderb
 | Item | Value |
 |---|---|
 | Subnet | 10.42.0.0/24, static, no gateway, no DNS |
-| Mac (ground station, edge-1) | 10.42.0.1 |
+| Ground-station laptop, macOS (ground station, edge-1) | 10.42.0.1 |
 | Windows (edge-2) | 10.42.0.2 |
 | Ground WebSocket | binds `127.0.0.1` and `10.42.0.1`; edge-1 on the ground-station laptop uses `ws://127.0.0.1:9000`, edge-2 on Windows uses `ws://10.42.0.1:9000` |
 | Tello address on both laptops | 192.168.10.1 over Wi-Fi |
@@ -647,7 +647,7 @@ On Windows set the same variables with `OTEL_ENDPOINT=http://10.42.0.1:4317` and
 | `FLIGHTRISK_FLEET_NET` | `station` | `ap` |
 | `FLIGHTRISK_TELLO_HOST` | discovered drone IP, set by you | 192.168.10.1 |
 | `FLIGHTRISK_EDGE_HOST` | ground-station laptop LAN IP | `127.0.0.1,10.42.0.1` |
-| `FLIGHTRISK_EDGE_WS` | `ws://<mac lan ip>:9000` | `ws://10.42.0.1:9000`, or `ws://127.0.0.1:9000` when `FLIGHTRISK_GROUND_LOCAL=1` (Mac) |
+| `FLIGHTRISK_EDGE_WS` | `ws://<ground-station LAN IP>:9000` | `ws://10.42.0.1:9000`, or `ws://127.0.0.1:9000` when `FLIGHTRISK_GROUND_LOCAL=1` (ground-station laptop) |
 | `FLIGHTRISK_GROUND_LOCAL` | ignored | exported as `1` on the ground-station laptop (ground station and edge-1), unset on Windows |
 | `FLIGHTRISK_EDGE_TOKEN` | required, same on both | required, same on both |
 | Tello ports | UDP 8889 commands, 8890 state, 11111 video | same |

@@ -91,7 +91,7 @@ Check that the collector is on the cable and not on Wi-Fi:
 ```bash
 lsof -nP -iTCP:4317 -sTCP:LISTEN   # expect 10.42.0.1:4317
 nc -z -G 2 10.42.0.1 4317          # succeeds
-nc -z -G 2 <Mac Wi-Fi IP> 4317     # must fail
+nc -z -G 2 <ground-station Wi-Fi IP> 4317     # must fail
 ```
 
 Never use `OTLP_BIND=0.0.0.0`. Without `OTLP_BIND` the ports stay on `127.0.0.1`.
@@ -106,7 +106,7 @@ by some other means.
 
 Each process names its node with the standard `OTEL_RESOURCE_ATTRIBUTES` variable.
 
-Mac (ground station; use `http://127.0.0.1:4317` if the collector is on loopback only):
+Ground-station laptop (ground station; use `http://127.0.0.1:4317` if the collector is on loopback only):
 
 ```bash
 FLIGHTRISK_OTEL_ENABLED=true OTEL_EXPORTER=otlp-grpc OTEL_ENDPOINT=http://10.42.0.1:4317 \
