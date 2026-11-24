@@ -407,6 +407,9 @@ class LanePlanMixin:
                 lanes_received,
                 nack_fields={
                     "geofence_cm": self.envelope.geofence_cm,
+                    "effective_geofence_cm": round(
+                        max(0.0, self.envelope.geofence_cm - self.envelope.fence_margin_cm), 1
+                    ),
                     "x_cm": round(outside[0], 1),
                     "y_cm": round(outside[1], 1),
                     "rel_x_cm": round(start_pose.x_cm, 1),

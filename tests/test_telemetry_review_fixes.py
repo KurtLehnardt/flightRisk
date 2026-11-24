@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -300,14 +301,27 @@ def test_process_exit_with_a_black_hole_collector_is_bounded_by_the_default_budg
         print("READY", flush=True)
         """
     )
+    watchdog = None
+    proc = None
     try:
         proc = subprocess.Popen([sys.executable, "-c", code], cwd=ROOT, env=env, stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL, text=True)
+        # Kill the child if it stalls, so readline() and wait() fail instead of hanging.
+        watchdog = threading.Timer(120, proc.kill)
+        watchdog.daemon = True
+        watchdog.start()
         assert proc.stdout.readline().strip() == "READY"
         start = time.monotonic()
         proc.wait(timeout=60)
         exit_s = time.monotonic() - start
     finally:
+        if watchdog is not None:
+            watchdog.cancel()
+        if proc is not None:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(5)
+            proc.stdout.close()
         blackhole.close()
     assert proc.returncode == 0
     # The default budget is 3 s; allow for interpreter teardown, but the SDK's
