@@ -24,6 +24,8 @@ LEVEL_TOLERANCE_PARAM = "sensing.level_pitch_tolerance_deg"
 NADIR_MAX_PITCH_DEG = -60
 
 MISSION_PITCH_REASON = "declare the gimbal's mission pitch"
+#: ROLE-4: the cause of a sense gate on a gimbal mount whose frame pitch is missing or beyond the tolerance.
+CAMERA_NOT_LEVEL_REASON = "camera not level"
 
 
 def default_level_tolerance_deg(profile: Optional[str] = None) -> float:
