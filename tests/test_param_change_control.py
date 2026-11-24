@@ -17,6 +17,19 @@ OWNED = (
     "tests/golden/flight_params.json",
     "tests/param_literal_allowlist.py",
 )
+CHECKER_PATHS = (
+    "tests/test_param_literals.py",
+    "tests/test_param_change_control.py",
+    "docs/design/hardware-profiles/safety-value-changes.md",
+)
+# The A1 baseline entry. Editing it needs an edit here too, which CODEOWNERS makes owned (F6, F7).
+MIN_ENTRIES = 1
+BASELINE = {
+    "previous": "c8e89f51c02c4d13781fe57e6da6f2b645f71012b10887c9534920084a24e430",
+    "table": "f949df64f14cee5c1c025d683cabea1d56a493941db05c214c33f7deac628378",
+    "golden": "7403c28493386027b0c383326d30d2bb2645fa54c154e289276f9246289d2504",
+    "allowlist": "9620d8432ea012b9c02189d4739909c64740f5ed3d680e07af32eb56f9c65743",
+}
 
 
 def test_generated_doc_equals_committed():
@@ -29,33 +42,74 @@ def test_doc_never_presents_a_fact_as_a_setting():
     for row in TABLE:
         if is_fact_row(row):
             assert f"`{row.id}`" not in head
-            if row.env:
-                assert row.env not in text
-    assert "tun" not in facts.lower() and "calibrat" not in facts.lower()
+            for name in (row.env, *(a.name for a in row.env_aliases), *row.cli):
+                if name:
+                    assert name not in text, name
+    for word in ("tun", "calibrat", "threshold"):
+        assert word not in facts.lower(), word
 
 
-def test_codeowners_names_the_three_paths():
+def test_codeowners_names_the_owned_paths():
     owners = {}
     for line in (ROOT / ".github" / "CODEOWNERS").read_text(encoding="utf-8").splitlines():
         if line.strip() and not line.startswith("#"):
             path, *who = line.split()
             owners[path.lstrip("/")] = who
-    for path in OWNED:
+    for path in OWNED + CHECKER_PATHS:
         assert owners.get(path), path
     for path in ("flightrisk/dashboard/roles.py", "flightrisk/dashboard/devices.py",
                  "flightrisk/fleet_protocol/constants.py", "flightrisk/drone/rth/"):
         assert owners.get(path), path
 
 
+def _entries(text: str) -> list[tuple[str, str]]:
+    """``(text before the entry's heading, entry text)`` for each ``## `` entry of the log."""
+    starts = [m.start() + 1 for m in re.finditer(r"\n## ", text)]
+    return [(text[:s], text[s:e]) for s, e in zip(starts, starts[1:] + [len(text)])]
+
+
+def chain_errors(text: str) -> list[str]:
+    """Every entry must record the SHA-256 of the log text before its heading."""
+    errors = []
+    for prefix, entry in _entries(text):
+        match = re.search(r"SHA-256 previous: ([0-9a-f]{64})", entry)
+        if not match or match.group(1) != hashlib.sha256(prefix.encode("utf-8")).hexdigest():
+            errors.append(entry.splitlines()[0])
+    return errors
+
+
 def test_latest_log_entry_holds_current_hashes():
-    entries = LOG.read_text(encoding="utf-8").split("\n## ")[1:]
+    entries = _entries(LOG.read_text(encoding="utf-8"))
     assert entries
-    latest = entries[-1]
+    latest = entries[-1][1]
     for label, path in zip(("table", "golden", "allowlist"), OWNED):
         match = re.search(rf"SHA-256 {label}: ([0-9a-f]{{64}})", latest)
         assert match, label
         actual = hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
         assert match.group(1) == actual, f"{path} changed without a new entry in safety-value-changes.md"
+
+
+def test_log_hash_chain_is_unbroken():
+    assert chain_errors(LOG.read_text(encoding="utf-8")) == []
+
+
+def test_log_baseline_entry_is_pinned():
+    entries = _entries(LOG.read_text(encoding="utf-8"))
+    assert len(entries) >= MIN_ENTRIES
+    first = entries[0][1]
+    assert first.startswith("## A1 baseline\n")
+    for label, sha in BASELINE.items():
+        assert f"SHA-256 {label}: {sha}" in first, label
+
+
+def test_editing_an_old_log_entry_breaks_the_chain():
+    text = LOG.read_text(encoding="utf-8")
+    appended = text + "\n## Planted\n\n- SHA-256 previous: " + hashlib.sha256(text.encode() + b"\n").hexdigest() + "\n"
+    assert chain_errors(appended) == []
+    edited = appended.replace("- Value: none changed.", "- Value: geofence changed.", 1)
+    assert edited != appended and chain_errors(edited) == ["## Planted"]
+    deleted = appended.replace(_entries(appended)[0][1], "", 1)
+    assert chain_errors(deleted)
 
 
 def test_no_runtime_module_imports_params_or_hardware():

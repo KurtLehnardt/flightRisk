@@ -439,7 +439,7 @@ def test_every_finding_is_allowlisted_with_exact_count():
             assert entry["category"] in CATEGORIES
             assert entry["reason"]
             if entry["category"] == "deferred":
-                assert re.search(r"A[3-5]", entry["reason"]), key
+                assert re.search(r"\bA[3-5]\b", entry["reason"]), key
             expected[key] = entry["count"]
     assert scan_repo() == expected
 

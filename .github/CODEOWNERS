@@ -8,3 +8,6 @@
 /flightrisk/dashboard/roles.py @KurtLehnardt
 /flightrisk/dashboard/devices.py @KurtLehnardt
 /flightrisk/fleet_protocol/constants.py @KurtLehnardt
+/tests/test_param_literals.py @KurtLehnardt
+/tests/test_param_change_control.py @KurtLehnardt
+/docs/design/hardware-profiles/safety-value-changes.md @KurtLehnardt
