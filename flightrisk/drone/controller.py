@@ -28,6 +28,7 @@ that type against it keep working.
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Protocol, runtime_checkable
@@ -87,6 +88,27 @@ class Capability(str, Enum):
     #: usual and only watches progress. The backend provides
     #: ``avoidance_status()`` (the list of avoidance problems, empty when none).
     ONBOARD_AVOIDANCE = "onboard_avoidance"
+    #: The backend provides ``settled_height()``, a measured height it has
+    #: waited to settle after takeoff.
+    SETTLED_HEIGHT = "settled_height"
+    #: The backend provides ``last_takeoff_reply_s()``, how long the takeoff
+    #: command took to be answered.
+    TAKEOFF_REPLY_TIME = "takeoff_reply_time"
+    #: The backend's ``takeoff()`` accepts an ``abort`` keyword so a pending
+    #: takeoff can be cancelled.
+    TAKEOFF_ABORT = "takeoff_abort"
+    #: The backend provides ``measured_heading_deg()``, a heading read from its
+    #: sensors rather than a commanded one.
+    MEASURED_HEADING = "measured_heading"
+    #: The backend provides ``state_temperature()``, a temperature reading from
+    #: its state stream.
+    STATE_TEMPERATURE = "state_temperature"
+    #: The backend provides ``measured_pose()``, a position and heading
+    #: estimate read from the vehicle.
+    MEASURED_POSE = "measured_pose"
+    #: The backend provides ``link_status()``, a report on the health of its
+    #: command link.
+    LINK_HEALTH = "link_health"
 
 
 #: Capabilities every currently supported backend provides.
@@ -98,6 +120,31 @@ BASIC_FLIGHT: frozenset[Capability] = frozenset({
     Capability.RC_CONTROL,
     Capability.VIDEO,
 })
+
+
+#: Capabilities a duck-typed object declares by providing a callable of this name.
+_INFERRED_BY_METHOD: tuple[tuple[Capability, str], ...] = (
+    (Capability.SETTLED_HEIGHT, "settled_height"),
+    (Capability.TAKEOFF_REPLY_TIME, "last_takeoff_reply_s"),
+    (Capability.MEASURED_HEADING, "measured_heading_deg"),
+    (Capability.STATE_TEMPERATURE, "state_temperature"),
+    (Capability.MEASURED_POSE, "measured_pose"),
+    (Capability.LINK_HEALTH, "link_status"),
+)
+
+
+def _takeoff_accepts_abort(drone: Any) -> bool:
+    """True when ``drone.takeoff`` is callable and takes an ``abort`` keyword.
+
+    An unreadable signature or a missing ``takeoff`` gives False, never an error.
+    """
+    takeoff = getattr(drone, "takeoff", None)
+    if not callable(takeoff):
+        return False
+    try:
+        return "abort" in inspect.signature(takeoff).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 @dataclass
@@ -134,6 +181,11 @@ class DroneCapabilities:
             features.add(Capability.RETURN_TO_HOME)
         if callable(getattr(drone, "goto_gps", None)):
             features.add(Capability.GOTO_GPS)
+        for capability, method in _INFERRED_BY_METHOD:
+            if callable(getattr(drone, method, None)):
+                features.add(capability)
+        if _takeoff_accepts_abort(drone):
+            features.add(Capability.TAKEOFF_ABORT)
         return cls(features=frozenset(features))
 
 
