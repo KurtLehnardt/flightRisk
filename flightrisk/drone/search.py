@@ -22,7 +22,7 @@ import math
 from dataclasses import dataclass
 from enum import Enum
 
-from flightrisk.drone.fleet_plan_check import _move_range
+from flightrisk.drone.move_range import _move_range
 from flightrisk.drone.safety import ROOM_LIMITS, EnvelopeLimits
 
 

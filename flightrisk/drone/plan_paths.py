@@ -61,7 +61,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from flightrisk.drone.fleet_plan_check import _move_range
+from flightrisk.drone.move_range import _move_range
 from flightrisk.drone.safety import ROOM_LIMITS, EnvelopeLimits
 from flightrisk.drone.search import generate_parallel_track, generate_track_line
 
