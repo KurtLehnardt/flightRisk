@@ -165,7 +165,7 @@ def test_the_allowed_leaf_imports_hold_no_registry_or_catalogue_value():
 
 
 def _runtime_param_imports(tree):
-    """The names a parsed module imports from params or hardware at run time, in source order.
+    """The names a parsed module imports from params or hardware at run time.
 
     An import inside ``if TYPE_CHECKING:`` never runs, and the drone id pattern holds no registry or
     catalogue value, so neither counts.
