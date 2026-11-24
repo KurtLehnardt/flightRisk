@@ -41,8 +41,10 @@ logger = logging.getLogger("sitl_fly_coverage")
 SITL_BASE_PORT = 5760
 SITL_PORT_STRIDE = 10
 
-# Telemetry stream rate parameters that the SITL image leaves at 0 Hz.
-_STREAM_PARAMS = ("SR0_RAW_SENS", "SR0_EXT_STAT", "SR0_POSITION", "SR0_EXTRA1", "SR0_EXTRA2", "SR0_EXTRA3")
+# Telemetry stream rate parameters that the SITL image leaves at 0 Hz. ArduCopter 4.7 renamed the
+# first link's SR0_* parameters to MAV1_* (same unit, Hz), so the new name is tried first.
+_STREAM_SUFFIXES = ("RAW_SENS", "EXT_STAT", "POSITION", "EXTRA1", "EXTRA2", "EXTRA3")
+_STREAM_PARAMS = tuple((f"MAV1_{suffix}", f"SR0_{suffix}") for suffix in _STREAM_SUFFIXES)
 _STREAM_RATE_HZ = 10
 _FIX_3D = 3  # mavsdk.telemetry.FixType.FIX_3D
 _SETTLE_S = 15.0
@@ -201,11 +203,16 @@ def _make_sitl_controller_class():
             async for state in system.core.connection_state():
                 if state.is_connected:
                     break
-            for name in _STREAM_PARAMS:
-                try:
-                    await system.param.set_param_int(name, _STREAM_RATE_HZ)
-                except Exception as exc:  # Best effort: newer firmware names differ.
-                    logger.warning("Could not set %s: %s", name, exc)
+            for names in _STREAM_PARAMS:
+                errors = []
+                for name in names:
+                    try:
+                        await system.param.set_param_int(name, _STREAM_RATE_HZ)
+                        break
+                    except Exception as exc:  # Best effort: the other firmware version's name is tried next.
+                        errors.append(f"{name}: {exc}")
+                else:
+                    logger.warning("Could not set %s", "; ".join(errors))
 
             async def wait_for_fix() -> None:
                 async for gps in system.telemetry.gps_info():
