@@ -18,12 +18,18 @@ _PROBE = (
 
 # What importing flightrisk.drone.search may load: the package, the drone
 # package, search itself, and the two small modules it needs for the move range.
+# The safety module reads its envelope values from the flight parameter
+# registry (PR #243), so the registry table and its row types load too; they
+# hold data only, not the flight stack.
 SEARCH_ALLOWED = {
     "flightrisk",
     "flightrisk.drone",
     "flightrisk.drone.search",
     "flightrisk.drone.move_range",
     "flightrisk.drone.safety",
+    "flightrisk.params",
+    "flightrisk.params.spec",
+    "flightrisk.params.table",
 }
 FORBIDDEN = {
     "flightrisk.drone.lane_executor",
