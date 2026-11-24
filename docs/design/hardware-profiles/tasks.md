@@ -27,10 +27,10 @@ A1 ─> A2 ─┬─> A3 ─┬─> B1 ─┐
 ```
 
 - Phases in merge order: A (core; A1 and A2 change no behaviour, A3 carries items 47 and 53, A4 items 1, 47,
-  48 and 49, A5 item 47 of section 27), B (MAVLink production adapter), D4 (tasks and the matcher, on the fast
-  path), D1 to D3 (field airspace, lost drones and field planning, behind today's defaults), C (return
-  machinery, roles, then the switch in four steps), F (mobile), D5 (search speed, after D4, F2 and F3), E
-  (on-find flows).
+  48, 49 and 53, A5 items 47 and 53). B4 adds item 53 of section 27. The order then continues with B
+  (MAVLink production adapter), D4 (tasks and the matcher, on the fast path), D1 to D3 (field airspace, lost
+  drones and field planning, behind today's defaults), C (return machinery, roles, then the switch in four
+  steps), F (mobile), D5 (search speed, after D4, F2 and F3), E (on-find flows).
 - **Development may overlap where files do not:** C1 (edge files) can be developed from B4 on while D1 to
   D3 (ground files) are under review, and merges after D3; C7 (indoor defaults, gated by the edge laptop runs)
   and F1 can proceed side by side after C6 (C7 changes defaults only); F2 and F3 run in parallel. D4 edits
@@ -69,8 +69,8 @@ order guarantees. Shared, sectioned files: `tests/param_literal_allowlist.py` (o
 
 | File or area | First owner | Later editors |
 | --- | --- | --- |
-| `flightrisk/params/*`, `flightrisk/hardware/catalogue.py`, `scripts/make_param_golden.py`, `tests/golden/flight_params.json`, `.github/CODEOWNERS`, `docs/flight-parameters.md`, `docs/hardware-catalogue.md`, `safety-value-changes.md` | A1 | `flightrisk/params/legacy.py`: XL; the first phase that adds a profile updates `flightrisk/params/docs.py`; resolver: C4 (warnings), C5 (bounds, precedence, confirmations); table and golden file: B4, A3 (item 53 only: row 8, `envelope.max_altitude_cm` of generic_multirotor), D1, D2, C2, C5, C6, C7, D5, E1 to E4, each with a log entry (N-7); XCa (`catalogue.py`, `AdapterSpec` fields only); XCb (`params/docs.py`); A3 adds `params/today.py` (today's accepted ranges, generated from the golden file by `scripts/make_param_today.py`; every editor of the golden file regenerates it, and `tests/test_param_today.py` fails until they do) and the two edge start refusal templates in `params/messages.py` (a launcher layer for another unit, a safety feature switched off without confirmation), and edits `params/resolver.py` so a test-adapter fact is never classified or logged as less safe, from any layer or value (R7, R8) |
-| `flightrisk/hardware/{inventory,features,frames}.py`, `flightrisk/params/report.py`, `flightrisk/mission/model.py` (types), `flightrisk/drone/rth/__init__.py` (protocols), `flightrisk/fleet_protocol/*` (every wire shape), `flightrisk/obs_comm.py`, `flightrisk/drone/controller.py` (`CameraSource`), `flightrisk/drone/registry.py`, `flightrisk/drone/backends.py`, `flightrisk/vision/profiles.py` (fields), `tests/fixtures/mobile_contract/catalogue.json` | A2 | `fleet_protocol/*`: A3 adds `describe_unit` to the edge's `validate_ground_to_edge`, and C1 adds the return commands there; no later PR changes a wire shape; A3: `controller.py` (the `max_altitude_m` annotation and default handling for item 53 only); XCa: `controller.py` (new `Capability` members and their inference only), `registry.py` (the `edge_factory` hook, `for_model`, `edge_kinds`) and `features.py` |
+| `flightrisk/params/*`, `flightrisk/hardware/catalogue.py`, `scripts/make_param_golden.py`, `tests/golden/flight_params.json`, `.github/CODEOWNERS`, `docs/flight-parameters.md`, `docs/hardware-catalogue.md`, `safety-value-changes.md` | A1 | `flightrisk/params/legacy.py`: XL; the first phase that adds a profile updates `flightrisk/params/docs.py`; resolver: C4 (warnings), C5 (bounds, precedence, confirmations); table and golden file: B4, A3 (item 53 only: the new rows `regulatory.altitude_cap_cm` and `regulatory.altitude_cap_on`, the field upper bounds of rows 2 and 4, and row 8 for `generic_multirotor`; plus the generic models' `max_height_m` in `flightrisk/hardware/catalogue.py`, a later-editor right for A3 for item 53 only; also the stale note at `scripts/make_param_golden.py:178` and the regeneration of `docs/hardware-catalogue.md`), D1, D2, C2, C5, C6, C7, D5, E1 to E4, each with a log entry (N-7); XCa (`catalogue.py`, `AdapterSpec` fields only); XCb (`params/docs.py`); A3 adds `params/today.py` (today's accepted ranges, generated from the golden file by `scripts/make_param_today.py`; every editor of the golden file regenerates it, and `tests/test_param_today.py` fails until they do) and the two edge start refusal templates in `params/messages.py` (a launcher layer for another unit, a safety feature switched off without confirmation), and edits `params/resolver.py` so a test-adapter fact is never classified or logged as less safe, from any layer or value (R7, R8) |
+| `flightrisk/hardware/{inventory,features,frames}.py`, `flightrisk/params/report.py`, `flightrisk/mission/model.py` (types), `flightrisk/drone/rth/__init__.py` (protocols), `flightrisk/fleet_protocol/*` (every wire shape), `flightrisk/obs_comm.py`, `flightrisk/drone/controller.py` (`CameraSource`), `flightrisk/drone/registry.py`, `flightrisk/drone/backends.py`, `flightrisk/vision/profiles.py` (fields), `tests/fixtures/mobile_contract/catalogue.json` | A2 | `fleet_protocol/*`: A3 adds `describe_unit` to the edge's `validate_ground_to_edge`, and C1 adds the return commands there; no later PR changes a wire shape, and item 53 adds no wire field because the cap is turned off at launch; XCa: `controller.py` (new `Capability` members and their inference, and the `max_altitude_m` annotation and default handling for item 53), `registry.py` (the `edge_factory` hook, `for_model`, `edge_kinds`) and `features.py` |
 | `flightrisk/edge_device.py`, `flightrisk/edge.py`, `flightrisk/edge_profiles.py`, `flightrisk/edge_uplink.py`, `flightrisk/fleet_authority.py`, `flightrisk/fleet_authority_types.py`, `flightrisk/drone/{safety,obstacle_sensor,obstacle,flight_guards,temp_preflight,tello,tello_bound,fake,lane_flight,lane_executor,lane_monitor,lane_avoid}.py`, `tests/test_telemetry_field_cap.py` | A3 | C1, D5 (`det_hz`, `set_speed`), E4 (escort setpoints) |
 | `flightrisk/drone/{mavlink_fleet,autopilot,mavsdk_link}.py`, new `flightrisk/drone/autopilot_fence.py` | A3 (options from params) | B2, B3, B4, C1 |
 | `flightrisk/drone/rth/home.py`, `flightrisk/drone/rth/uncertainty.py` | B2 | C1 |
@@ -105,7 +105,7 @@ order guarantees. Shared, sectioned files: `tests/param_literal_allowlist.py` (o
 | `mobile/` | F2 | |
 | `ios/` | F3 | |
 
-## Phase A: core profiles, catalogue and inventory (A1, A2 no behaviour change; A3: items 47, 53; A4: 1, 47-49; A5: 47)
+## Phase A: core profiles, catalogue and inventory (A1, A2 no behaviour change; A3: items 47, 53; A4: 1, 47-49, 53; A5: 47, 53)
 
 ### A1: catalogue, registry, golden file, resolver, guard, parity and tag tests
 - **Tier:** opus, high. **Depends on:** the in-flight work.
@@ -131,9 +131,9 @@ order guarantees. Shared, sectioned files: `tests/param_literal_allowlist.py` (o
   PROTO-6, CMP-1.
 
 ### A4: ground and dashboard adoption
-- **Tier:** opus, high. **Depends on:** A2. Parallel with A3.
+- **Tier:** opus, high. **Depends on:** A2, and for its item 53 part A3's item 53 rows. Parallel with A3 otherwise.
 - **Behaviour changes:** section 27 items 1 (mixed environments refused at Plan), 47, 48 (the dashboard's default
-  MAVLink address) and 49 (an unknown edge-reported model is no longer a `tello` unit).
+  MAVLink address), 49 (an unknown edge-reported model is no longer a `tello` unit) and 53 (display of the cap state and of an unknown maximum).
 - **Test plan:** unit, fake edges; plan snapshots for 1 to 4 Tellos taken at the A4 base.
 - **Acceptance:** INV-4 (ground), INV-5, FEA-11 (banners), GND-1 to GND-5, GND-7, DSH-1 to DSH-3, DSH-5 to
   DSH-7, DSH-9, PROTO-3 (ground), R2-B2 (ground), R2-N7, CMP-1.
@@ -141,7 +141,7 @@ order guarantees. Shared, sectioned files: `tests/param_literal_allowlist.py` (o
 
 ### A5: launcher adoption
 - **Tier:** opus, high. **Depends on:** A3 and A4 merged (round 2 B2).
-- **Behaviour changes:** section 27 item 47. **Assertions:** `tests/test_launcher_commands.py:67`, `:119-121`.
+- **Behaviour changes:** section 27 items 47 and 53. **Assertions:** `tests/test_launcher_commands.py:67`, `:119-121`.
 - **Test plan:** unit; command snapshots for every built-in preset.
 - **Acceptance:** LCH-1 to LCH-3, LCH-5 to LCH-7, INV-4 (launcher), FACT-2 (launcher part), R2-B2, CMP-1.
 
@@ -167,7 +167,7 @@ order guarantees. Shared, sectioned files: `tests/param_literal_allowlist.py` (o
 
 ### B4: autopilot parameter table, faults and the autopilot fallback
 - **Tier:** opus, xhigh. **Depends on:** B3.
-- **Behaviour changes:** items 6 to 8, 40, 41, 50, 51 and 52 (item 52 only if the B1b SITL acceptance scenario shows
+- **Behaviour changes:** items 6 to 8, 40, 41, 50, 51, 52 and 53 (item 52 only if the B1b SITL acceptance scenario shows
   lanes cut because the drone cannot yaw in place). **Files first owned:** `flightrisk/drone/rth/methods.py`.
 - **Test plan:** one unit test per table row and autopilot; one SITL scenario per row (section 13.2),
   including `SIM_GPS_DISABLE` with `FS_DR_ENABLE` 1 and 0, PX4 GPS loss with `COM_POS_FS_ACT` 0, and an
