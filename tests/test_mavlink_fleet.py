@@ -259,12 +259,18 @@ def test_return_altitude_is_checked_whatever_the_failsafe_action(make_drone):
 
 def test_copter_47_vehicle_through_the_fleet_preflight(make_drone):
     """A vehicle with ArduCopter 4.7 names goes through refresh_params, link_status, check_slot and takeoff."""
-    drone, vehicle = make_drone(SimVehicle(ARDUPILOT, time_scale=20.0, params=ARDUPILOT_47_PARAMS))
+    # 12 m, not the fake's 15 m default, so the climb target below can only come from RTL_ALT_M.
+    params = {**ARDUPILOT_47_PARAMS, "RTL_ALT_M": 12.0}
+    drone, vehicle = make_drone(SimVehicle(ARDUPILOT, time_scale=20.0, params=params))
     assert "RTL_ALT" not in vehicle.params and "SYSID_THISMAV" not in vehicle.params
     airborne(drone, vehicle)
     assert drone.check_slot(1500) is None
     vehicle.trigger_failsafe()
-    assert wait_for(lambda: vehicle.alt >= 14.9), vehicle.alt  # the fake returns at RTL_ALT_M, in metres
+    # The fake climbs to RTL_ALT_M, in metres. Check the climb target, not the height: the vehicle is
+    # already over home, so it climbs, descends and lands within a few polls on a loaded machine.
+    with vehicle.lock:
+        climb_to = vehicle.goal.alt
+    assert climb_to == 12.0, climb_to
 
     # RTL_ALT_M is metres: 60 m is refused against the 15 m slot, by the preflight and by check_slot.
     high = SimVehicle(ARDUPILOT, time_scale=20.0, params={**ARDUPILOT_47_PARAMS, "RTL_ALT_M": 60.0})
