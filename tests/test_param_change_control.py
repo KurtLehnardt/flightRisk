@@ -81,7 +81,8 @@ def test_codeowners_names_the_owned_paths():
     for path in OWNED + CHECKER_PATHS:
         assert owners.get(path), path
     for path in ("flightrisk/dashboard/roles.py", "flightrisk/dashboard/devices.py",
-                 "flightrisk/fleet_protocol/constants.py", "flightrisk/drone/rth/"):
+                 "flightrisk/fleet_protocol/constants.py", "flightrisk/drone/rth/",
+                 "flightrisk/params/altitude.py", "flightrisk/params/resolver.py"):
         assert owners.get(path), path
 
 
