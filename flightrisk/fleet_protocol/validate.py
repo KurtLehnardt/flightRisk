@@ -82,6 +82,7 @@ from flightrisk.fleet_protocol.constants import (
     NUDGE_MAX_CM,
     NUDGE_MIN_CM,
     ON_COMPLETE_ACTIONS,
+    ON_COMPLETE_ACTIONS_V2,
     PEER_HEARTBEAT,
     PEER_TYPES,
     PING,
@@ -90,6 +91,7 @@ from flightrisk.fleet_protocol.constants import (
     PROFILE_NACK_REASONS,
     PROTOCOL_VERSION,
     RESUME,
+    RETURN_COMMAND_TYPES,
     SET_DETECTION_PROFILE,
     START_AT,
     TAKEOFF,
@@ -105,6 +107,13 @@ from flightrisk.fleet_protocol.manual import (
 )
 from flightrisk.fleet_protocol.peer import (
     _validate_node_state,
+)
+from flightrisk.fleet_protocol.returns import (
+    MIN_RETURN_HOVER_TIMEOUT_S,
+    is_return_reply,
+    validate_assign_lanes_return_keys,
+    validate_return_command,
+    validate_return_reply,
 )
 
 
@@ -178,16 +187,27 @@ def _validate_assign_lanes(msg: Mapping[str, Any], proto: int) -> None:
         _require_int_range(msg, "plan_seq", 1, _MAX_SAFE_INT)
     on_complete = msg.get("on_complete")
     if "on_complete" in msg:
-        _require_choice(msg, "on_complete", ON_COMPLETE_ACTIONS)
+        # ``return_home`` exists only in protocol v2.
+        _require_choice(msg, "on_complete", ON_COMPLETE_ACTIONS_V2 if proto >= 2 else ON_COMPLETE_ACTIONS)
     if "hover_timeout_s" in msg:
-        if on_complete != "hover":
-            raise ProtocolError("'assign_lanes' field 'hover_timeout_s' needs 'on_complete' to be 'hover'")
-        timeout = _require_number(msg, "hover_timeout_s")
-        if not 0 < timeout <= MAX_HOVER_TIMEOUT_S:
+        if on_complete not in ("hover", "return_home"):
             raise ProtocolError(
-                f"'assign_lanes' field 'hover_timeout_s' must be above 0 and at most "
+                "'assign_lanes' field 'hover_timeout_s' needs 'on_complete' to be 'hover' or 'return_home'"
+            )
+        timeout = _require_number(msg, "hover_timeout_s")
+        if on_complete == "hover":
+            bound, ok = "above 0", 0 < timeout <= MAX_HOVER_TIMEOUT_S
+        else:
+            # The re-task window before the return (M-7).
+            bound = f"at least {MIN_RETURN_HOVER_TIMEOUT_S}"
+            ok = MIN_RETURN_HOVER_TIMEOUT_S <= timeout <= MAX_HOVER_TIMEOUT_S
+        if not ok:
+            raise ProtocolError(
+                f"'assign_lanes' field 'hover_timeout_s' must be {bound} and at most "
                 f"{MAX_HOVER_TIMEOUT_S}, got {timeout!r}"
             )
+    # The optional v2 return keys (corridor, landing, no_entry, speed_cm_s).
+    validate_assign_lanes_return_keys(msg, proto)
 
 
 def _validate_telemetry(msg: Mapping[str, Any], proto: int) -> None:
@@ -333,6 +353,11 @@ def _validate_profile_reply(msg: Mapping[str, Any], *, ack: bool) -> None:
 
 
 def _validate_ack(msg: Mapping[str, Any], proto: int) -> None:
+    if is_return_reply(msg):
+        # A return command's reply, protocol v2 only
+        # (flightrisk/fleet_protocol/returns.py).
+        validate_return_reply(msg, proto=proto)
+        return
     if is_ceiling_reply(msg):
         # A configuration command's reply has its own rules on every link
         # version (flightrisk/fleet_protocol/ceiling.py).
@@ -368,6 +393,9 @@ def _validate_ack(msg: Mapping[str, Any], proto: int) -> None:
 
 
 def _validate_nack(msg: Mapping[str, Any], proto: int) -> None:
+    if is_return_reply(msg):
+        validate_return_reply(msg, proto=proto)
+        return
     if is_ceiling_reply(msg):
         validate_ceiling_reply(msg)
         return
@@ -479,6 +507,11 @@ def validate_message(msg: Any, *, proto: int = 1) -> str:
         # Manual flight commands: valid on every link version, always with a
         # cmd_id, fenced in v2 (flightrisk/fleet_protocol/manual.py).
         validate_manual_command(msg, proto=proto)
+        return mtype
+    if mtype in RETURN_COMMAND_TYPES:
+        # Return commands: protocol v2 only, with their own fence rules
+        # (flightrisk/fleet_protocol/returns.py).
+        validate_return_command(msg, proto=proto)
         return mtype
     if mtype not in _KNOWN_TYPES:
         return mtype
@@ -618,6 +651,11 @@ def validate_ground_to_edge(msg: Any, *, proto: int, require_fence: bool = False
                     f"unfenced or incomplete {mtype!r} refused: this edge requires the v2 form on every link ({exc})"
                 ) from exc
         return mtype
+    if mtype in RETURN_COMMAND_TYPES:
+        # Protocol v2 only; refused on a v1 link like any unknown command.
+        if not (_is_int(proto) and proto >= 2):
+            raise ProtocolError(f"{_short(mtype)} is not a ground-to-edge message in protocol v{_short(proto)}")
+        return validate_message(msg, proto=proto)
     allowed = GROUND_TO_EDGE_TYPES_V2 if _is_int(proto) and proto >= 2 else GROUND_TO_EDGE_TYPES | {HELLO}
     if mtype not in allowed:
         raise ProtocolError(f"{_short(mtype)} is not a ground-to-edge message in protocol v{_short(proto)}")

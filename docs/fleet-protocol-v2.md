@@ -282,8 +282,9 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
 - **Nack reasons.** v1 keeps `geofence`, `altitude`, `battery`,
   `other_drone` and `invalid`. v2 adds `stale_epoch`, `not_authority`,
   `no_valid_plan`, `busy`, `landing`, `not_flying`, `plan_mismatch`,
-  `stale_plan` and `drone_unreachable` (the edge cannot talk to its drone,
-  so it refuses to take off; see "Drone link preflight").
+  `stale_plan`, `drone_unreachable` (the edge cannot talk to its drone,
+  so it refuses to take off; see "Drone link preflight") and
+  `straight_line_home` (see "Return commands").
 - **Stale leaders.** A `stale_epoch` or `not_authority` nack should carry
   `epoch_seen`, so that a stale leader learns the epoch it lost to and steps
   down.
@@ -1173,3 +1174,69 @@ authority at the current epoch. Its `ack` (the values now in force) and `nack` (
 `not_authority`) have their own rules on every link version, and `shape_for_peer` copies the
 command and its replies unchanged, so the `cmd_id` survives a v1 link. Landing is unaffected.
 See `docs/ceiling-and-altitude.md`.
+
+## Return commands
+
+Phase A2 defines these shapes (design `docs/design/hardware-profiles/design.md`
+section 18, requirement RTH-11) in `flightrisk/fleet_protocol/returns.py`. No code
+sends them yet; the edge (A3) and the ground (A4) adopt them.
+
+**New ground-to-edge commands, protocol v2 only.** Each carries `drone_id` and `cmd_id`
+and is answered with an `ack` (`result: "ok"`) or a `nack` whose reason comes from
+`NACK_REASONS_V2` (`landing` while the drone lands). A v1 link refuses each command and
+each reply, and `shape_for_peer` refuses to shape one for a v1 peer. They are kept out of
+`GROUND_TO_EDGE_TYPES_V2`, `FENCED_COMMAND_TYPES` and `COMMAND_TYPES`
+(`RETURN_COMMAND_TYPES` holds them), so the routing, retry and authority rules of today's
+commands are unchanged.
+
+| Type | Fields | Who may send it |
+| --- | --- | --- |
+| `return_home` | optional `wait` (boolean) and, with `wait: true`, `max_wait_s` (above 0, at most 3600) | without `wait`: any authenticated ground, like `land` (M-5), fence optional; with `wait` (an ordered wait, or `wait: false` as a release): the authority, fence required |
+| `set_no_entry` | `areas`: the full current list of no-entry areas, possibly empty | the authority, fence required (a standby that adds an area uses the epoch it has seen) |
+| `set_speed` | `speed_cm_s` (above 0, at most 2000) | the authority, fence required |
+| `escort_setpoint` | `x_cm`, `y_cm`, `alt_cm`, `bearing_deg` (0 to below 360), `valid_s` (above 0, at most 10) | the authority, fence required; field units only |
+
+**New optional `assign_lanes` keys, protocol v2 only.** An older edge never receives them
+(see the gate below); a v1 link refuses each of them.
+
+- `on_complete: "return_home"`: the drone returns after its last lane. `hover_timeout_s`
+  is then the re-task window and must be at least 1 s (`MIN_RETURN_HOVER_TIMEOUT_S`, M-7)
+  and at most `MAX_HOVER_TIMEOUT_S`. A v1 link keeps `hover` and `land`
+  (`ON_COMPLETE_ACTIONS_V2` is the v2 set).
+- `corridor`: the way home from the zone, 2 to 256 point objects `{"x_cm", "y_cm"}`.
+- `landing`: `{"area_id", "place", "interval_s"}`, the landing area, the drone's place in
+  its order (0 to `MAX_ROSTER` - 1) and the order's interval (above 0, at most 300 s).
+- `no_entry`: the known no-entry areas, at most 32, each `{"id", "kind", "points"}` with an
+  optional `drone_id` naming the drone that owns the area (a lost or stranded drone, which
+  is exempt from its own area). `kind` is one of `person_cue`, `lost_drone`,
+  `stranded_drone` and `operator` (`NO_ENTRY_KINDS`); `points` is a polygon of 3 to 64
+  point objects.
+- `speed_cm_s`: the search speed, as in `set_speed`.
+
+Points are objects, not number pairs, so a 200-point corridor never meets the 16-per-list
+and 64-per-message number caps of the privacy screen. Point, area and landing objects are
+strict: an unknown field is refused. Every new key passes the privacy screen.
+
+**The gate (spec erratum R1).** Design section 18 says a ground sends these only to an edge
+whose `describe_unit` reply advertises them, but the reply shape of
+`hardware-profiles-detail.md` section 12.2 has no key for that. The reply therefore gains
+`accepts`, a sorted list of names from a closed set: `return_home`, `set_no_entry`,
+`set_speed`, `escort_setpoint` (field units only), `assign_lanes.on_complete.return_home`,
+`assign_lanes.corridor`, `assign_lanes.landing`, `assign_lanes.no_entry` and
+`assign_lanes.speed_cm_s`. A ground ignores a name it does not know. An edge that does not
+list `return_home` is shown "cannot return (older edge)" and held, never landed.
+
+**The nack reason `straight_line_home`.** An edge refuses an assignment whose straight line
+home, from some point of its zone and corridor, leaves them while the drone's link-loss
+action cannot be `land` (MAV-19, B-3). An older ground rejects an unknown reason and drops
+the nack as malformed, so an edge sends `straight_line_home` only to a ground that has sent
+it `describe_unit` (proof that the ground knows the reason), and otherwise sends `invalid`
+with the same `detail`.
+
+**Vocabularies for the edge's reports.** `AP_LINK_LOSS_ACTIONS` (`return`, `land`,
+`unknown`; `unknown` counts as `return`), `RTH_STATES` (design section 10.3) and
+`RTH_REASONS` (the closed list of design section 10.5). `unit_rev` (edge `hello`) and `rth`
+(telemetry) are in `V2_FIELDS`, so `shape_for_peer` strips them on a v1 link.
+
+**Roster cap.** `MAX_ROSTER` stays 8: fleets and every SITL scenario have at most eight
+drones, and raising the cap is out of scope (N-9). No return command carries a roster.

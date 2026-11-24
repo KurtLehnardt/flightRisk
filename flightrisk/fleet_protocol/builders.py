@@ -119,6 +119,10 @@ def make_assign_lanes(
     plan_seq: int | None = None,
     on_complete: str | None = None,
     hover_timeout_s: float | None = None,
+    corridor: Iterable[Mapping[str, Any]] | None = None,
+    landing: Mapping[str, Any] | None = None,
+    no_entry: Iterable[Mapping[str, Any]] | None = None,
+    speed_cm_s: float | None = None,
 ) -> dict[str, Any]:
     """Ground -> edge lane assignment for one drone.
 
@@ -128,7 +132,14 @@ def make_assign_lanes(
     orders plans by ``(epoch, plan_seq)`` and refuses an older one with
     ``stale_plan``. *on_complete* says what the drone does after its last
     lane: ``"hover"`` for *hover_timeout_s* (default
-    ``DEFAULT_HOVER_TIMEOUT_S``) and then land, or ``"land"``.
+    ``DEFAULT_HOVER_TIMEOUT_S``) and then land, or ``"land"``; in protocol
+    v2 also ``"return_home"``, with *hover_timeout_s* as the re-task window
+    (no default).
+
+    The protocol v2 return keys are optional and added only when given:
+    *corridor* (point objects ``{"x_cm", "y_cm"}``), *landing* (``area_id``,
+    ``place``, ``interval_s``), *no_entry* (area objects) and *speed_cm_s*
+    (``flightrisk/fleet_protocol/returns.py``).
     """
     msg: dict[str, Any] = {
         "type": ASSIGN_LANES,
@@ -147,6 +158,16 @@ def make_assign_lanes(
             msg["hover_timeout_s"] = DEFAULT_HOVER_TIMEOUT_S if hover_timeout_s is None else hover_timeout_s
     if hover_timeout_s is not None and "hover_timeout_s" not in msg:
         msg["hover_timeout_s"] = hover_timeout_s
+    if corridor is not None:
+        msg["corridor"] = [dict(point) for point in corridor]
+    if landing is not None:
+        msg["landing"] = dict(landing)
+    if no_entry is not None:
+        msg["no_entry"] = [
+            {**dict(area), "points": [dict(point) for point in area.get("points", [])]} for area in no_entry
+        ]
+    if speed_cm_s is not None:
+        msg["speed_cm_s"] = speed_cm_s
     return _checked(msg, _fenced(msg, fence, cmd_id))
 
 
