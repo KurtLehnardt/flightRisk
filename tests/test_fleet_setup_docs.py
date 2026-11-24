@@ -73,7 +73,7 @@ def test_thunderbolt_path_docs():
     for needle in ("Fallback ladder", "UNVERIFIED", "--soak", "10.42.0.2", "thunderbolt-link-results-template.md"):
         assert needle in fleet, needle
     windows = (ROOT / "docs" / "windows-edge-setup.md").read_text(encoding="utf-8")
-    for needle in ("Thunderbolt link to the Mac", "New-NetIPAddress", "-NlMtuBytes 1500", "--soak"):
+    for needle in ("Thunderbolt link to the ground-station laptop", "New-NetIPAddress", "-NlMtuBytes 1500", "--soak"):
         assert needle in windows, needle
     assert (ROOT / "docs" / "thunderbolt-link-results-template.md").is_file()
 
@@ -172,7 +172,7 @@ def test_loopback_edge1_docs():
     assert "FLIGHTRISK_GROUND_LOCAL=1 DRONE_ID=1" in readme
     # The AP fallback rung that runs a fake edge must not depend on the cable address.
     assert "export FLIGHTRISK_GROUND_LOCAL=1; source scripts/fleet_env.sh" in demo
-    assert "needs the Mac's 10.42.0.1 address to stay up" not in demo
+    assert "needs the ground-station laptop's 10.42.0.1 address to stay up" not in demo
     assert "UNVERIFIED" in demo
     assert "lsof -nP -iTCP:9000 -sTCP:LISTEN" in fleet
     assert "export FLIGHTRISK_GROUND_LOCAL=1" in fleet

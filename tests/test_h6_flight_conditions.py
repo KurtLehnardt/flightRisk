@@ -1,12 +1,12 @@
 """Tests for the round 2 review of PR #177: the conditions for the first real H6 flights.
 
-H6 flies on a Windows ZBook in Layout B (the ground and two Tello edges, four
+H6 flies on a Windows edge laptop in Layout B (the ground and two Tello edges, four
 cores, no GPU). The findings:
 
 N1. The recorder called the decode lag the capture-to-arrival latency, so the
     settle time would be sized from about 50 ms when the video latency is about
     300 ms. It is ``decode_lag_ms`` now, a replay still reads the old column,
-    and the H5 latency is measured against a clock filmed on the ZBook.
+    and the H5 latency is measured against a clock filmed on the edge laptop.
 N2. The person cue never reached the ground's status, its logs or the drone card.
 N3. A Tello edge without ``--tello-local-ip`` gives its frames no capture stamps;
     with sensing required it now refuses to start.
