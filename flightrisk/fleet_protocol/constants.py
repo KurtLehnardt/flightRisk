@@ -375,6 +375,24 @@ MAX_ID_LEN = 64
 MAX_TEXT_LEN = 200
 MAX_LANES = 1024
 MAX_LANE_DISTANCE_CM = 100_000
+# Return-command wire sanity limits (v2). Each bounds what a malformed or hostile peer can send;
+# none is a flight parameter.
+# Shortest re-task window of an assign_lanes with on_complete return_home: wire sanity limit, not a flight parameter.
+MIN_RETURN_HOVER_TIMEOUT_S = 1.0
+# Most points in a return corridor: wire sanity limit, not a flight parameter.
+MAX_CORRIDOR_POINTS = 256
+# Most points in one area polygon: wire sanity limit, not a flight parameter.
+MAX_AREA_POINTS = 64
+# Most no-entry areas in one command: wire sanity limit, not a flight parameter.
+MAX_NO_ENTRY_AREAS = 32
+# Fastest speed a command may carry, in cm/s: wire sanity limit, not a flight parameter.
+MAX_SPEED_CM_S = 2_000
+# Longest ordered wait, in seconds: wire sanity limit, not a flight parameter.
+MAX_RETURN_WAIT_S = 3_600.0
+# Longest landing spacing, in seconds: wire sanity limit, not a flight parameter.
+MAX_LANDING_INTERVAL_S = 300.0
+# Longest validity of one escort setpoint, in seconds: wire sanity limit, not a flight parameter.
+MAX_SETPOINT_VALID_S = 10.0
 # Top-level fields of one message. An edge's telemetry is the executor's own
 # fields (up to 35 with GPS, the drone link and the obstacle fields, the
 # re-look and sidestep group ``obstacle_avoid`` included; a Tello has no GPS

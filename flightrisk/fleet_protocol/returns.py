@@ -76,9 +76,17 @@ from flightrisk.fleet_protocol.checks import (
 from flightrisk.fleet_protocol.constants import (
     ACK,
     ESCORT_SETPOINT,
+    MAX_AREA_POINTS,
+    MAX_CORRIDOR_POINTS,
     MAX_EPOCH,
+    MAX_LANDING_INTERVAL_S,
     MAX_LANE_DISTANCE_CM,
+    MAX_NO_ENTRY_AREAS,
+    MAX_RETURN_WAIT_S,
     MAX_ROSTER,
+    MAX_SETPOINT_VALID_S,
+    MAX_SPEED_CM_S,
+    MIN_RETURN_HOVER_TIMEOUT_S,
     NACK,
     NACK_REASONS_V2,
     NO_ENTRY_KINDS,
@@ -112,27 +120,6 @@ __all__ = [
 
 # Optional ``assign_lanes`` keys that exist only in protocol v2.
 ASSIGN_LANES_RETURN_KEYS = ("corridor", "landing", "no_entry", "speed_cm_s")
-# The shortest re-task window of an ``assign_lanes`` with ``on_complete:
-# "return_home"`` (M-7): the validator needs a positive ``hover_timeout_s``,
-# and a window under a second cannot be acted on.
-MIN_RETURN_HOVER_TIMEOUT_S = 1.0
-# Size and range caps. Like the other caps of this protocol they bound what a
-# malformed or hostile peer can send and are far above a real fleet's needs.
-MAX_CORRIDOR_POINTS = 256
-MAX_AREA_POINTS = 64
-MAX_NO_ENTRY_AREAS = 32
-# The fastest speed any supported airframe is commanded to, with headroom
-# (the field move speed is at most 15 m/s).
-MAX_SPEED_CM_S = 2_000
-# The longest ordered wait. The ground bounds each wait by the energy model
-# (design 10.8); this only refuses nonsense.
-MAX_RETURN_WAIT_S = 3_600.0
-# The longest spacing of a landing order (``separation.landing_interval_s``
-# goes up to 300 s).
-MAX_LANDING_INTERVAL_S = 300.0
-# The longest validity of one escort setpoint; the ground sends them at 1 Hz.
-MAX_SETPOINT_VALID_S = 10.0
-
 _POINT_FIELDS = frozenset({"x_cm", "y_cm"})
 _AREA_FIELDS = frozenset({"id", "kind", "points", "drone_id"})
 _LANDING_FIELDS = frozenset({"area_id", "place", "interval_s"})
