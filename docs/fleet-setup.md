@@ -385,7 +385,7 @@ Run these steps in order when the cable arrives, using a checkout of this reposi
 
 **Step 3. Is there a link? (5 min).**
 
-- Ground-station laptop (macOS): `networksetup -listallhardwareports` and `ifconfig bridge0`
+- Mac: `networksetup -listallhardwareports` and `ifconfig bridge0`
 - Windows: `Get-NetAdapter | ft Name,InterfaceDescription,Status,LinkSpeed`
 - Pass: both sides show an interface that is up. On Windows it is a new adapter with status Up at several Gbps. On the ground-station laptop `ifconfig bridge0` shows `status: active`.
 - Fail: reseat the cable, try the other Thunderbolt port, reboot Windows, and ask whether Group Policy disables USB4 networking. If it still fails, go to rung 2.
@@ -449,7 +449,7 @@ The protocol and addresses are the same on every rung. Only the cabling changes.
 
 ## Layout B with Claude reasoning
 
-Layout B runs the ground station, the dashboard and both edges on one Windows laptop (the edge laptop of Layout A; in Layout B it also runs the ground station), one Tello per Wi-Fi adapter (see [two-tellos-one-pc.md](two-tellos-one-pc.md) and the launcher's "Layout B (everything here)" preset). By default the demo needs no internet. This section adds Claude as the reasoning backend, which does need the internet, and the laptop has no spare uplink unless you plan one: both Tello Wi-Fi adapters are joined to Tello access points, and a Tello access point has no internet. (The "cable" of Path 2 is a laptop-to-laptop link with no gateway; it is not an uplink either.)
+Layout B runs the ground station, the dashboard and both edges on one Windows laptop (the edge laptop of Layout A), one Tello per Wi-Fi adapter (see [two-tellos-one-pc.md](two-tellos-one-pc.md) and the launcher's "Layout B (everything here)" preset). By default the demo needs no internet. This section adds Claude as the reasoning backend, which does need the internet, and the laptop has no spare uplink unless you plan one: both Tello Wi-Fi adapters are joined to Tello access points, and a Tello access point has no internet. (The "cable" of Path 2 is a laptop-to-laptop link with no gateway; it is not an uplink either.)
 
 **Claude reasoning in Layout B needs `feature/edge-claude-reasoning`.** The call that sends an edge-sourced alert to Claude is in that branch, not on this tree; until it is merged, steps 2 to 5 prepare the machine but no reasoning request is made for edge alerts.
 

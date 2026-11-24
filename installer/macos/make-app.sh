@@ -12,10 +12,10 @@
 #   Contents/Resources/install.sh    the installer, used when FlightRisk is not installed yet
 #   Contents/Resources/install-ref   the release the bundled installer installs (only with --ref vX.Y.Z)
 #
-# An existing FlightRisk.app is replaced only when it carries the same bundle id,
-# so an unrelated app of the same name is never overwritten. The new bundle is
-# assembled next to the old one and moved into place, so a failure half-way
-# leaves the old one intact.
+# An existing FlightRisk.app is replaced only when it carries the same bundle id
+# (or the earlier io.github.<owner>.flightrisk.launcher form), so an unrelated app of
+# the same name is never overwritten. The new bundle is assembled next to the old one
+# and moved into place, so a failure half-way leaves the old one intact.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"

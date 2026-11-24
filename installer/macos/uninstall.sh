@@ -11,8 +11,9 @@
 # with its virtual environment); the files the installer and the app wrote next
 # to it (status, lock, run files, an unfinished first download), each by name;
 # FlightRisk.app in ~/Applications and in /Applications when it is FlightRisk's
-# (same bundle id; one in /Applications that you cannot delete is named, so you
-# can drag it to the Trash); and the app's log files in ~/Library/Logs/FlightRisk.
+# (same bundle id or the earlier io.github.<owner>.flightrisk.launcher form; one in
+# /Applications that you cannot delete is named, so you can drag it to the Trash);
+# and the app's log files in ~/Library/Logs/FlightRisk.
 # Folders are removed only when they are then empty.
 #
 # What it keeps: ~/.flightrisk (launcher presets, the saved ceiling),
