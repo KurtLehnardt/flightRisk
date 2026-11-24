@@ -720,6 +720,55 @@ def envelope_arguments(resolution: EdgeResolution, today: Mapping[str, Any]) -> 
     return arguments
 
 
+#: The registry row each ``FlightGuards`` setting of the edge's start reads (EDGE-2). The hover-only test
+#: (``mode.hover_test``) is a mission switch, not a drone value, and keeps today's reader.
+GUARD_ROWS: Mapping[str, str] = MappingProxyType({
+    "settle_samples": "takeoff.settle_samples",
+    "settle_tolerance_cm": "takeoff.settle_tolerance_cm",
+    "settle_timeout_s": "takeoff.settle_timeout_s",
+    "takeoff_late_s": "takeoff.late_s",
+    "refusal_retries": "takeoff.refusal_retries",
+    "refusal_hold_s": "takeoff.refusal_hold_s",
+    "refusals_per_flight": "tello.refusals_per_flight",
+})
+
+#: The registry row each ``TempLimits`` level of the edge's start reads (EDGE-2, FACT-3).
+TEMP_ROWS: Mapping[str, str] = MappingProxyType({
+    "warn_c": "tello.temp_warn_c",
+    "refuse_c": "tello.temp_refuse_c",
+})
+
+
+def fact_arguments(resolution: EdgeResolution, rows: Mapping[str, str], today: Mapping[str, Any],
+                   defaults: Mapping[str, Any]) -> dict[str, Any]:
+    """The start settings of ``rows`` (``GUARD_ROWS`` or ``TEMP_ROWS``) from the resolved values (EDGE-2).
+
+    ``today`` holds the settings today's reader built from the environment, and ``defaults`` the
+    built-in ones. Each setting is its row's resolved value, so a value of the drone's profile reaches
+    it. A value the environment or the command line set keeps today's reader's value, as for the
+    envelope (``envelope_arguments``). A row the resolution does not hold does not apply to the
+    drone's model, so a test-adapter override of it, such as ``FLIGHTRISK_TELLO_TAKEOFF_LATE_S`` on a
+    production MAVLink unit, is not used: the setting is the built-in default (FACT-3). A row whose
+    resolved value is its off value (the temperature refusal switched off) is None, as ``TempLimits``
+    stores it.
+    """
+    from flightrisk.params.spec import Source
+    from flightrisk.params.table import TABLE
+
+    off_values = {spec.id: spec.off_value for spec in TABLE if spec.id in rows.values()}
+    arguments = dict(today)
+    for name, row in rows.items():
+        value = resolution.values.get(row)
+        if value is None:
+            arguments[name] = defaults[name]
+            continue
+        if Source(value.source) in (Source.ENV, Source.CLI):
+            continue
+        off = off_values.get(row)
+        arguments[name] = None if off is not None and value.value == off else value.value
+    return arguments
+
+
 def _fact_ids(profile: Any) -> frozenset[str]:
     """Ids of the rows that are facts for *profile* (a profile id, or a custom model with an ``id``)."""
     from flightrisk.params.table import TABLE

@@ -105,6 +105,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import dataclasses
 import json
 import math
 import os
@@ -1996,7 +1997,7 @@ def _obstacle_sidestep_cm(environ: Any) -> int:
     return value
 
 
-def _flight_guards(environ: Any) -> FlightGuards:
+def _flight_guards(environ: Any, args: argparse.Namespace | None = None) -> FlightGuards:
     """The flight guard settings of the environment (``flightrisk.drone.flight_guards``); a bad value refuses to start.
 
     ``FLIGHTRISK_TELLO_SETTLE_SAMPLES``, ``_SETTLE_TOLERANCE_CM``,
@@ -2005,7 +2006,8 @@ def _flight_guards(environ: Any) -> FlightGuards:
     ``FLIGHTRISK_HOVER_TEST`` (``1`` takes off and hovers: no move to the
     slot, no lane, nudge, manual step or way back; ``0``, the default, flies
     normally). Read whatever the drone kind, so a malformed value always
-    refuses to start.
+    refuses to start. Once the edge has resolved its unit (``args.edge_resolution``), the settings
+    are built from the resolved values (``_resolved_flight_guards``).
     """
     raw = (environ.get(ENV_HOVER_TEST) or "").strip().lower()
     if raw in ("", "0", "false", "no", "off"):
@@ -2014,7 +2016,7 @@ def _flight_guards(environ: Any) -> FlightGuards:
         hover_test = True
     else:
         raise SystemExit(f"edge_device: {ENV_HOVER_TEST}={raw!r} must be 0 or 1. Refusing to start.")
-    return FlightGuards(
+    guards = FlightGuards(
         settle_samples=_obstacle_number(
             ENV_SETTLE_SAMPLES, DEFAULT_SETTLE_SAMPLES, *SETTLE_SAMPLES_RANGE, environ, integer=True
         ),
@@ -2032,6 +2034,30 @@ def _flight_guards(environ: Any) -> FlightGuards:
         ),
         hover_test=hover_test,
     )
+    return guards if args is None else _resolved_flight_guards(args, guards)
+
+
+def _resolved_flight_guards(args: argparse.Namespace, guards: FlightGuards) -> FlightGuards:
+    """``guards`` rebuilt from the resolved values in ``args.edge_resolution`` (EDGE-2). Raises ``SystemExit``.
+
+    Without a resolution, or when every resolved value equals today's, it is ``guards`` itself.
+    ``edge_resolution.fact_arguments`` says which value comes from where; the hover-only test keeps
+    today's reader.
+    """
+    resolution = getattr(args, "edge_resolution", None)
+    if resolution is None:
+        return guards
+    from flightrisk.edge_resolution import GUARD_ROWS, fact_arguments
+
+    defaults = FlightGuards()
+    today = {name: getattr(guards, name) for name in GUARD_ROWS}
+    arguments = fact_arguments(resolution, GUARD_ROWS, today, {name: getattr(defaults, name) for name in GUARD_ROWS})
+    if arguments == today:
+        return guards
+    try:
+        return dataclasses.replace(guards, **arguments)
+    except ValueError as exc:
+        raise SystemExit(f"edge_device: the resolved flight guard settings are invalid: {exc}. Refusing to start.") from None
 
 
 def _warn_flight_guards(guards: FlightGuards, log: StructuredLogger, drone_id: str | None) -> None:
@@ -2472,19 +2498,25 @@ def _resolved_envelope(args: argparse.Namespace, envelope: SafetyEnvelope) -> Sa
         raise SystemExit(f"edge_device: the resolved envelope is invalid: {exc}. Refusing to start.") from None
 
 
-def _temp_limits(log: StructuredLogger | None = None, drone_id: str | None = None, environ: Any = None) -> TempLimits:
+def _temp_limits(
+    log: StructuredLogger | None = None, drone_id: str | None = None, environ: Any = None,
+    args: argparse.Namespace | None = None,
+) -> TempLimits:
     """The takeoff temperature check's levels (``FLIGHTRISK_TELLO_TEMP_WARN_C``, ``..._REFUSE_C``).
 
     Read and validated at every flying edge's start, whatever the drone kind (only a Tello's
     temperature is checked), like the obstacle settings: a malformed value, or a refusal level
     below the warn level, refuses to start with the reason. A level that differs from its
-    default is logged once as ``edge_temp_setting_non_default``.
+    default is logged once as ``edge_temp_setting_non_default``. Once the edge has resolved its unit
+    (``args.edge_resolution``), the levels are built from the resolved values (``_resolved_temp_limits``).
     """
     env = os.environ if environ is None else environ
     try:
         limits = TempLimits.from_env(env)
     except ValueError as exc:
         raise SystemExit(f"edge_device: {exc}. Refusing to start (docs/fleet-setup.md, \"Takeoff temperature check\").") from None
+    if args is not None:
+        limits = _resolved_temp_limits(args, limits)
     if log is not None:
         for name, value, default in (
             (ENV_TELLO_TEMP_WARN_C, limits.warn_c, DEFAULT_TEMP_WARN_C),
@@ -2497,6 +2529,29 @@ def _temp_limits(log: StructuredLogger | None = None, drone_id: str | None = Non
                     detail=f"{name}={'off' if value is None else value!r} is not the default ({default!r})",
                 )
     return limits
+
+
+def _resolved_temp_limits(args: argparse.Namespace, limits: TempLimits) -> TempLimits:
+    """``limits`` rebuilt from the resolved values in ``args.edge_resolution`` (EDGE-2). Raises ``SystemExit``.
+
+    Without a resolution, or when every resolved value equals today's, it is ``limits`` itself.
+    ``edge_resolution.fact_arguments`` says which value comes from where. Both levels are facts of the
+    drone, and the refusal switch is only read here: nothing new is confirmed or reported for it.
+    """
+    resolution = getattr(args, "edge_resolution", None)
+    if resolution is None:
+        return limits
+    from flightrisk.edge_resolution import TEMP_ROWS, fact_arguments
+
+    defaults = TempLimits()
+    today = {name: getattr(limits, name) for name in TEMP_ROWS}
+    arguments = fact_arguments(resolution, TEMP_ROWS, today, {name: getattr(defaults, name) for name in TEMP_ROWS})
+    if arguments == today:
+        return limits
+    try:
+        return TempLimits(**arguments)
+    except ValueError as exc:
+        raise SystemExit(f"edge_device: the resolved temperature levels are invalid: {exc}. Refusing to start.") from None
 
 
 def _startup_envelope(args: argparse.Namespace, environ: Any = None) -> SafetyEnvelope:
@@ -2539,14 +2594,18 @@ def _run_flight_edge(
     start_envelope = envelope is None
     if start_envelope:
         envelope = _startup_envelope(args)
-    temp_limits = _temp_limits(log, getattr(args, "drone_id", None))
-    guards = _flight_guards(os.environ)
+    _temp_limits(None, getattr(args, "drone_id", None))
+    _flight_guards(os.environ)
     # After today's own start checks, so they keep refusing with today's messages, and before the
     # drone is built or contacted (EDGE-1).
     _resolve_edge_start(args, log, argv=argv, parser=parser)
     if start_envelope:
         # Built again from the resolved values (EDGE-2); an envelope the caller passed is kept.
         envelope = _startup_envelope(args)
+    # The temperature levels and the flight guards from the resolved values (EDGE-2); a level that is
+    # not its default is logged here, once.
+    temp_limits = _temp_limits(log, getattr(args, "drone_id", None), args=args)
+    guards = _flight_guards(os.environ, args)
     kind = _drone_kind(args)
     holder: dict[str, Any] = {}
     if kind == "mavlink":
