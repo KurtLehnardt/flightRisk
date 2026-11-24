@@ -643,3 +643,37 @@ def resolve_edge(
         gates=MappingProxyType(gates),
         report=report,
     )
+
+
+def _fact_ids(profile: Any) -> frozenset[str]:
+    """Ids of the rows that are facts for *profile* (a profile id, or a custom model with an ``id``)."""
+    from flightrisk.params.table import TABLE
+
+    name = profile if isinstance(profile, str) else getattr(profile, "id", None)
+    if not isinstance(name, str):
+        return frozenset()
+    return frozenset(spec.id for spec in TABLE if spec.is_fact(name))
+
+
+def log_edge_start(resolution: EdgeResolution, log: Any, *, drone_id: Optional[str] = None) -> None:
+    """Log each non-default value once, with its source (EDGE-3); a less-safe value is a warning.
+
+    A fact row honoured as a developer override is logged at info with source ``env`` (FACT-3) and never
+    with safety or setting wording (R8). A fact override ignored on a production unit is logged by the
+    resolver, one line naming the variable.
+    """
+    facts = _fact_ids(resolution.layers.profile)
+    for param_id in sorted(resolution.values):
+        value = resolution.values[param_id]
+        if not getattr(value, "non_default", False):
+            continue
+        source = getattr(value.source, "value", value.source)
+        if param_id in facts:
+            log.info("edge_fact_override", drone_id=drone_id, param_id=param_id, value=value.value,
+                     source=source, detail=value.source_detail)
+        elif value.less_safe:
+            log.warning("edge_value_less_safe", drone_id=drone_id, param_id=param_id, value=value.value,
+                        default=value.default, source=source, detail=value.source_detail)
+        else:
+            log.info("edge_value_non_default", drone_id=drone_id, param_id=param_id, value=value.value,
+                     default=value.default, source=source, detail=value.source_detail)

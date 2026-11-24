@@ -2778,7 +2778,13 @@ def _resolve_edge_start(
     A3.3 on read; nothing reads it yet. Runs once: a second call returns at once. An edge that flies
     nothing resolves nothing.
     """
-    from flightrisk.edge_resolution import EdgeStartRefused, ModelRefused, resolve_edge, resolve_model
+    from flightrisk.edge_resolution import (
+        EdgeStartRefused,
+        ModelRefused,
+        log_edge_start,
+        resolve_edge,
+        resolve_model,
+    )
 
     if getattr(args, "edge_resolution", None) is not None:
         return
@@ -2800,6 +2806,7 @@ def _resolve_edge_start(
             choice=choice, drone=drone, drone_id=drone_id, source=getattr(args, "source", None),
             environ=environ, argv=() if argv is None else argv, parser=parser,
         )
+        log_edge_start(args.edge_resolution, log, drone_id=drone_id)
     except (EdgeStartRefused, ModelRefused) as exc:
         text = str(exc) if isinstance(exc, EdgeStartRefused) else f"{exc} Refusing to start."
         log.error("edge_start_refused", drone_id=drone_id, reason=text)
