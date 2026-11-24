@@ -27,13 +27,16 @@ from typing import Any
 
 from flightrisk.drone import coverage_sim as cs
 from flightrisk.drone.fleet_plan_check import (
+    ALTITUDE_MARGIN_CM,
     DEFAULT_PLACEMENT_TOLERANCE_CM,
+    MAX_AREA_SIDE_CM,
     MAX_MOVES_PER_DRONE,
     SQUARE_FOOTPRINT,
     PlanningFootprint,
+    _move_range,
     check_plan,
 )
-from flightrisk.drone.safety import MAX_MOVE_CM, MIN_MOVE_CM
+from flightrisk.drone.safety import ROOM_LIMITS, EnvelopeLimits
 from flightrisk.fleet_protocol import make_assign_lanes
 
 __all__ = [
@@ -122,8 +125,9 @@ class DronePlan:
     """One drone's part of a fleet plan.
 
     ``lanes`` are ``{"direction", "distance_cm"}`` relative moves from
-    ``takeoff_cm``, each already within the Tello's 20-500 cm range; they are
-    stored as an immutable tuple of ``FrozenLane``. The first
+    ``takeoff_cm``, each already within the move range of the drone's
+    envelope profile (20-500 cm for the room profile); they are stored as an
+    immutable tuple of ``FrozenLane``. The first
     ``transit_lanes`` of them fly from the takeoff point to the start of the
     search pattern. ``start_offset_s`` is how long after the fleet start this
     drone should start.
@@ -244,6 +248,9 @@ class FleetSearchPlan:
         footprint = None
         if self.footprint is not None:
             footprint = (self.footprint.to_dict(), repr(self.footprint.source))
+            if self.footprint.altitude_margin_cm != ALTITUDE_MARGIN_CM:
+                # Added only when it is not the default, so a default plan keeps its digest.
+                footprint += (self.footprint.altitude_margin_cm,)
         content = (
             self.area_cm, self.sweep_cm, self.gap_cm, self.standoff_cm, self.geofence_cm, self.min_separation_cm,
             self.placement_tolerance_cm, self.max_standoff_cm, footprint,
@@ -313,7 +320,13 @@ class FleetSearchPlan:
         return {plan.drone_id: (plan.takeoff_cm[0], plan.takeoff_cm[1], 0) for plan in self.drones}
 
     def assign_lanes_message(
-        self, drone_id: str, *, allow_unchecked: bool = False, allow_infeasible: bool = False
+        self,
+        drone_id: str,
+        *,
+        allow_unchecked: bool = False,
+        allow_infeasible: bool = False,
+        unit_limits: Mapping[str, EnvelopeLimits] | None = None,
+        max_area_side_cm: float | None = MAX_AREA_SIDE_CM,
     ) -> dict[str, Any]:
         """A validated ``assign_lanes`` message for one drone of a flyable plan.
 
@@ -322,10 +335,12 @@ class FleetSearchPlan:
         Also raises for a plan in ``unchecked`` (a safety check switched off,
         or the square model) unless ``allow_unchecked`` is true, an explicit
         override for a model study or a test. ``allow_infeasible`` skips every
-        check; it is only for previews and tests.
+        check; it is only for previews and tests. ``unit_limits`` and
+        ``max_area_side_cm`` are passed to ``check_plan``: give the ones the
+        plan was built with.
         """
         if not allow_infeasible:
-            problems = check_plan(self)
+            problems = check_plan(self, unit_limits=unit_limits, max_area_side_cm=max_area_side_cm)
             if problems:
                 raise ValueError(f"refusing assign_lanes for {drone_id}: the plan is infeasible: " + "; ".join(problems))
             if self.unchecked and not allow_unchecked:
@@ -372,9 +387,13 @@ class PatternChoice:
 # ----------------------------------------------------------------------
 
 
-def _split_distance(direction: str, distance: int) -> list[dict]:
-    """Moves of 20-500 cm in one direction whose lengths add up to ``distance`` (>= 20)."""
-    count = max(1, math.ceil(distance / MAX_MOVE_CM))
+def _split_distance(direction: str, distance: int, *, limits: EnvelopeLimits = ROOM_LIMITS) -> list[dict]:
+    """Moves in one direction whose lengths add up to ``distance``.
+
+    Each move is within the move range of ``limits`` (20-500 cm for the room
+    profile) when ``distance`` is at least its minimum move.
+    """
+    count = max(1, math.ceil(distance / _move_range(limits)[1]))
     base, extra = divmod(distance, count)
     return [{"direction": direction, "distance_cm": base + (1 if i < extra else 0)} for i in range(count)]
 
@@ -397,13 +416,15 @@ def _simplify(points: Iterable[Point]) -> list[Point]:
     return out
 
 
-def _leg_moves(start: Point, end: Point, region: Region) -> list[dict]:
+def _leg_moves(start: Point, end: Point, region: Region, *, limits: EnvelopeLimits = ROOM_LIMITS) -> list[dict]:
     """Executor moves for one axis-aligned leg, never leaving ``region``.
 
-    A leg shorter than the 20 cm minimum move is flown as an overshoot pair:
+    Every move is within the move range of ``limits``. A leg shorter than its
+    minimum move (20 cm for the room profile) is flown as an overshoot pair:
     either past the end and back, or first away from the start and then
     through to the end, whichever keeps the extra point inside the region.
     """
+    shortest = _move_range(limits)[0]
     dx, dy = end[0] - start[0], end[1] - start[1]
     if dx and dy:
         raise ValueError(f"leg {start} -> {end} is not axis-aligned")
@@ -412,32 +433,34 @@ def _leg_moves(start: Point, end: Point, region: Region) -> list[dict]:
         return []
     unit = ((dx > 0) - (dx < 0), (dy > 0) - (dy < 0))
     direction = _DIRECTION_FOR[unit]
-    if distance >= MIN_MOVE_CM:
-        return _split_distance(direction, distance)
-    past_end = (end[0] + unit[0] * MIN_MOVE_CM, end[1] + unit[1] * MIN_MOVE_CM)
+    if distance >= shortest:
+        return _split_distance(direction, distance, limits=limits)
+    past_end = (end[0] + unit[0] * shortest, end[1] + unit[1] * shortest)
     if region.contains(past_end):
         return [
-            {"direction": direction, "distance_cm": distance + MIN_MOVE_CM},
-            {"direction": _OPPOSITE[direction], "distance_cm": MIN_MOVE_CM},
+            {"direction": direction, "distance_cm": distance + shortest},
+            {"direction": _OPPOSITE[direction], "distance_cm": shortest},
         ]
-    before_start = (start[0] - unit[0] * MIN_MOVE_CM, start[1] - unit[1] * MIN_MOVE_CM)
+    before_start = (start[0] - unit[0] * shortest, start[1] - unit[1] * shortest)
     if region.contains(before_start):
         return [
-            {"direction": _OPPOSITE[direction], "distance_cm": MIN_MOVE_CM},
-            {"direction": direction, "distance_cm": distance + MIN_MOVE_CM},
+            {"direction": _OPPOSITE[direction], "distance_cm": shortest},
+            {"direction": direction, "distance_cm": distance + shortest},
         ]
     raise ValueError(f"a {distance} cm leg from {start} cannot be flown inside region {region}")
 
 
-def _move_count(start: Point, end: Point) -> int:
+def _move_count(start: Point, end: Point, *, limits: EnvelopeLimits = ROOM_LIMITS) -> int:
     """How many moves ``_leg_moves`` makes for one leg (an overshoot pair for a short one)."""
+    shortest, longest = _move_range(limits)
     distance = abs(end[0] - start[0]) + abs(end[1] - start[1])
     if distance == 0:
         return 0
-    return 2 if distance < MIN_MOVE_CM else max(1, math.ceil(distance / MAX_MOVE_CM))
+    return 2 if distance < shortest else max(1, math.ceil(distance / longest))
 
 
 def _check_move_cap(count: int) -> None:
+    """Refuse a pattern above ``MAX_MOVES_PER_DRONE`` moves, the fleet protocol's lane cap for any drone."""
     if count > MAX_MOVES_PER_DRONE:
         raise ValueError(
             f"the pattern needs {count} moves for one drone, above the {MAX_MOVES_PER_DRONE} move cap; "
@@ -445,14 +468,15 @@ def _check_move_cap(count: int) -> None:
         )
 
 
-def _polyline_lanes(points: Iterable[Point], region: Region) -> list[dict]:
+def _polyline_lanes(points: Iterable[Point], region: Region, *, limits: EnvelopeLimits = ROOM_LIMITS) -> list[dict]:
+    """Executor moves along an axis-aligned polyline, each within the move range of ``limits``."""
     pts = _simplify(points)
     for point in pts:
         if not region.contains(point):
             raise AssertionError(f"internal error: waypoint {point} outside region {region}")
     # Count before building, so an oversized pattern is refused without allocating it.
-    _check_move_cap(sum(_move_count(start, end) for start, end in itertools.pairwise(pts)))
+    _check_move_cap(sum(_move_count(start, end, limits=limits) for start, end in itertools.pairwise(pts)))
     lanes: list[dict] = []
     for start, end in itertools.pairwise(pts):
-        lanes.extend(_leg_moves(start, end, region))
+        lanes.extend(_leg_moves(start, end, region, limits=limits))
     return lanes
