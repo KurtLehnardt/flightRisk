@@ -17,6 +17,7 @@ PARAM_ADOPTERS: dict[str, frozenset[str]] = {
         "flightrisk/drone/safety.py",
         "flightrisk/drone/flight_guards.py",
         "flightrisk/drone/temp_preflight.py",
+        "flightrisk/drone/obstacle_sensor.py",
     }),
     "A4": frozenset(),
     "A5": frozenset(),

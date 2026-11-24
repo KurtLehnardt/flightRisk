@@ -15,6 +15,7 @@ import numpy as np
 import torch
 
 from flightrisk.drone import midas_model
+from flightrisk.drone import obstacle_sensor as _obstacle_sensor
 
 
 class ObstacleGuard:
@@ -57,7 +58,7 @@ class ObstacleGuard:
 
     def __init__(
         self,
-        min_safe_depth: float = 0.35,
+        min_safe_depth: float = _obstacle_sensor.OBSTACLE_MIN_SAFE_DEPTH,
         check_interval: float = 0.5,
         center_stat: str = "mean",
     ):
