@@ -71,7 +71,7 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
-from typing import Any, Callable, Mapping, Protocol
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol
 
 from flightrisk import obs_events
 from flightrisk.drone.lane_reflight import leg_rest, plan_reflight
@@ -118,6 +118,7 @@ from flightrisk.drone.obstacle_sensor import (
     TELEMETRY_SEQ,
     TELEMETRY_STATE,
 )
+from flightrisk.drone.move_range import _move_range
 from flightrisk.drone.plan_paths import closest_approach
 from flightrisk.drone.safety import (
     DEFAULT_ALT_SLOTS_CM,
@@ -125,8 +126,13 @@ from flightrisk.drone.safety import (
     min_takeoff_battery_from_env,
 )
 from flightrisk.drone.temp_preflight import TELEMETRY_TEMP, live_refusal, temp_status
-from flightrisk.drone.search import split_parallel_track_zones
+from flightrisk.drone.search import generate_parallel_track
 from flightrisk.fleet_protocol import MAX_TEXT_LEN
+
+if TYPE_CHECKING:
+    # Only for annotations: the ground resolves each unit in flightrisk.ground_params, and the
+    # coordinator reads a unit's attributes without importing that module (PLAN-A4 addendum 5.1).
+    from flightrisk.ground_params import GroundUnit
 
 logger = logging.getLogger(__name__)
 
@@ -152,8 +158,10 @@ TELEMETRY_FRESH_S = 2.0
 TRANSIENT_NACKS = frozenset({"landing", "busy"})
 """Telemetry older than this is ignored by the start battery gate."""
 
-# The Tello move range. Transits (``lane_reflight.transit``) are split with the
-# same limits, ``MIN_MOVE_CM`` and ``MAX_MOVE_CM`` of ``flightrisk.drone.safety``.
+# The Tello move range, kept as aliases. A coordinator without ``units`` plans and
+# splits transits (``lane_reflight.transit``) with the same limits, ``MIN_MOVE_CM``
+# and ``MAX_MOVE_CM`` of ``flightrisk.drone.safety``; with ``units`` each unit's own
+# move range applies.
 TELLO_MIN_MOVE_CM = 20
 TELLO_MAX_MOVE_CM = 500
 
@@ -648,6 +656,82 @@ def _number(value: Any) -> float | None:
     return float(value)
 
 
+# What the coordinator reads of a ``ground_params.GroundUnit``; it checks a unit by these, not by its class.
+_UNIT_FIELDS = ("unit_id", "limits", "min_move_cm", "max_move_cm", "min_takeoff_battery_pct")
+
+
+def _check_unit(drone_id: str, unit: Any) -> None:
+    """Raise ``TypeError`` or ``ValueError`` unless *unit* is a usable ground unit for *drone_id*.
+
+    The move range must be whole centimetres and equal to the planner's range
+    of the unit's ``limits`` (``move_range._move_range``), so the lanes made
+    from ``limits`` and the transits split with ``min_move_cm`` and
+    ``max_move_cm`` keep to one range, and the takeoff battery minimum must be
+    a finite number.
+    """
+    missing = [name for name in _UNIT_FIELDS if not hasattr(unit, name)]
+    if missing:
+        raise TypeError(f"units[{drone_id!r}] must be a ground unit, got {type(unit).__name__} "
+                        f"without {', '.join(missing)}")
+    if unit.unit_id != drone_id:
+        raise ValueError(f"units[{drone_id!r}] is the unit {unit.unit_id!r}")
+    for name in ("min_move_cm", "max_move_cm"):
+        value = getattr(unit, name)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError(f"units[{drone_id!r}].{name} must be whole centimetres, got {value!r}")
+    planned = _move_range(unit.limits)
+    if (unit.min_move_cm, unit.max_move_cm) != planned:
+        raise ValueError(f"units[{drone_id!r}] moves {unit.min_move_cm}-{unit.max_move_cm} cm, but its limits "
+                         f"give {planned[0]}-{planned[1]} cm")
+    if _number(unit.min_takeoff_battery_pct) is None:
+        raise TypeError(f"units[{drone_id!r}].min_takeoff_battery_pct must be a finite number, "
+                        f"got {unit.min_takeoff_battery_pct!r}")
+
+
+def _fleet_units(
+    links: Mapping[str, Any], units: Any, refused_units: Any,
+) -> tuple[Mapping[str, GroundUnit] | None, Mapping[str, str] | None]:
+    """Read-only copies of ``FleetCoordinator``'s ``units`` and ``refused_units``, checked against *links*.
+
+    Both ``None`` keeps the coordinator's behaviour without units.
+    ``refused_units`` without ``units`` raises ``ValueError``: the ground
+    resolves every unit before it builds the coordinator, and a fleet whose
+    every unit was refused passes an empty ``units``. With ``units``, every
+    link id must be in exactly one of the two maps and neither may name a
+    drone without a link (``ValueError``); a map, key, unit or text of the
+    wrong type raises ``TypeError``.
+    """
+    if units is None:
+        if refused_units is not None:
+            raise ValueError("refused_units needs units: give the resolved units too, an empty map if none")
+        return None, None
+    if not isinstance(units, Mapping):
+        raise TypeError(f"units must be a mapping of drone id to ground unit, got {type(units).__name__}")
+    if refused_units is None:
+        refused_units = {}
+    if not isinstance(refused_units, Mapping):
+        raise TypeError(f"refused_units must be a mapping of drone id to text, got {type(refused_units).__name__}")
+    for drone_id, unit in units.items():
+        if not isinstance(drone_id, str):
+            raise TypeError(f"units keys must be drone ids, got {drone_id!r}")
+        _check_unit(drone_id, unit)
+    for drone_id, text in refused_units.items():
+        if not isinstance(drone_id, str) or not isinstance(text, str):
+            raise TypeError(f"refused_units must map drone ids to text, got {drone_id!r}: {text!r}")
+        if not text.strip():
+            raise ValueError(f"refused_units[{drone_id!r}] must say why the unit is refused")
+    both = sorted(set(units) & set(refused_units))
+    if both:
+        raise ValueError(f"drones {both} are in both units and refused_units")
+    missing = sorted(set(links) - set(units) - set(refused_units))
+    if missing:
+        raise ValueError(f"drones {missing} are in neither units nor refused_units")
+    unknown = sorted((set(units) | set(refused_units)) - set(links))
+    if unknown:
+        raise ValueError(f"units or refused_units name drones without a link: {unknown}")
+    return MappingProxyType(dict(units)), MappingProxyType(dict(refused_units))
+
+
 def _drone_link_refusal(msg: dict, key: str = "drone_link_detail") -> str:
     """The operator text for an edge that cannot reach its drone, from telemetry or a nack.
 
@@ -809,7 +893,9 @@ class FleetCoordinator:
             ``FLIGHTRISK_MIN_TAKEOFF_BATTERY`` through
             ``min_takeoff_battery_from_env``, like the edges; a malformed
             value raises ``ValueError``, so a ground that cannot tell the
-            edges' minimum does not start.
+            edges' minimum does not start. Only without ``units``: with
+            ``units`` each unit's own minimum applies, and giving both
+            raises ``ValueError``.
         clock: Monotonic ground clock in seconds.
         on_event: Optional callback ``(event_name, payload)`` for the
             dashboard. It receives ``fleet_detection`` for each new merged
@@ -844,6 +930,25 @@ class FleetCoordinator:
             must stay from the path of another drone that reports it may
             sidestep an obstacle toward it (``SIDESTEP_MARGIN_CM``, the edge's
             default sidestep). 0 keeps exactly the gap.
+        units: Optional ``drone_id -> GroundUnit``, the units the ground
+            resolved (``ground_params.units_for``). With them each unit is
+            planned and gated with its own values: the zone width and each
+            zone's lanes use its move range, every transit to re-tasked lanes
+            or a re-flight is split within the receiver's move range, a
+            re-flight drops the segments shorter than the shortest move of
+            any drone that may fly it, and ``start()`` and the re-flight
+            receivers use its ``min_takeoff_battery_pct`` instead of
+            ``min_battery``. ``None`` (the default) plans every drone with the
+            room profile's move range and ``min_battery``. With ``units``,
+            every link id must be in exactly one of ``units`` and
+            ``refused_units``, and each unit's id must be its key; anything
+            else raises ``ValueError``, so no unit falls back to another
+            profile's values.
+        refused_units: Optional ``drone_id -> text`` of the units the ground
+            refused (the ``refused`` map of ``ground_params.units_for``),
+            each text naming its unit and the variable. ``plan()`` and
+            ``plan_zones()`` refuse with ``ValueError`` while a planned
+            unit is in it (section 27, item 47). Only with ``units``.
     """
 
     def __init__(
@@ -865,6 +970,8 @@ class FleetCoordinator:
         retask_separation: bool = True,
         sidestep_margin_cm: int = SIDESTEP_MARGIN_CM,
         manually_controlled: Callable[[str], bool] | None = None,
+        units: Mapping[str, GroundUnit] | None = None,
+        refused_units: Mapping[str, str] | None = None,
     ) -> None:
         if not links:
             raise ValueError("FleetCoordinator needs at least one link")
@@ -886,6 +993,9 @@ class FleetCoordinator:
             raise ValueError(f"retask_wait_s must not be negative, got {retask_wait_s!r}")
         if _number(sidestep_margin_cm) is None or sidestep_margin_cm < 0:
             raise ValueError(f"sidestep_margin_cm must not be negative, got {sidestep_margin_cm!r}")
+        units, refused_units = _fleet_units(links, units, refused_units)
+        if units is not None and min_battery is not None:
+            raise ValueError("give min_battery or units, not both: with units each unit's own takeoff minimum applies")
 
         # The link set is fixed for the coordinator's lifetime, so land_all()
         # can iterate it without taking the state lock.
@@ -897,7 +1007,13 @@ class FleetCoordinator:
         self._alt_slot_of = alt_slot_of
         self._dedup_radius_cm = float(dedup_radius_cm)
         self._zone_gap_cm = int(zone_gap_cm)
-        self._min_battery = float(min_takeoff_battery_from_env() if min_battery is None else min_battery)
+        # Read-only copies; with units, no unit is gated with the environment's minimum.
+        self._units: Mapping[str, GroundUnit] | None = units
+        self._refused_units: Mapping[str, str] | None = refused_units
+        self._min_battery: float | None = (
+            None if units is not None
+            else float(min_takeoff_battery_from_env() if min_battery is None else min_battery)
+        )
         self._clock = clock
         self._on_event = on_event
         self._geofence_cm = float(geofence_cm) if geofence_cm is not None else None
@@ -1091,35 +1207,43 @@ class FleetCoordinator:
         """Split the area into one zone per link and send ``assign_lanes``.
 
         Zones are side by side across the width, separated by
-        ``zone_gap_cm``, and each takes the next altitude slot in turn. The
-        lanes come from ``split_parallel_track_zones``; the leading sideways
-        offset it adds for shared-launch fleets is dropped because each drone
-        takes off at its own zone origin.
+        ``zone_gap_cm``, and each takes the next altitude slot in turn. Each
+        zone's lanes are ``generate_parallel_track`` over the zone, flown from
+        its own origin because each drone takes off there (the zone pattern of
+        ``split_parallel_track_zones`` without its shared-launch offset). With
+        ``units``, each zone's moves stay within its own unit's move range and
+        the zone must be at least as wide as the longest of the units'
+        shortest moves; without, the room profile's range applies to every
+        zone.
 
         Planning starts a new mission: acks, start state, loss marks,
         detections and a previous ``land_all`` are cleared. Clock sync
         results are kept. Planning is refused with ``RuntimeError`` while any
         drone's telemetry from the last ``TELEMETRY_FRESH_S`` seconds says it
-        is flying, because replacing a flying drone's lanes is unsafe.
+        is flying, because replacing a flying drone's lanes is unsafe, and
+        with ``ValueError`` when a unit is in ``refused_units``
+        (``_refuse_refused_units``).
         """
         self._refuse_plan_while_flying()
         drone_ids = list(self._links)
+        self._refuse_refused_units(drone_ids)
         n = len(drone_ids)
         zone_w = (self._width_cm - self._zone_gap_cm * (n - 1)) // n
-        if zone_w < TELLO_MIN_MOVE_CM:
+        if self._units is None:
+            too_narrow = zone_w < TELLO_MIN_MOVE_CM
+        else:
+            # Every unit flies a zone of this width, so the unit with the longest shortest move decides.
+            too_narrow = zone_w < max(self._units[drone_id].min_move_cm for drone_id in drone_ids)
+        if too_narrow:
             raise ValueError(
                 f"area width {self._width_cm} cm is too narrow for {n} zones with "
                 f"{self._zone_gap_cm} cm gaps"
             )
-        zone_waypoints = split_parallel_track_zones(
-            n, width_cm=zone_w * n, depth_cm=self._depth_cm, strip_width_cm=self._strip_cm
-        )
-        # Zone 0 carries no sideways offset, so its length is the length of
-        # one zone's pattern; later zones carry an offset prefix to drop.
-        pattern_len = len(zone_waypoints[0])
         zones = []
         for i, drone_id in enumerate(drone_ids):
-            waypoints = zone_waypoints[i][len(zone_waypoints[i]) - pattern_len:]
+            waypoints = generate_parallel_track(
+                zone_w, self._depth_cm, self._strip_cm, **self._limits_kwarg(drone_id)
+            )
             lanes = tuple(_lane(wp.direction, wp.distance_cm) for wp in waypoints)
             zones.append(ZoneAssignment(
                 drone_id=drone_id,
@@ -1154,14 +1278,15 @@ class FleetCoordinator:
         The caller has already checked the zones (``flightrisk.drone.plan_edit``).
         There must be exactly one zone per link. ``grid_cm`` is the search
         area ``(x, y, w, h)`` on the shared grid. Otherwise this behaves like
-        ``plan()``: it is refused while a drone flies, starts a new mission
-        and sends each drone its lanes.
+        ``plan()``: it is refused while a drone flies or when a unit is in
+        ``refused_units``, starts a new mission and sends each drone its lanes.
         """
         self._refuse_plan_while_flying()
         zones = tuple(zones)
         ids = [zone.drone_id for zone in zones]
         if sorted(ids) != sorted(self._links) or len(set(ids)) != len(ids):
             raise ValueError(f"the zones must cover exactly the fleet's drones {sorted(self._links)}, got {ids}")
+        self._refuse_refused_units(ids)
         x, y, w, h = (int(v) for v in grid_cm)
         plan = FleetPlan(
             zones=zones,
@@ -1179,6 +1304,20 @@ class FleetCoordinator:
     def zone_alt_cm(self, drone_id: str, index: int) -> int:
         """The altitude slot ``plan()`` would give *drone_id* as zone *index*."""
         return self._zone_alt_cm(drone_id, index)
+
+    def _refuse_refused_units(self, drone_ids: list[str]) -> None:
+        """Raise ``ValueError`` when the ground refused the unit of any of *drone_ids* (section 27, item 47).
+
+        The message is ``cannot plan: `` followed by the refusal text of
+        each such unit in *drone_ids* order, joined by spaces. Each text
+        names its unit and, for a refused value, the variable it came from
+        (``ground_params.units_for``). Nothing is sent and no state changes.
+        """
+        if not self._refused_units:
+            return
+        texts = [self._refused_units[drone_id] for drone_id in drone_ids if drone_id in self._refused_units]
+        if texts:
+            raise ValueError("cannot plan: " + " ".join(texts))
 
     def _refuse_plan_while_flying(self) -> None:
         """Raise ``RuntimeError`` while fresh telemetry says a drone flies."""
@@ -1236,6 +1375,45 @@ class FleetCoordinator:
         if self._alt_slot_of is not None:
             return int(self._alt_slot_of(drone_id, index))
         return self._alt_slots_cm[index % len(self._alt_slots_cm)]
+
+    # Each unit's own values (``units``). Without units every keyword is left
+    # out, so the helpers' defaults, the room profile's move range, apply as
+    # before. A unit in ``refused_units`` is never planned (``plan()``), so
+    # only units in ``units`` get here.
+
+    def _limits_kwarg(self, drone_id: str) -> dict[str, Any]:
+        """``limits`` for the search pattern generators: *drone_id*'s envelope profile."""
+        if self._units is None:
+            return {}
+        return {"limits": self._units[drone_id].limits}
+
+    def _move_kwargs(self, drone_id: str) -> dict[str, int]:
+        """``min_move_cm`` and ``max_move_cm`` for ``lane_reflight.transit``: *drone_id*'s move range."""
+        if self._units is None:
+            return {}
+        unit = self._units[drone_id]
+        return {"min_move_cm": unit.min_move_cm, "max_move_cm": unit.max_move_cm}
+
+    def _reflight_move_kwarg(self, cutter_id: str) -> dict[str, int]:
+        """``min_move_cm`` for ``lane_reflight.plan_reflight`` of a cut or offset of *cutter_id*.
+
+        A re-flight's lanes are planned before a receiver takes them and go
+        to the next drone after a refusal, so a segment is kept only when it
+        is at least the shortest move of every drone that may fly it: the
+        longest shortest move of the units other than *cutter_id* (its own
+        in a fleet of one, where nobody takes it).
+        """
+        if self._units is None:
+            return {}
+        others = [unit.min_move_cm for rid, unit in self._units.items() if rid != cutter_id]
+        return {"min_move_cm": max(others or [self._units[cutter_id].min_move_cm])}
+
+    def _min_battery_of(self, drone_id: str) -> float:
+        """The lowest battery percentage *drone_id* may start with or take a re-flight at."""
+        if self._units is None:
+            assert self._min_battery is not None
+            return self._min_battery
+        return float(self._units[drone_id].min_takeoff_battery_pct)
 
     @staticmethod
     def _clear_ack(state: _DroneState) -> None:
@@ -1440,10 +1618,11 @@ class FleetCoordinator:
                 fresh = _number(telemetry.get("battery"))
                 if fresh is not None:
                     battery = fresh
+            floor = self._min_battery_of(drone_id)
             if battery is None:
                 refusals[drone_id] = "no battery report"
-            elif battery < self._min_battery:
-                refusals[drone_id] = f"battery {battery:g}% below {self._min_battery:g}%"
+            elif battery < floor:
+                refusals[drone_id] = f"battery {battery:g}% below {floor:g}%"
         return refusals
 
     # ------------------------------------------------------------------
@@ -2306,7 +2485,7 @@ class FleetCoordinator:
                            "a re-flight; this one is only reported", drone_id, grid.length_cm, lane,
                            MAX_OFFSET_REFLIGHTS_PER_DRONE)
             return
-        plan = plan_reflight([grid])
+        plan = plan_reflight([grid], **self._reflight_move_kwarg(drone_id))
         person_cut = self._confirm_cut_on_lane_locked(state, lane)
         confirm = seen in CONFIRM_REFLIGHT_CUT_REASONS or person_cut is not None
         chunk = _Chunk(lost_id=drone_id, first_index=lane, lanes=[dict(x) for x in plan.lanes],
@@ -3047,7 +3226,7 @@ class FleetCoordinator:
                         continue
                     lanes = planned.get(rid, self._drones[rid].lanes)
                     end = self._actual_path_locked(rid, lanes)[-1]
-                    added = _transit(end, chunk.start) + [dict(lane) for lane in chunk.lanes]
+                    added = _transit(end, chunk.start, **self._move_kwargs(rid)) + [dict(lane) for lane in chunk.lanes]
                     if self._path_inside_fence(rid, lanes + added):
                         crowded = self._too_close(rid, lanes + added, planned)
                         if crowded is not None:
@@ -3417,7 +3596,7 @@ class FleetCoordinator:
             if seg.cut == index and seg.reason in (reason, SEGMENT_SKIPPED)
             and not self._in_reflight_lanes_locked(chunk.lost_id, seg.lane_index)
         ]
-        plan = plan_reflight(mine)
+        plan = plan_reflight(mine, **self._reflight_move_kwarg(chunk.lost_id))
         chunk.lanes = [dict(lane) for lane in plan.lanes]
         chunk.points = list(plan.points)
         chunk.legs = list(plan.legs)
@@ -3510,8 +3689,8 @@ class FleetCoordinator:
                 why[rid] = "is not flying"
             elif battery is None:
                 why[rid] = "reports no battery"
-            elif battery < self._min_battery:
-                why[rid] = f"has battery {battery:g}%, below {self._min_battery:g}%"
+            elif battery < (floor := self._min_battery_of(rid)):
+                why[rid] = f"has battery {battery:g}%, below {floor:g}%"
             elif sensing != SENSING_STEPPED:
                 why[rid] = (f"senses obstacles {sensing:.40}" if isinstance(sensing, str)
                             else "reports no obstacle sensing")
@@ -3720,7 +3899,7 @@ class FleetCoordinator:
                 continue
             lanes = planned.get(rid, self._drones[rid].lanes)
             end = self._actual_path_locked(rid, lanes)[-1]
-            added = _transit(end, chunk.start) + [dict(lane) for lane in chunk.lanes]
+            added = _transit(end, chunk.start, **self._move_kwargs(rid)) + [dict(lane) for lane in chunk.lanes]
             if not self._path_inside_fence(rid, lanes + added):
                 continue
             too_close = self._too_close(rid, lanes + added, planned, flown=(cutter_id, chunk.cutter_lanes))
@@ -3784,7 +3963,7 @@ class FleetCoordinator:
         if not kept and not short:
             self._fail_reflight_locked(chunk, "superseded")
             return False
-        plan = plan_reflight(kept)
+        plan = plan_reflight(kept, **self._reflight_move_kwarg(chunk.lost_id))
         chunk.lanes = [dict(lane) for lane in plan.lanes]
         chunk.points = list(plan.points)
         chunk.legs = list(plan.legs)
