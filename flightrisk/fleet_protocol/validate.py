@@ -115,6 +115,11 @@ from flightrisk.fleet_protocol.returns import (
     validate_return_command,
     validate_return_reply,
 )
+from flightrisk.fleet_protocol.unit import (
+    is_describe_unit_reply,
+    validate_describe_unit_reply,
+    validate_edge_hello_unit_rev,
+)
 
 
 def _validate_lanes(msg: Mapping[str, Any]) -> None:
@@ -353,6 +358,11 @@ def _validate_profile_reply(msg: Mapping[str, Any], *, ack: bool) -> None:
 
 
 def _validate_ack(msg: Mapping[str, Any], proto: int) -> None:
+    if is_describe_unit_reply(msg):
+        # The reply to the describe_unit query, protocol v2 only
+        # (flightrisk/fleet_protocol/unit.py).
+        validate_describe_unit_reply(msg, proto=proto)
+        return
     if is_return_reply(msg):
         # A return command's reply, protocol v2 only
         # (flightrisk/fleet_protocol/returns.py).
@@ -393,6 +403,9 @@ def _validate_ack(msg: Mapping[str, Any], proto: int) -> None:
 
 
 def _validate_nack(msg: Mapping[str, Any], proto: int) -> None:
+    if is_describe_unit_reply(msg):
+        validate_describe_unit_reply(msg, proto=proto)
+        return
     if is_return_reply(msg):
         validate_return_reply(msg, proto=proto)
         return
@@ -466,6 +479,9 @@ def _validate_hello(msg: Mapping[str, Any]) -> None:
     battery = _require(msg, "battery")
     if battery is not None and not (_is_number(battery) and 0 <= battery <= 100):
         raise ProtocolError(f"'hello' field 'battery' must be a percentage or null, got {_short(battery)}")
+    # Optional, protocol v2: the hash of the edge's start-time resolution
+    # (flightrisk/fleet_protocol/unit.py). Older grounds ignore it.
+    validate_edge_hello_unit_rev(msg)
 
 
 def validate_message(msg: Any, *, proto: int = 1) -> str:

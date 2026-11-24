@@ -1240,3 +1240,70 @@ with the same `detail`.
 
 **Roster cap.** `MAX_ROSTER` stays 8: fleets and every SITL scenario have at most eight
 drones, and raising the cap is out of scope (N-9). No return command carries a roster.
+
+## describe_unit and unit_rev
+
+Phase A2 defines these shapes (`flightrisk/fleet_protocol/unit.py`,
+`hardware-profiles-detail.md` sections 12.2 and 12.3, requirements PROTO-1 to PROTO-3,
+PROTO-5 and PROTO-7). No code sends them yet: the edge adopts them in A3 and the ground in A4.
+
+**The query.** `{"type": "describe_unit", "drone_id": "drone-1", "cmd_id": "<id>"}`, protocol
+v2 only. It is a read-only query (`QUERY_TYPES`), not a configuration command, so it is not
+in `CONFIG_COMMAND_TYPES` or `COMMAND_TYPES` and needs no fence: any ground may ask. The edge
+checks it with `validate_describe_unit` before its authority and fence checks;
+`validate_ground_to_edge` keeps refusing it until the edge adopts it. A query never feeds the
+link watchdog (A3).
+
+**The reply** is an `ack` with `for: "describe_unit"`, `result: "ok"`, `unit_rev` and:
+
+- `unit`: `model`, `model_name`, `adapter`, `scale`, `positioning`, `link` and `cameras`
+  (`{"<id>": {"mount", "mount_kind", "orient", "pitch_min_deg", "pitch_max_deg", "role",
+  "w_px", "h_px", "hfov_deg", "sensor", "radiometric"}}`). `link` is only the link kind
+  (`wifi_ap`, `wifi_station` or `radio`), never an SSID, host or address. `unit` and each
+  camera are strict: an unknown key is refused.
+- `gates`: `{"<feature id>": {"on", "ok", "why", "src"}}`.
+- `values`: `{"<param id>": {"v", "src", "d", "lo", "hi", "edit"}}`, drone-scope rows only.
+  `edit` is `ui`, `file_env` or `read_only`, so a phone-facing view can show read-only rows
+  as read-only and never as settings. A test-adapter fact (`edit: fact`, for example the
+  Tello tuning thresholds) is never reported, and a reply with `edit: "fact"` is refused. A
+  list value is sent as comma-separated text, so the reply holds no list of numbers.
+- `ap_link_loss` (optional): the autopilot's link-loss action, from `AP_LINK_LOSS_ACTIONS`
+  (MAV-19).
+- `accepts` (optional): the gate names of the "Return commands" section above.
+
+A refused query gets a `nack` with reason `busy` (queries faster than one per 2 s per
+connection) or `invalid`. The query and both replies are refused on a v1 link, and
+`shape_for_peer` refuses to shape them for a v1 peer. A reply is at most 16 KB
+(`MAX_DESCRIBE_UNIT_BYTES`); the worst case (a custom model with three cameras and every
+registry row) stays under it.
+
+**Spec correction (R1).** `accepts` is not in the reply shape of detail section 12.2. It is
+added because design section 18 sends the new commands only to an edge whose reply
+advertises them. `escort_setpoint` is valid in `accepts` only when `unit.scale` is `field`.
+
+**`unit_rev`.** The first 12 lowercase hex digits of SHA-256 over the canonical JSON of the
+unit's start-time description (`unit`, `gates` and `values`), built by
+`flightrisk/params/report.py`. Canonical JSON sorts keys, uses compact separators, rounds
+floats to 9 significant digits and writes a whole float as an integer, so key order and float
+formatting never change it. Runtime changes such as a later `set_ceiling` are not inputs, so
+`unit_rev` changes exactly when the start-time description changes. Test-adapter facts are not
+hashed either, so no fact value can be recovered from it.
+
+`unit_rev` is an optional key of the protocol v2 edge `hello` (`make_edge_hello(...,
+unit_rev=...)`, `EdgeHello.unit_rev`). Without it the `hello` is byte-identical to before. An
+older ground ignores the key, and `shape_for_peer` strips it for a v1 peer.
+
+**Gates for the ground and the edge.**
+
+- `may_describe(edge_hello)`: a ground sends `describe_unit` only to an edge whose protocol v2
+  `hello` carries a valid `unit_rev` (PROTO-3), so an older edge is never asked.
+- `may_send(peer_description, name_or_message)`: a return command, or an `assign_lanes` with
+  `corridor`, `landing`, `no_entry`, `speed_cm_s` or `on_complete: "return_home"`, goes only to
+  an edge whose validated reply lists every name the message needs (`required_accepts`).
+  Today's messages are always allowed.
+- `nack_reason_for_peer(reason, peer_query)`: an edge sends `straight_line_home` only to a
+  ground that has sent it `describe_unit`, and `invalid` otherwise.
+
+**Logging (PROTO-7).** `flightrisk/obs_comm.py` counts `describe_unit` queries and their
+replies on every message and logs them as one aggregated event per side, direction, type and
+drone, like telemetry. Replies are aggregated as `ack:describe_unit` and `nack:describe_unit`.

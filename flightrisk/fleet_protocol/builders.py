@@ -339,8 +339,13 @@ def make_edge_hello(
     is_flying: bool,
     battery: float | None,
     proto: int = PROTOCOL_VERSION,
+    unit_rev: str | None = None,
 ) -> dict[str, Any]:
-    """Edge -> ground, sent in reply to each ground ``hello`` (never before one)."""
+    """Edge -> ground, sent in reply to each ground ``hello`` (never before one).
+
+    *unit_rev* (protocol v2, optional) is the hash of the edge's start-time
+    resolution; without it the message is exactly today's.
+    """
     return EdgeHello(
         drone_id=drone_id,
         node_id=node_id,
@@ -350,6 +355,7 @@ def make_edge_hello(
         is_flying=is_flying,
         battery=battery,
         proto=proto,
+        unit_rev=unit_rev,
     ).to_message()
 
 
