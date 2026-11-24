@@ -131,7 +131,7 @@ Assumptions:
 | Dashboard authentication: one API key for every client | `flightrisk/dashboard/app.py:204`, `:219`; 45 Socket.IO handlers, 15 HTTP routes | Replaced by roles from credentials (section 16). |
 | LAND ALL path; recovery lands every drone on a confirmed match | `dashboard/app.py:1497`, `:2938`; `dashboard/recovery.py:25`, `:189` | LAND ALL first cancels every sender (section 10.2); recovery replaced by the on-find policy. |
 | Orphan countdown that lands, and #212's countdown for a lost drone whose controlling dashboard sends nothing (`FLIGHTRISK_MANUAL_LOST_IDLE_S`, 30 s, at least 5 s) | `dashboard/manual_control.py:58-70`, `:125-134`, `:155-171` | The stranded event (section 10.4, row 12); rows 23 and 157 of `parameters.md`. |
-| SITL: `scripts/start_sitl.sh`, `scripts/field_fleet_ground.py`, `tests/integration/test_sitl_fleet.py`; native ArduCopter 4.6.3 on the Mac | `docs/sitl-demo.md:81-124`, `docs/open-drone-support.md` | Extended to fleets of 2 to 8, the protocol roster cap (section 21). |
+| SITL: `scripts/start_sitl.sh`, `scripts/field_fleet_ground.py`, `tests/integration/test_sitl_fleet.py`; native ArduCopter 4.6.3 on macOS | `docs/sitl-demo.md:81-124`, `docs/open-drone-support.md` | Extended to fleets of 2 to 8, the protocol roster cap (section 21). |
 | The ground scores detections against the target; the edge only keeps the embeddings | `flightrisk/edge_device.py:810-813` | Multi-target scoring stays on the ground; no edge wire change (M-4). |
 | Everything the #197 detail design reused | `hardware-profiles-detail.md`, section 3 | Unchanged; moved line numbers are in `parameters.md`. |
 
@@ -1004,9 +1004,9 @@ detection pipeline per unit.
 
 | Tier | What | Where | Gate |
 | --- | --- | --- | --- |
-| Unit and fake | every transition, matcher rule, airspace check, role rule, registry and resolver rule; property tests | every PR, CI (Linux), the Mac, the ZBook | required |
-| SITL | ArduCopter (and PX4 for PX4 paths) fleets of 2 to 8 (the roster cap) with real edges and the real ground; `scripts/field_fleet_ground.py` until D3, then the dashboard | opt-in `sitl` marker; the Mac natively or Linux | required for PRs marked SITL; log attached |
-| Hardware | indoor Tello runs (ZBook); later field runs with a safety pilot | ZBook; field | listed per PR |
+| Unit and fake | every transition, matcher rule, airspace check, role rule, registry and resolver rule; property tests | every PR, CI (Linux), the ground-station laptop, the edge laptop | required |
+| SITL | ArduCopter (and PX4 for PX4 paths) fleets of 2 to 8 (the roster cap) with real edges and the real ground; `scripts/field_fleet_ground.py` until D3, then the dashboard | opt-in `sitl` marker; macOS natively or Linux | required for PRs marked SITL; log attached |
+| Hardware | indoor Tello runs (edge laptop); later field runs with a safety pilot | the edge laptop; field | listed per PR |
 
 ### 21.2 The SITL fleet harness (B1)
 
@@ -1030,7 +1030,7 @@ Each SITL scenario is named in the PR that needs it (`tasks.md`). Rules:
   driven through the state machine and the ground's senders, never produce a takeoff (RTH-21).
 - **AC-6.6** uses a geometry that can pass with the placeholders: a 300 cm out-and-back lane in a 400 by
   400 cm room, with the uncertainty bound at its default of 50 cm, where the predicted uncertainty at home
-  stays below the bound; ten taped runs on the ZBook.
+  stays below the bound; ten taped runs on the edge laptop.
 - **Indoor AC-7.1** (marks confirmed) has its own requirement (RTH-25).
 - **Final-round scenarios:** a pilot's mode change during `rth_landing` sends no second LAND (B-1); a
   shared landing area holds the place-1 drone above home without a blocked report (B-2); an escort
@@ -1038,10 +1038,10 @@ Each SITL scenario is named in the PR that needs it (`tasks.md`). Rules:
   corner of a zone lands (B-3); `SIM_GPS_DISABLE` with each accepted `FS_DR_ENABLE`, and PX4 GPS loss
   with `COM_POS_FS_ACT` 0 (B-4); an edge control-loop stall triggers the GCS failsafe (N-1).
 
-### 21.4 The Windows ZBook
+### 21.4 The Windows edge laptop
 
 The indoor Dev/test rig: two Tellos on two adapters, the C7 hardware gate (AC-6.6), the Windows
-portability run of the suite and the launcher, and optionally a ground against a SITL fleet on the Mac over
+portability run of the suite and the launcher, and optionally a ground against a SITL fleet on the ground-station laptop over
 the LAN. It is not the SITL host for large fleets.
 
 ## 22. The literal guard test (#197)
@@ -1051,6 +1051,14 @@ allowlist keyed by file, enclosing scope, kind, callee or target, name and value
 scope adds `flightrisk/mission/`, `flightrisk/drone/rth/` and `flightrisk/drone/autopilot_fence.py` once
 they exist. Measured on `82ec697` with the 160 ids of `parameters.md`: 524 findings with 514 distinct keys
 in 57 of the 76 files in scope (`guard_main.txt`, regenerated with this revision).
+
+The Tello coupling test (`tests/test_tello_coupling.py`, XCP) is the SEAM-6 extension: no code under
+`flightrisk/` or `scripts/` outside `flightrisk/drone/tello*.py`, `registry.py` and `backends.py` imports a Tello module, compares against a
+Tello adapter or model name, or uses a Tello-only constant, except the permanent exemptions
+`flightrisk/main.py`, `flightrisk/drone/mavlink.py`, `scripts/demo_edge.sh`, `scripts/demo_edge.ps1`,
+`scripts/demo_edge_pair.ps1` and `tests/test_demo_smoke.py` (owner decision). Today's other violations are a
+checked-in baseline that may only shrink; each phase deletes the entries it fixes. The runtime-import guard
+becomes a named-adopter allowlist in the same pull request.
 
 ## 23. Migration notes for operators
 
@@ -1084,7 +1092,7 @@ causes them:
 ## 24. Risks
 
 - **The default switches change how every drone ends a flight.** They come last, in four steps (C4 warn
-  only, C5 bounds and confirmations, C6 field defaults gated by SITL, C7 indoor defaults gated by the ZBook
+  only, C5 bounds and confirmations, C6 field defaults gated by SITL, C7 indoor defaults gated by the edge laptop
   runs), each revertible on its own (M-8).
 - **SITL is idealised**; nothing here claims field readiness; the hardware path of
   `docs/open-drone-support.md` still applies.
@@ -1177,9 +1185,37 @@ lines there before work starts, and any other failing assertion stops the PR. Th
 (`tests/test_param_parity.py`) fails on any acceptance difference not listed here, and a test checks that
 every "from <PR>" tag in `parameters.md` matches an item below naming that PR and that row.
 
-- **A1, A2, A3, B1:** none.
+- **A1, A2, B1:** none.
+- **A3, A4, A5:** 47. Each adopter of `resolve_unit` refuses at its own start the combinations pinned in
+  `ACCEPTED_TODAY_REFUSED_BY_RESOLVE_UNIT` (`tests/test_param_parity.py`) for the names it reads (cross-value
+  constraints K-3, K-6, K-8, K-12 and the test-adapter temperature pair), and a production (not simulated)
+  MAVLink unit ignores the test-adapter fact overrides pinned in `IGNORED_ON_PRODUCTION_UNIT`, with one log
+  line naming each variable (N-10, FACT-3). Environment and flag ranges stay today's (SEAM-10). Assertions:
+  any existing test that starts an edge, a ground or a launcher with one of the pinned combinations, named in
+  the description. For A5 the assertions are `tests/test_launcher_commands.py:67` and `:119-121`.
+- **A3:** 53. A MAVLink `generic_multirotor` no longer declares an airframe maximum altitude:
+  `MavlinkFleetDrone` drops its 120 m declaration (`int(FIELD_LIMITS.max_alt_slot_cm / 100)` in
+  `flightrisk/drone/mavlink_fleet.py`), and row 8 (`envelope.max_altitude_cm`) of `generic_multirotor` records
+  no airframe limit, changed in the same PR with a `safety-value-changes.md` entry. Height stays bounded,
+  unchanged, by the operator's mission ceiling (row 2, at most 12000 cm), the altitude slot range (row 4, at
+  most 12000 cm), the `FENCE_ALT_MAX` check of section 13 and, from B3 on, the uploaded autopilot fence; the
+  FlightRisk geofence is horizontal and does not bound height.
+  Every consumer of the declared maximum altitude must handle 'no limit' without crashing and without falling back to a lower or default cap.
+  `MavlinkFleetDrone` explicitly declares no limit (None), and the `DroneCapabilities` default of 120 m
+  (`flightrisk/drone/controller.py`) does not apply to it. A3 also corrects the stale "5 m" note at
+  `scripts/make_param_golden.py:178`. Phase: A3.
+  Assertions: the tests that pin that declaration or row 8's 12000 cm for `generic_multirotor`, named in its
+  description.
 - **A4:** 1. A fleet mixing indoor and field units is refused at Plan (nitpick 12).
-- **A5:** none. Assertions: `tests/test_launcher_commands.py:67`, `:119-121`.
+  48. The dashboard's default MAVLink address becomes `udpin://0.0.0.0:14540` (today `udp://:14540`, the
+  listen form MAVSDK 2 and later reject). Assertions: `tests/test_config.py:107`.
+  49. Without `inventory.json`, an edge-reported model that the catalogue does not know no longer becomes a
+  `tello` unit; Plan refuses that unit, naming the reported model (CAP-2, INV-5). Fleets of known models are
+  unchanged. Assertions: `tests/test_inventory.py:265`.
+- **X0, XCa, XCb, XL:** none.
+- **XCP:** none. Assertions: `tests/test_param_change_control.py:167`
+  (`test_no_runtime_module_imports_params_or_hardware` becomes the named-adopter allowlist of
+  `tests/param_adopters.py`; the coupling test `tests/test_tello_coupling.py` is added beside it).
 - **B2:** 2. Field Start is refused without a 3D fix, with too few satellites, with receiver accuracy above
   `home.accuracy_cm`, with the autopilot's home beyond `home.max_offset_cm`, or outside the mission fence.
   3. A home that changes in flight lands with `no_known_home`. 4. Positioning uncertainty is reported as
@@ -1200,6 +1236,17 @@ every "from <PR>" tag in `parameters.md` matches an item below naming that PR an
   8. On a MAVLink unit the critical battery is the autopilot's critical action, not the edge's 15 %.
   40. A field takeoff is refused unless `mavsdk_server` is tied to the edge, and a control loop that stalls
   longer than the autopilot's GCS timeout kills the server (N-1). 41. The edge reports `ap_link_loss`.
+  50. `--allow-unverified-failsafes` and `link.require_failsafes = false` are refused unless the unit is a
+  verified simulated unit (CAP-6); today they skip every failsafe check on any vehicle (MAV-14).
+  Assertions: the MAVLink start-path tests that pass the flag with a fake vehicle that is not verified
+  simulated, named in the description.
+  51. A field takeoff is also refused while another process holds the autopilot's serial device (a leftover
+  `mavsdk_server`); the launcher and the edge show the preflight row "serial port free" (extends item 40,
+  N-1). Assertions: none expected; any found are named in the description.
+  52. The MAVLink adapter turns in place through MAVSDK (`MAV_CMD_CONDITION_YAW` sent with
+  `mavlink_passthrough`, no pymavlink), so stepped camera sensing no longer cuts a lane the drone does not
+  already face. B4f builds this only if the B1b SITL acceptance scenario shows lanes cut because the drone
+  cannot yaw in place. Assertions: tests that pin such a cut for a MAVLink drone, named in the description.
 - **D1:** 9. Field base separation becomes 500 cm. 10. Bands are enforced at Plan. 11. A field mission
   needs an obstacle top per area, and slots below it plus the margin are refused. 12. Homes closer than the
   base separation (plus both accuracies in the field) are refused; a shared landing area gets an order.
@@ -1254,7 +1301,7 @@ every "from <PR>" tag in `parameters.md` matches an item below naming that PR an
   link loss, low battery, task end, stranded) switch from the autopilot's RTL (`mavlink_fleet.py:1196-1236`)
   to the edge-guided return (`return.field_method`, N-6). Assertions: the MAVLink start-path
   tests that pin a land on these events, named in its description.
-- **C7 (indoor defaults, ZBook-gated):** 34. The Tello holds 10 s after the short loss and returns
+- **C7 (indoor defaults, edge-laptop-gated):** 34. The Tello holds 10 s after the short loss and returns
   (`link.loss_wait_s` 0 to 10, `link.loss_action` land to return); its ground loss timeout becomes 15 s;
   the stranded countdown returns; low battery returns at the threshold (floor 25 %) and only critical
   (15 %) lands; transient errors retry once and return; a failed sensor retraces home. Assertions: the
@@ -1304,7 +1351,7 @@ every "from <PR>" tag in `parameters.md` matches an item below naming that PR an
 | M-11 environment override | Environment and indoor profile read-only for custom models | 2, 6 |
 | M-12 spec gaps | Ceiling breach and no-order reasons; every 6.2 row separate; escort end; accept as unsearched; converge pre-selection; observer tension | 10.4, 10.5, 14.3, 15.3, 15.5, 16.2 |
 | User direction: Tello-coupled values | 30 rows (32 in revision 3) marked `fact` (read-only, not operator-facing); no requirement surfaces them to the operator; the depth threshold leaves the launcher (#198) | 7.5; `parameters.md` |
-| Nitpicks 1 to 12 | Base `fc5f6aa` (now `82ec697`, revision 3); `zone` exists; `rth` names; requirement pointers fixed; SEAM-7 cites A6; spec 10.1(3); CAP-3 moved to C1; row 15 scope note; constraints with current ids; B1 records the Mac patch and uses the new command line; mixed-environment refusal in A4 | throughout |
+| Nitpicks 1 to 12 | Base `fc5f6aa` (now `82ec697`, revision 3); `zone` exists; `rth` names; requirement pointers fixed; SEAM-7 cites A6; spec 10.1(3); CAP-3 moved to C1; row 15 scope note; constraints with current ids; B1 records the native macOS build patch and uses the new command line; mixed-environment refusal in A4 | throughout |
 
 ### 28.1 Final round (revision 3)
 

@@ -270,5 +270,5 @@ dcacf6e feat(t05): gate match snapshots, drop import-time mkdir, isolate capture
 ## Datasets and weights
 
 - The HERIDAL data is not in git. `datasets/*` is gitignored (only `datasets/README.md` is tracked). `scripts/download_heridal.sh` and `scripts/finetune_heridal.py fetch` pull it from Zenodo record 5662351 (CC-BY-3.0).
-- The fine-tuned weights `models/heridal_yolo11s.pt` are not in git either: `models/` and `*.pt` are gitignored, and no download link is published. Reproduce them with the commands in the "Reproduce" section of `docs/altitude-benchmark.md`; the fine-tune took 51 minutes on an Apple M1 Max, and a rerun gives close but not identical numbers.
+- The fine-tuned weights `models/heridal_yolo11s.pt` are not in git either: `models/` and `*.pt` are gitignored, and no download link is published. Reproduce them with the commands in the "Reproduce" section of `docs/altitude-benchmark.md`; the fine-tune took 51 minutes on a 10-core Apple silicon laptop, and a rerun gives close but not identical numbers.
 - The raw benchmark results are committed in `results/`.

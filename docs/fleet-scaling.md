@@ -32,7 +32,7 @@ Command (area and flags are the launcher defaults for N = 4; the ground station 
 python scripts/demo_fake_fleet.py --n 4 --drive --kill-after-s 6 --watch-s 40
 ```
 
-Output, 2026-10-27, Apple M1 Max, edges and ground on 127.0.0.1:
+Output, 2026-10-27, Apple silicon, edges and ground on 127.0.0.1:
 
 ```
 Loopback only (127.0.0.1); token random per run.

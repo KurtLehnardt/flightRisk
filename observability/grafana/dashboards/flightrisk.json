@@ -19,7 +19,7 @@
       {
         "name": "node",
         "label": "Node",
-        "description": "service.instance.id of the sending laptop (OTEL_RESOURCE_ATTRIBUTES), e.g. mac-ground or edge-2",
+        "description": "service.instance.id of the sending laptop (OTEL_RESOURCE_ATTRIBUTES), e.g. ground or edge-2",
         "type": "query",
         "datasource": {
           "type": "loki",

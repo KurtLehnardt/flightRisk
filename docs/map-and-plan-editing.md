@@ -19,7 +19,7 @@ verified.
   generated pattern. Each drone keeps its own path: editing one never changes
   another.
 - Show the plan over satellite imagery, a topographic map, a street map, or no
-  imagery, both with internet access and offline (the Mac has no internet
+  imagery, both with internet access and offline (the ground-station laptop has no internet
   while it is joined to a Tello's Wi-Fi network).
 - Never weaken safety: every edited plan goes through the same checks as a
   generated plan, plus a new drone-to-drone separation check, and Start keeps

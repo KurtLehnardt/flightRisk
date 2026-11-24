@@ -35,7 +35,7 @@
   ],
   "templating": {
     "list": [
-      {"name": "node", "label": "Node", "description": "service.instance.id of the sending laptop (OTEL_RESOURCE_ATTRIBUTES), e.g. mac-ground or edge-2", "type": "query", "datasource": {"type": "loki", "uid": "loki"}, "query": {"type": 1, "label": "service_instance_id", "stream": "{service_name=~\"flightrisk.*\"}", "refId": "LokiVariableQueryEditor-VariableQuery"}, "definition": "label_values({service_name=~\"flightrisk.*\"}, service_instance_id)", "refresh": 2, "sort": 1, "multi": true, "includeAll": true, "allValue": ".*", "current": {"selected": true, "text": ["All"], "value": ["$__all"]}, "options": [], "hide": 0}
+      {"name": "node", "label": "Node", "description": "service.instance.id of the sending laptop (OTEL_RESOURCE_ATTRIBUTES), e.g. ground or edge-2", "type": "query", "datasource": {"type": "loki", "uid": "loki"}, "query": {"type": 1, "label": "service_instance_id", "stream": "{service_name=~\"flightrisk.*\"}", "refId": "LokiVariableQueryEditor-VariableQuery"}, "definition": "label_values({service_name=~\"flightrisk.*\"}, service_instance_id)", "refresh": 2, "sort": 1, "multi": true, "includeAll": true, "allValue": ".*", "current": {"selected": true, "text": ["All"], "value": ["$__all"]}, "options": [], "hide": 0}
     ]
   },
   "annotations": {
