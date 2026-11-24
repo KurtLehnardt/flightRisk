@@ -7,7 +7,7 @@ Parent deploys a drone, provides a photo of their child, and the drone autonomou
 ## Architecture
 
 ```
-DJI Tello (720p WiFi) → MacBook / Android → AI Pipeline → Alert
+DJI Tello (720p WiFi) → Laptop / Android → AI Pipeline → Alert
 ```
 
 The iPhone app is a standalone detector and a console for a ground station. It does not connect to the drone itself.

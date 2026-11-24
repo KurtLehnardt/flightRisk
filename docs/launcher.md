@@ -77,7 +77,7 @@ The edge token comes from `FLIGHTRISK_EDGE_TOKEN` in the environment, else from
 
 | You want | This computer runs | Edge link | Drones |
 | --- | --- | --- | --- |
-| Layout A, ground computer (the Mac) | ground station and dashboard | loopback plus cable address | each drone's edge runs on "other computer" (or "here" for a drone flown from this computer too) |
+| Layout A, ground computer (the ground-station laptop) | ground station and dashboard | loopback plus cable address | each drone's edge runs on "other computer" (or "here" for a drone flown from this computer too) |
 | Layout A, edge computer (the Windows laptop) | edges only, ground host `10.42.0.1`, port `9000` | | all drones here, each with its adapter's local IP and, on Windows, interface index |
 | Layout B, everything on one computer | ground station and dashboard | loopback only | all drones here; two real Tellos need one Wi-Fi adapter each |
 | Single drone | ground station and dashboard | loopback only | one drone here |
@@ -286,7 +286,7 @@ The launcher never signals a process it did not start, for example a ground stat
 ## Design decisions
 
 - **A web page served by the standard library, not Tkinter.** Tkinter is not usable with the project's
-  virtual environment on the Mac: its Python 3.13 (pyenv) is built without `_tkinter`, and the macOS
+  virtual environment on the ground-station laptop: its Python 3.13 (pyenv) is built without `_tkinter`, and the macOS
   system Python ships an old, broken Tk. A page served by `http.server` on 127.0.0.1 needs no extra
   package, runs the same on macOS and Windows, and opens in the browser that is already used for the
   dashboard.

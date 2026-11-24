@@ -8,11 +8,11 @@ Kickoff is commit `798f21a`, tagged `hackathon/kickoff`. Before it, the reposito
 
 ## Hardware and roles
 
-- Two Tello EDU drones. Drone 1 is controlled from the Mac and drone 2 from the Windows laptop, one edge process per host, so the two video streams never collide on one port (`docs/fleet-setup.md`).
+- Two Tello EDU drones. Drone 1 is controlled from the ground-station laptop and drone 2 from the Windows laptop, one edge process per host, so the two video streams never collide on one port (`docs/fleet-setup.md`).
 - Mac: ground station and edge-1. It drives the projector with the dashboard and the deck (ASSUMPTION: an HDMI projector is available; organizer question).
 - Windows laptop: edge-2.
 - Station path: one 2.4 GHz router or phone hotspot that allows client-to-client traffic.
-- AP path: one USB-C Gigabit Ethernet adapter for the Mac, one for the Windows laptop if it has no RJ45 port, and one Cat5e or Cat6 patch cable.
+- AP path: one USB-C Gigabit Ethernet adapter for the ground-station laptop, one for the Windows laptop if it has no RJ45 port, and one Cat5e or Cat6 patch cable.
 - Batteries: see the battery and rehearsal plan below.
 
 ## Pre-flight checklist
@@ -24,7 +24,7 @@ Both paths:
 1. Placement and heading (do this before every flight). Mark the 4 m × 4 m area and a takeoff line along its near edge. Put drone-1 at the near-left corner. Put drone-2 250 cm to its right on the same line. Point both noses into the area along the 4 m depth (the +y direction the coordinator assumes). Keep the audience behind the takeoff line. The presenter stands at least 1.5 m beyond the far edge, outside the geofence, never in a flight path. The launchers set the edge geofence to 450 cm; override it with `FLIGHTRISK_GEOFENCE_CM` only if the floor is larger.
 2. Floor: a clear 4 m × 4 m area with a ceiling of at least 2.5 m (ASSUMPTION; organizer question). The fleet plan's default area is 400 cm square (`FLIGHTRISK_FLEET_AREA_CM`), and the drones fly at altitude slots of 100 cm and 130 cm, below the default ceiling limit of 140 cm (set the room's ceiling in the dashboard; see `docs/ceiling-and-altitude.md`).
 3. Batteries: a fresh battery in each drone, and each at 30% or more. The edge refuses takeoff below 30% and lands below 15%. Read the level in the hardware check report and again on each drone's status card in the dashboard.
-4. The same token on both laptops: `export FLIGHTRISK_EDGE_TOKEN="choose-a-long-random-string"` on the Mac and `$env:FLIGHTRISK_EDGE_TOKEN = "choose-a-long-random-string"` on Windows.
+4. The same token on both laptops: `export FLIGHTRISK_EDGE_TOKEN="choose-a-long-random-string"` on the ground-station laptop and `$env:FLIGHTRISK_EDGE_TOKEN = "choose-a-long-random-string"` on Windows.
 5. Run the hardware check for your path (below) and keep its report on screen until both drones pass.
 
 ### Path 1: station mode (`FLIGHTRISK_FLEET_NET=station`)
@@ -56,7 +56,7 @@ $env:FLIGHTRISK_TELLO_HOST = "192.168.1.51"
 
 The static addresses (Mac 10.42.0.1, Windows 10.42.0.2, no gateway) and firewall rules are set once, as in `docs/fleet-setup.md` Path 2 steps 1 to 3. Each laptop joins its own drone's `TELLO-XXXXXX` network.
 
-Cable link check: run `venv/bin/python scripts/check_fleet_link.py --role server` on the Mac, then `venv\Scripts\python.exe scripts\check_fleet_link.py --role client --peer 10.42.0.1` on Windows. Both must print `PASS`. Stop the server with Ctrl-C before launching, because the ground station needs port 9000.
+Cable link check: run `venv/bin/python scripts/check_fleet_link.py --role server` on the ground-station laptop, then `venv\Scripts\python.exe scripts\check_fleet_link.py --role client --peer 10.42.0.1` on Windows. Both must print `PASS`. Stop the server with Ctrl-C before launching, because the ground station needs port 9000.
 
 Mac, hardware check report and settings:
 
@@ -83,7 +83,7 @@ scripts/demo_ground.sh
 FLIGHTRISK_GROUND_LOCAL=1 DRONE_ID=1 ALT_CM=100 scripts/demo_edge.sh
 ```
 
-In AP mode the ground station binds `127.0.0.1,10.42.0.1`. `FLIGHTRISK_GROUND_LOCAL=1` tells the Mac's edge-1 that the ground station is on the same machine, so it connects over loopback (`ws://127.0.0.1:9000`). The expectation is that it keeps running if the cable is pulled; that is UNVERIFIED on hardware, and `docs/fleet-setup.md` step 8 measures it. The inline form above exports the variable to the launcher. If you source `scripts/fleet_env.sh` yourself first, use `export FLIGHTRISK_GROUND_LOCAL=1`, because a plain shell variable is not inherited by the launcher. Station mode ignores the variable.
+In AP mode the ground station binds `127.0.0.1,10.42.0.1`. `FLIGHTRISK_GROUND_LOCAL=1` tells the ground-station laptop's edge-1 that the ground station is on the same machine, so it connects over loopback (`ws://127.0.0.1:9000`). The expectation is that it keeps running if the cable is pulled; that is UNVERIFIED on hardware, and `docs/fleet-setup.md` step 8 measures it. The inline form above exports the variable to the launcher. If you source `scripts/fleet_env.sh` yourself first, use `export FLIGHTRISK_GROUND_LOCAL=1`, because a plain shell variable is not inherited by the launcher. Station mode ignores the variable.
 
 Windows:
 
@@ -93,7 +93,7 @@ $env:DRONE_ID = "2"; $env:ALT_CM = "130"; .\scripts\demo_edge.ps1
 
 ### Go/no-go
 
-- The dashboard (http://127.0.0.1:5555 on the Mac; it binds to this machine only by default) lists both drones with battery, clock offset and round-trip time.
+- The dashboard (http://127.0.0.1:5555 on the ground-station laptop; it binds to this machine only by default) lists both drones with battery, clock offset and round-trip time.
 - If a drone is missing, check that the ground station's fleet list (`--fleet`, env `FLIGHTRISK_FLEET_DRONES`) names the same drone ids the edges use.
 - Both batteries read 30% or more, and the floor area is clear.
 - Fallbacks are staged: `demo/fleet.mp4` is open in a video player, and `venv/bin/python scripts/demo_fake_fleet.py --n 4 --dry-run` prints its command lines.
@@ -152,7 +152,7 @@ Run the core, then the blocks below in order until the talk time for the slot ru
 
 ### E1 · Four drones and loss recovery (2:00)
 
-Show that the coordinator scales past two drones. After LAND ALL, run this on the Mac in a fresh terminal, on different ports so the live ground station can stay up:
+Show that the coordinator scales past two drones. After LAND ALL, run this on the ground-station laptop in a fresh terminal, on different ports so the live ground station can stay up:
 
 ```
 venv/bin/python scripts/demo_fake_fleet.py --n 4 --drive --dashboard-port 5556 --edge-port 9001
@@ -193,7 +193,7 @@ FlightRisk is GPL-3.0-or-later. Ultralytics YOLO11 is AGPL-3.0; GPLv3 section 13
 Drop one rung per failure. Spend no more than 30 seconds fixing anything on stage; say which rung is running and why.
 
 1. **Two Tellos live** (station or AP path). The core as written.
-2. **One Tello live and one fake edge.** Use this when one drone, its laptop or its link fails. On the Mac, in a terminal where `FLIGHTRISK_EDGE_TOKEN` and the fleet settings are exported, first stop the real edge for that drone (Ctrl-C in its terminal, or `l` and Enter to land it, then Ctrl-C), because the ground station refuses a second live edge that claims the same drone id, so the fake edge would be turned away while the real one is still connected. Then start a fake edge in place of the missing drone:
+2. **One Tello live and one fake edge.** Use this when one drone, its laptop or its link fails. On the ground-station laptop, in a terminal where `FLIGHTRISK_EDGE_TOKEN` and the fleet settings are exported, first stop the real edge for that drone (Ctrl-C in its terminal, or `l` and Enter to land it, then Ctrl-C), because the ground station refuses a second live edge that claims the same drone id, so the fake edge would be turned away while the real one is still connected. Then start a fake edge in place of the missing drone:
 
    ```
    export FLIGHTRISK_GROUND_LOCAL=1; source scripts/fleet_env.sh
@@ -210,7 +210,7 @@ Drop one rung per failure. Spend no more than 30 seconds fixing anything on stag
 
    Open http://127.0.0.1:5555 to show four zones, the scheduled start and the re-task after one edge is killed. To show the obstacle beat here as well, export `FLIGHTRISK_FAKE_OBSTACLE_Y_CM=250` before starting the launcher; the fake edges it starts take the variable from its environment and stop at 250 cm along their lanes. This rung replaces the SITL rung of the original plan: SITL never completed a flight on this machine, because the only image that runs here never reports position (`docs/sitl-demo.md`).
 
-If the Mac itself fails, present `docs/pitch.md` from any machine; the plots are in `docs/img/`.
+If the ground-station laptop itself fails, present `docs/pitch.md` from any machine; the plots are in `docs/img/`.
 
 ## Battery and rehearsal plan
 
@@ -223,7 +223,7 @@ If the Mac itself fails, present `docs/pitch.md` from any machine; the plots are
 
 ## Backup video shot list
 
-`demo/fleet.mp4` must be at most two minutes (120 s). Record it in rehearsal 1: screen capture of the Mac plus a phone video of the floor.
+`demo/fleet.mp4` must be at most two minutes (120 s). Record it in rehearsal 1: screen capture of the ground-station laptop plus a phone video of the floor.
 
 | # | Seconds | Shot | On screen |
 |---|---|---|---|

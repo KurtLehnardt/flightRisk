@@ -31,7 +31,7 @@ A1 ─> A2 ─┬─> A3 ─┬─> B1 ─┐
   airspace, lost drones and field planning, behind today's defaults), C (return machinery, roles, then the
   switch in four steps), F (mobile), D4 and D5 (tasks and search speed), E (on-find flows).
 - **Development may overlap where files do not:** C1 (edge files) can be developed from B4 on while D1 to
-  D3 (ground files) are under review, and merges after D3; C7 (indoor defaults, gated by the ZBook runs)
+  D3 (ground files) are under review, and merges after D3; C7 (indoor defaults, gated by the edge laptop runs)
   and F1 can proceed side by side after C6 (C7 changes defaults only); F2 and F3 run in parallel; D4
   waits for both, because it edits fixtures the apps read (N-7). D5 and E1 are sequential.
 - SITL scenarios before D3 use `scripts/field_fleet_ground.py` as the ground (D1 may edit it for its
@@ -207,7 +207,7 @@ order guarantees. Shared, sectioned files: `tests/param_literal_allowlist.py` (o
 - **Acceptance:** RTH-19 (field), RTH-34 (field rows), RTH-38 (default switch), SW-3, CMP-2 (field), SW-4.
 
 ### C7: indoor return defaults
-- **Tier:** opus, xhigh. **Depends on:** C6. Gated by the ZBook runs.
+- **Tier:** opus, xhigh. **Depends on:** C6. Gated by the edge laptop runs.
 - **Behaviour changes:** items 34 and 46. **Assertions:** as named for C7 in section 27.
 - **Test plan:** fake; hardware AC-6.6 (ten taped runs) before merge.
 - **Acceptance:** RTH-19 (indoor), RTH-22, RTH-34 (indoor rows), LOST-7, CMP-2 (indoor), SW-4.

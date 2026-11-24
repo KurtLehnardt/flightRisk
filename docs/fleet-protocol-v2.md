@@ -331,7 +331,7 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
 
 ## Drone link preflight (takeoff only)
 
-Incident of 2026-10-28 (Mac edge-1): the Mac was not on the Tello's Wi-Fi.
+Incident of 2026-10-28 (ground-station laptop edge-1): the ground-station laptop was not on the Tello's Wi-Fi.
 For minutes the state stream was silent and every keepalive and stream
 recovery failed with `OSError` 51 (network unreachable), but the
 edge-to-ground link was fine and telemetry kept the last cached battery, so
