@@ -107,7 +107,9 @@ class Capability(str, Enum):
     #: estimate read from the vehicle.
     MEASURED_POSE = "measured_pose"
     #: The backend provides ``link_status()``, a report on the health of its
-    #: command link.
+    #: link. Any backend that has the method declares this, and a report that
+    #: is not ok refuses takeoff. For the MAVLink backend the report carries
+    #: the autopilot's preflight and failsafe checks.
     LINK_HEALTH = "link_health"
 
 
@@ -123,7 +125,9 @@ BASIC_FLIGHT: frozenset[Capability] = frozenset({
 
 
 #: Capabilities a duck-typed object declares by providing a callable of this name.
-_INFERRED_BY_METHOD: tuple[tuple[Capability, str], ...] = (
+#: The conformance honesty check reuses this table, so a declared member
+#: without its method fails there.
+INFERRED_BY_METHOD: tuple[tuple[Capability, str], ...] = (
     (Capability.SETTLED_HEIGHT, "settled_height"),
     (Capability.TAKEOFF_REPLY_TIME, "last_takeoff_reply_s"),
     (Capability.MEASURED_HEADING, "measured_heading_deg"),
@@ -175,13 +179,17 @@ class DroneCapabilities:
         controllers written before capabilities existed) reach this. It is
         the single place where method presence is still inspected, so the
         rest of the code can rely on ``supports()`` alone.
+
+        Each probe reads the attribute of that name, so a property that raises
+        propagates out of here and out of ``capabilities_of``. Every built-in
+        backend declares its capabilities and so never reaches the probe.
         """
         features = set(BASIC_FLIGHT)
         if callable(getattr(drone, "return_to_home", None)):
             features.add(Capability.RETURN_TO_HOME)
         if callable(getattr(drone, "goto_gps", None)):
             features.add(Capability.GOTO_GPS)
-        for capability, method in _INFERRED_BY_METHOD:
+        for capability, method in INFERRED_BY_METHOD:
             if callable(getattr(drone, method, None)):
                 features.add(capability)
         if _takeoff_accepts_abort(drone):
