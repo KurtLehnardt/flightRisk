@@ -286,7 +286,7 @@ _FAILSAFE_ACTION_ENV_VAR = "FLIGHTRISK_FAILSAFE_ACTION"
 _FRAME_STRIDE_ENV_VAR = "FLIGHTRISK_EDGE_FRAME_STRIDE"
 # The stride is applied by time (``DroneFrameSource``): a detection every N times the longer of the
 # frame time and the time one frame takes to process. A fast detector at stride 30 gets one frame a
-# second at 30 fps; the ZBook's 330 ms detector at stride 30 would get one every 10 s without the
+# second at 30 fps; the edge laptop's 330 ms detector at stride 30 would get one every 10 s without the
 # skip cap below (one every 1.3 s with it). Above this the video tile and the search are nearly blind.
 MAX_FRAME_STRIDE = 30
 # Longest time frames are dropped after a processed frame, however slow it was. Without a cap a
@@ -296,7 +296,7 @@ _STRIDE_MAX_SKIP_ENV_VAR = "FLIGHTRISK_EDGE_STRIDE_MAX_SKIP_S"
 DEFAULT_STRIDE_MAX_SKIP_S = 1.0
 STRIDE_MAX_SKIP_RANGE_S = (0.0, 5.0)
 # Torch threads per edge process (intra-op; inter-op is set to 1). Each edge runs YOLO and MiDaS,
-# so on the 4-core ZBook two edges with torch's default of one thread per core each, plus the
+# so on the 4-core Windows laptop (Layout B) two edges with torch's default of one thread per core each, plus the
 # ground, oversubscribe the CPU and the video decoder falls behind. 2 per edge fits two edges and
 # the ground on 4 cores. 0 leaves torch's own default.
 _TORCH_THREADS_ENV_VAR = "FLIGHTRISK_EDGE_TORCH_THREADS"

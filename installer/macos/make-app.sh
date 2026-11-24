@@ -6,21 +6,23 @@
 #   make-app.sh build --out DIR [--ref REF]        the same into any folder (build-dmg.sh)
 #
 # The bundle holds:
-#   Contents/Info.plist              bundle id io.github.kurtlehnardt.flightrisk.launcher
+#   Contents/Info.plist              bundle id org.flightrisk.launcher
 #   Contents/MacOS/FlightRisk        installer/macos/app-main.sh
 #   Contents/Resources/FlightRisk.icns
 #   Contents/Resources/install.sh    the installer, used when FlightRisk is not installed yet
 #   Contents/Resources/install-ref   the release the bundled installer installs (only with --ref vX.Y.Z)
 #
-# An existing FlightRisk.app is replaced only when it carries the same bundle id,
-# so an unrelated app of the same name is never overwritten. The new bundle is
-# assembled next to the old one and moved into place, so a failure half-way
-# leaves the old one intact.
+# An existing FlightRisk.app is replaced only when it carries the same bundle id
+# (or the earlier io.github.<owner>.flightrisk.launcher form), so an unrelated app of
+# the same name is never overwritten. The new bundle is assembled next to the old one
+# and moved into place, so a failure half-way leaves the old one intact.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
-BUNDLE_ID="io.github.kurtlehnardt.flightrisk.launcher"
+BUNDLE_ID="org.flightrisk.launcher"
+# Launcher apps built before the bundle id changed carry io.github.<owner>.flightrisk.launcher.
+LEGACY_BUNDLE_ID_PATTERN='io.github.*.flightrisk.launcher'
 ICNS="$ROOT/installer/assets/FlightRisk.icns"
 
 usage() {
@@ -84,7 +86,8 @@ is_our_bundle() {
   local id
   [ -f "$1/Contents/Info.plist" ] || return 1
   id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$1/Contents/Info.plist" 2>/dev/null || true)"
-  [ "$id" = "$BUNDLE_ID" ]
+  # shellcheck disable=SC2053 # the right side is a glob pattern on purpose
+  [ "$id" = "$BUNDLE_ID" ] || [[ "$id" == $LEGACY_BUNDLE_ID_PATTERN ]]
 }
 
 # Assemble FlightRisk.app in folder $1 for release $2.

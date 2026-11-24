@@ -3,7 +3,7 @@
 #   metrics -> exposed on :8889 for Prometheus to scrape
 #   logs    -> Loki (native OTLP ingest)
 #
-# Each node sets service.instance.id (e.g. mac-ground, edge-2) through
+# Each node sets service.instance.id (e.g. ground, edge-2) through
 # OTEL_RESOURCE_ATTRIBUTES. It becomes the Prometheus label and the Loki
 # label service_instance_id, which the dashboard's "node" variable filters on.
 receivers:

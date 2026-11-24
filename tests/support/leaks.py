@@ -75,7 +75,7 @@ def process_wide_threads() -> frozenset[threading.Thread]:
 
 # Windows counts kernel handles, not descriptors. Handles that are not leaks still appear: the first
 # thread pool, DLL loads and event objects. A one-time warm-up (_warm_up, run before the first snapshot)
-# takes those first-use costs out. The ZBook still measured 3 extra handles when the logging listener starts
+# takes those first-use costs out. The edge laptop still measured 3 extra handles when the logging listener starts
 # after a snapshot (and 2 to 3 before any warm-up), so the tolerance is that measurement plus 1. Sockets are what the tests plant and
 # what leaks in practice, so on Windows they are counted separately and exactly (open_sockets), and any
 # new socket is a leak. Descriptor counts on macOS and Linux stay exact.

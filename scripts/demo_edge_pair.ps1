@@ -6,7 +6,7 @@
 # Each edge runs in its own console window with QuickEdit turned off, so a stray click in the window
 # cannot pause the edge. Edge 1 flies drone-1 at altitude slot 60 cm through the adapter with
 # LocalIp1; edge 2 flies drone-2 at 80 cm through the adapter with LocalIp2. Both dial the ground
-# station at ws://10.42.0.1:9000 (the Mac, over the Thunderbolt cable). Get the IPs and interface
+# station at ws://10.42.0.1:9000 (the ground-station laptop, over the Thunderbolt cable). Get the IPs and interface
 # indexes with:
 #
 #   Get-NetIPAddress -AddressFamily IPv4 | Format-Table InterfaceIndex, InterfaceAlias, IPAddress

@@ -3,7 +3,7 @@
 #   $env:FLIGHTRISK_FLEET_NET = "station"   # or: "ap"
 #   . .\scripts\fleet_env.ps1
 #
-# station mode needs FLIGHTRISK_GROUND_IP (the Mac's LAN IP) and FLIGHTRISK_TELLO_HOST
+# station mode needs FLIGHTRISK_GROUND_IP (the ground-station laptop's LAN IP) and FLIGHTRISK_TELLO_HOST
 # (the IP of the Tello that this host controls, from the discovery step).
 # ap mode needs nothing else: the addresses are fixed by the wired-link plan.
 # Both modes need FLIGHTRISK_EDGE_TOKEN to be set, because the ground station binds
@@ -19,7 +19,7 @@ $fleetNet = $env:FLIGHTRISK_FLEET_NET
 
 if ($fleetNet -eq "station") {
     if (-not $env:FLIGHTRISK_GROUND_IP) {
-        Write-Error "fleet_env.ps1: station mode needs FLIGHTRISK_GROUND_IP (the Mac LAN IP)"
+        Write-Error "fleet_env.ps1: station mode needs FLIGHTRISK_GROUND_IP (the ground-station laptop LAN IP)"
         return
     }
     if (-not $env:FLIGHTRISK_TELLO_HOST) {

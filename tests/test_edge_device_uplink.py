@@ -92,7 +92,7 @@ def test_control_pump_leaves_the_watchdog_to_an_uplink():
 
 def test_default_node_id(monkeypatch):
     assert default_node_id({"FLIGHTRISK_NODE_ID": "mac"}) == "mac"
-    monkeypatch.setattr("socket.gethostname", lambda: "Kurt's MacBook Pro.local")
-    assert default_node_id({}) == "Kurt-s-MacBook-Pro"
+    monkeypatch.setattr("socket.gethostname", lambda: "Field Team's Laptop.local")
+    assert default_node_id({}) == "Field-Team-s-Laptop"
     monkeypatch.setattr("socket.gethostname", lambda: "???")
     assert default_node_id({}) == "edge-node"
