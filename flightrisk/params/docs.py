@@ -11,10 +11,29 @@ from __future__ import annotations
 
 from typing import Any
 
+from flightrisk.hardware.catalogue import BUILTIN_MODELS
+
 from .spec import Bound, Edit, ParamSpec
 from .table import FACT_NOTE, TABLE
 
-PROFILES = ("tello", "generic_multirotor")
+# The parameter profiles in catalogue order, each listed once.
+PROFILES = tuple(dict.fromkeys(m.profile for m in BUILTIN_MODELS.values()))
+
+# A profile heading is the coverage name of its first built-in model in catalogue order. An entry here overrides that
+# name only where the heading is deliberately shorter than the coverage name.
+_PROFILE_NAMES = {"generic_multirotor": "Generic"}
+
+
+def _profile_name(profile: str) -> str:
+    """The display name used in the column headings for one profile.
+
+    It is the override in ``_PROFILE_NAMES`` when there is one, and otherwise the coverage name of the first built-in
+    model of that profile in catalogue order.
+    """
+    if profile in _PROFILE_NAMES:
+        return _PROFILE_NAMES[profile]
+    return next(m.coverage_name or m.name for m in BUILTIN_MODELS.values() if m.profile == profile)
+
 
 _EDIT_WORDS = {
     Edit.UI: "setting",
@@ -61,17 +80,15 @@ def _cell(text: str) -> str:
 
 
 def _settings_table(rows: list[ParamSpec]) -> list[str]:
-    out = [
-        "| Id | Description | Unit | Tello default | Tello bound | Generic default | Generic bound | Edit |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- |",
-    ]
+    heads = [h for p in PROFILES for h in (f"{_profile_name(p)} default", f"{_profile_name(p)} bound")]
+    columns = ["Id", "Description", "Unit", *heads, "Edit"]
+    out = ["| " + " | ".join(columns) + " |", "| " + " | ".join("---" for _ in columns) + " |"]
     for r in rows:
         edit = " / ".join(sorted({_EDIT_WORDS[r.edit[p]] for p in PROFILES}))
-        out.append(
-            f"| `{r.id}` | {_cell(r.description)} | {r.unit.value} | {_value(r.defaults.get('tello'))} | "
-            f"{_bound(r.bounds.get('tello'))} | {_value(r.defaults.get('generic_multirotor'))} | "
-            f"{_bound(r.bounds.get('generic_multirotor'))} | {edit} |"
-        )
+        cells = [f"`{r.id}`", _cell(r.description), r.unit.value]
+        for p in PROFILES:
+            cells += [_value(r.defaults.get(p)), _bound(r.bounds.get(p))]
+        out.append("| " + " | ".join(cells + [edit]) + " |")
     return out
 
 

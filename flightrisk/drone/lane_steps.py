@@ -7,7 +7,7 @@ grid with a deficit rule. The edge (``flightrisk.drone.lane_executor``) and
 the ground coordinator must agree exactly on what that rule does, so both
 call the functions here and nothing else:
 
-* ``split_lane_moves`` splits a lane into Tello-sized moves (20 to 500 cm),
+* ``split_lane_moves`` splits a lane into moves of the unit's move range (20 to 500 cm by default),
   and ``split_steps`` into sensed steps of at most ``step_cm``.
 * ``plan_heading`` is the heading that faces a plan direction (``forward``
   0, ``right`` 90, ``back`` 180, ``left`` 270 degrees clockwise from the
@@ -113,9 +113,9 @@ _UNIT: dict[str, tuple[int, int]] = {"forward": (0, 1), "back": (0, -1), "right"
 def split_lane_moves(
     distance_cm: float, min_move_cm: float = MIN_MOVE_CM, max_move_cm: float = MAX_MOVE_CM
 ) -> list[int]:
-    """Split one lane into Tello-sized moves of 20-500 cm each, as evenly as possible.
+    """Split one lane into moves of the unit's move range, as evenly as possible (20-500 cm by default).
 
-    *min_move_cm* and *max_move_cm* replace the Tello range for a drone with
+    *min_move_cm* and *max_move_cm* replace those default limits for a drone with
     another envelope profile (``SafetyEnvelope.limits``).
     """
     total = round(distance_cm)
