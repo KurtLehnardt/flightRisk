@@ -59,7 +59,7 @@ from flightrisk.drone import plan_paths as pp
 from flightrisk.drone.coordinator import DEFAULT_ZONE_GAP_CM, FleetCoordinator
 from flightrisk.drone.coverage import tello_sweep_model
 from flightrisk.drone.fleet_scale import field_scale
-from flightrisk.drone.safety import DEFAULT_GEOFENCE_CM
+from flightrisk.drone.safety import DEFAULT_GEOFENCE_CM, ROOM_LIMITS
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "plan_snapshots"
 FLEET_SIZES = (1, 2, 3, 4)
@@ -116,6 +116,20 @@ def _plain(value: Any) -> Any:
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     return repr(value)
+
+
+FIELD_DECIMALS = 6
+
+
+def _rounded(value: Any) -> Any:
+    """*value* with every float rounded to ``FIELD_DECIMALS`` places, so a last-bit platform difference cannot show."""
+    if isinstance(value, float):
+        return round(value, FIELD_DECIMALS) if math.isfinite(value) else value
+    if isinstance(value, dict):
+        return {key: _rounded(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_rounded(item) for item in value]
+    return value
 
 
 def _refusal(exc: Exception) -> dict:
@@ -245,7 +259,7 @@ def _field_snapshot(n: int) -> dict:
     else:
         out["plan"] = _plain(plan.to_dict())
     out["assign_lanes"] = _sent(links)
-    return out
+    return _rounded(out)
 
 
 def _text(snapshot: dict) -> str:
@@ -307,6 +321,12 @@ def test_snapshot_is_unchanged(name: str, monkeypatch):
     expected = _rendered()[name]
     actual = path.read_bytes().decode("ascii")
     assert actual == expected, f"{name} differs from the plan rendered today"
+
+
+def test_wrong_type_unit_limits_value_is_a_type_error():
+    plan = fp.plan_search(["d1", "d2"], (400, 400), None, footprint=ROOM_CAMERA)
+    with pytest.raises(TypeError):
+        fp.check_plan(plan, unit_limits={"d1": {}, "d2": ROOM_LIMITS}, max_area_side_cm=None)
 
 
 def write_snapshots() -> list[str]:
