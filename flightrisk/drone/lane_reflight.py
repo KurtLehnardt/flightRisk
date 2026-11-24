@@ -60,30 +60,66 @@ def _lane(direction: str, distance_cm: int) -> dict:
     return {"direction": direction, "distance_cm": int(distance_cm)}
 
 
-def _axis_moves(delta_cm: int, positive: str, negative: str) -> list[dict]:
-    """Tello-valid moves (20 to 500 cm each) whose net displacement is ``delta_cm``.
+def _check_move_range(min_move_cm: int, max_move_cm: int) -> None:
+    """Raise ``ValueError`` unless the limits are whole centimetres with ``0 < min <= max`` and ``max >= 2 * min - 1``."""
+    for name, value in (("min_move_cm", min_move_cm), ("max_move_cm", max_move_cm)):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name} must be a whole number of centimetres, got {value!r}")
+    if not 0 < min_move_cm <= max_move_cm:
+        raise ValueError(f"need 0 < min_move_cm <= max_move_cm, got {min_move_cm} and {max_move_cm}")
+    if max_move_cm < 2 * min_move_cm - 1:
+        raise ValueError(
+            f"need max_move_cm >= 2 * min_move_cm - 1 so every split move stays in range, got {min_move_cm} and {max_move_cm}"
+        )
 
-    A displacement shorter than the Tello minimum is flown as an overshoot
-    followed by a minimum-length return, so the net result stays exact.
+
+def _axis_moves(
+    delta_cm: int,
+    positive: str,
+    negative: str,
+    *,
+    min_move_cm: int = MIN_MOVE_CM,
+    max_move_cm: int = MAX_MOVE_CM,
+) -> list[dict]:
+    """Moves within the unit's move range whose net displacement is ``delta_cm``.
+
+    *min_move_cm* and *max_move_cm* are the unit's shortest and longest move;
+    they default to 20 and 500 cm. A displacement shorter than the minimum is
+    flown as an overshoot followed by a minimum-length return, so the net
+    result stays exact. Both limits are whole centimetres with
+    ``0 < min_move_cm <= max_move_cm`` and ``max_move_cm >= 2 * min_move_cm - 1``; anything else raises ``ValueError``.
     """
+    _check_move_range(min_move_cm, max_move_cm)
     if delta_cm == 0:
         return []
     direction, opposite = (positive, negative) if delta_cm > 0 else (negative, positive)
     distance = abs(delta_cm)
-    if distance < MIN_MOVE_CM:
-        return [_lane(direction, distance + MIN_MOVE_CM), _lane(opposite, MIN_MOVE_CM)]
-    segments = math.ceil(distance / MAX_MOVE_CM)
+    if distance < min_move_cm:
+        return [_lane(direction, distance + min_move_cm), _lane(opposite, min_move_cm)]
+    segments = math.ceil(distance / max_move_cm)
     base, remainder = divmod(distance, segments)
     return [_lane(direction, base + (1 if i < remainder else 0)) for i in range(segments)]
 
 
-def transit(start: tuple[int, int], end: tuple[int, int]) -> list[dict]:
+def transit(
+    start: tuple[int, int],
+    end: tuple[int, int],
+    *,
+    min_move_cm: int = MIN_MOVE_CM,
+    max_move_cm: int = MAX_MOVE_CM,
+) -> list[dict]:
     """Moves from ``start`` to ``end``: forward or back first, then sideways.
+
+    *min_move_cm* and *max_move_cm* are the unit's move range (20 and 500 cm
+    by default).
 
     Matching the forward position first keeps the drone inside its own zone
     until it crosses the gap sideways at the target's forward position.
     """
-    return _axis_moves(end[1] - start[1], "forward", "back") + _axis_moves(end[0] - start[0], "right", "left")
+    limits = {"min_move_cm": min_move_cm, "max_move_cm": max_move_cm}
+    return _axis_moves(end[1] - start[1], "forward", "back", **limits) + _axis_moves(
+        end[0] - start[0], "right", "left", **limits
+    )
 
 
 # ---------------------------------------------------------------------------
