@@ -40,7 +40,7 @@ def _no_options(settings: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 class UnknownBackendError(KeyError):
-    """Raised when no backend is registered under the requested name."""
+    """Raised when no backend is registered for the requested model or name."""
 
 
 @dataclass(frozen=True)
@@ -183,7 +183,7 @@ def names() -> tuple[str, ...]:
 def for_model(model_id: str) -> BackendSpec:
     """The first registered backend whose ``models`` holds ``model_id``.
 
-    Raises :class:`UnknownBackendError` when no backend declares that model.
+    Raises :class:`UnknownBackendError` when no backend declares the given model id.
     """
     _ensure_bootstrapped()
     with _lock:
