@@ -231,9 +231,7 @@ COUPLING_BASELINE: dict[str, dict[tuple[str, str, str, str], int]] = {
         # flightrisk/params/constraints.py
         ('flightrisk/params/constraints.py', '', 'literal', 'tello'): 1,
         # flightrisk/params/docs.py
-        ('flightrisk/params/docs.py', '', 'literal', 'tello'): 1,
         ('flightrisk/params/docs.py', '_fact_table', 'literal', 'tello'): 1,
-        ('flightrisk/params/docs.py', '_settings_table', 'literal', 'tello'): 2,
         # flightrisk/params/table.py
         ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT'): 1,
         ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_REFUSAL_HOLD_S'): 1,
