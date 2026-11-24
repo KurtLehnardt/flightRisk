@@ -172,7 +172,7 @@ def test_loopback_edge1_docs():
     assert "FLIGHTRISK_GROUND_LOCAL=1 DRONE_ID=1" in readme
     # The AP fallback rung that runs a fake edge must not depend on the cable address.
     assert "export FLIGHTRISK_GROUND_LOCAL=1; source scripts/fleet_env.sh" in demo
-    assert "needs the ground-station laptop's 10.42.0.1 address to stay up" not in demo
+    assert "10.42.0.1 address to stay up" not in demo
     assert "UNVERIFIED" in demo
     assert "lsof -nP -iTCP:9000 -sTCP:LISTEN" in fleet
     assert "export FLIGHTRISK_GROUND_LOCAL=1" in fleet
