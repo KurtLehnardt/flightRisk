@@ -17,6 +17,13 @@ epoch, and obeys fenced commands, heartbeats, clocks, pings, targets and
 video toggles only from that authority at ``epoch_seen``; only the
 authority's messages feed the link watchdog; a command id runs at most once.
 
+A read-only ``describe_unit`` query (PROTO-4) is answered from any ground
+with an agreed v2 hello, before any authority, fence or epoch check, and
+never feeds the watchdog, adopts an epoch or touches the command cache
+(``_cache``). Each connection has its own ``edge_query`` reply cache and
+2 s limit, so one ground's queries never rate-limit another's. A link
+without a v2 hello gets no reply (S20).
+
 Executor interface (``ExecutorHooks``, adapted for ``LaneExecutor`` by
 ``flightrisk.edge_uplink.LaneExecutorHooks``): ``is_active()`` (flying,
 taking off, landing or a flight sequence pending; an error counts as
@@ -46,6 +53,7 @@ from collections.abc import Callable, Hashable, Mapping
 from dataclasses import replace
 from typing import Any
 
+from flightrisk import edge_query
 from flightrisk import fleet_protocol as fp
 from flightrisk.fleet_authority_types import (
     _FLEET_TYPES,
@@ -90,6 +98,16 @@ __all__ = [
     "ExecutorHooks",
 ]
 
+class _PeerQueries(edge_query.ConnectionQueries):
+    """One ground connection's ``describe_unit`` state: its replies, its limit and its last query."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        # The last query this connection sent; it proves to nack_reason_for_peer
+        # that this ground understands the newer nack reasons.
+        self.last_query: dict[str, Any] | None = None
+
+
 class EdgeAuthority:
     """Decides which ground station this edge obeys; see the module docstring."""
 
@@ -104,7 +122,9 @@ class EdgeAuthority:
         logger: StructuredLogger | None = None,
         cmd_cache_size: int = fp.CMD_ID_CACHE_SIZE,
         clock: Callable[[], float] = time.monotonic,
+        query: Callable[[], edge_query.EdgeQuery | None] | None = None,
     ):
+        """*query* returns the edge's ``describe_unit`` answerer, or None while it has none."""
         if not fp.is_identifier(drone_id):
             raise ValueError(f"drone_id must be a protocol identifier, got {drone_id!r}")
         if not fp.is_identifier(node_id):
@@ -145,6 +165,12 @@ class EdgeAuthority:
         self._close_counts: dict[tuple[str, str], int] = {}
         # (label, type) -> (last logged at, landings not logged since).
         self._landing_log: dict[tuple[str, str], tuple[float, int]] = {}
+        # describe_unit state per connection, apart from _cache. The dict is
+        # guarded by _lock; answering takes only _query_lock, so building a
+        # reply never holds up a command or a landing.
+        self._query_source = query
+        self._queries: dict[Hashable, _PeerQueries] = {}
+        self._query_lock = threading.Lock()
 
     # -- Introspection -----------------------------------------------------
 
@@ -200,6 +226,7 @@ class EdgeAuthority:
         """A connection ended. The authority's epoch and leader are kept."""
         with self._lock:
             conn = self._conns.pop(key, None)
+            self._queries.pop(key, None)
             if key == self._authority_key:
                 self._authority_key = None
                 self._log.warning(
@@ -222,6 +249,9 @@ class EdgeAuthority:
     def on_message(self, key: Hashable, msg: Mapping[str, Any]) -> Decision:
         """Decide what to do with one decoded ground-to-edge message from *key*."""
         mtype = msg.get("type")
+        if mtype in fp.QUERY_TYPES:
+            # Before any authority, fence or epoch check: any ground may ask.
+            return self._describe(key, msg)
         # Hooks are sampled before taking the lock (they never run under it):
         # is_active only when the message could adopt an epoch (unsampled
         # counts as active), the snapshot for a hello, supports for a
@@ -275,6 +305,41 @@ class EdgeAuthority:
         for action in post:
             action()
         return decision
+
+    def _describe(self, key: Hashable, msg: Mapping[str, Any]) -> Decision:
+        """Answer a ``describe_unit`` query from *key* (PROTO-4); see the module docstring.
+
+        Never feeds the watchdog and never reads or writes ``_cache``: the
+        reply comes from ``edge_query`` with this connection's own state.
+        """
+        mtype = str(msg.get("type"))
+        with self._lock:
+            conn = self._conns.get(key)
+            if conn is None:
+                return Decision(IGNORE, reason="connection_closed")
+            if conn.proto is None or conn.proto < 2:
+                self._note_refusal(conn, mtype, "query_needs_v2")
+                return Decision(IGNORE, reason="query_needs_v2")
+            state = self._queries.setdefault(key, _PeerQueries())
+            proto = conn.proto
+        try:
+            query = self._query_source() if self._query_source is not None else None
+            if query is None:
+                self._log.debug("edge_query_unsupported", drone_id=self.drone_id, type=mtype)
+                return Decision(IGNORE, reason="query_unsupported")
+            with self._query_lock:
+                state.last_query = dict(msg)
+                reply = query.answer(msg, state, proto=proto, now=self._clock())
+        except Exception as exc:  # noqa: BLE001 - a query must never take the reader down
+            self._log.warning("edge_query_error", drone_id=self.drone_id, error=repr(exc)[:200])
+            return Decision(IGNORE, reason="query_error")
+        return Decision(HANDLED, feed_watchdog=False, replies=(reply,) if reply is not None else (),
+                        reason="query")
+
+    def _peer_query(self, key: Hashable) -> dict[str, Any] | None:
+        """The last ``describe_unit`` query received on *key*, or None."""
+        state = self._queries.get(key)
+        return state.last_query if state is not None else None
 
     def _may_adopt(self, msg: Mapping[str, Any]) -> bool:
         fence = fp.fence_of(msg)
@@ -491,7 +556,7 @@ class EdgeAuthority:
             if entry is not None:
                 if entry.mtype != mtype:
                     nack = self._nack(conn, msg, mtype, cmd_id, "invalid",
-                                      detail="cmd_id was used for another command")
+                                      detail="cmd_id was used for another command", key=key)
                     return Decision(REFUSE, feed_watchdog=current, replies=nack, reason="cmd_id_reused")
                 if entry.reply is not None and conn.proto is not None and conn.proto >= 2:
                     return Decision(REFUSE, feed_watchdog=current, replies=(dict(entry.reply),), reason="duplicate")
@@ -547,14 +612,17 @@ class EdgeAuthority:
         cmd_id: str | None,
         reason: str,
         detail: str | None = None,
+        *,
+        key: Hashable | None = None,
     ) -> tuple[dict[str, Any], ...]:
-        """The nack for a refused command, or nothing when the link cannot carry one."""
+        """The nack for a refused command on connection *key*, or nothing when the link cannot carry one."""
         if cmd_id is None or conn.proto is None or conn.proto < 2:
             return ()
         lanes = msg.get("lanes")
         lanes_total = min(len(lanes), fp.MAX_LANES) if isinstance(lanes, list) else 0
-        # The authority tracks no describe_unit query, so a reason only a newer ground understands goes out as "invalid".
-        reason = fp.nack_reason_for_peer(reason, None)
+        # A reason only a newer ground understands goes out as "invalid",
+        # unless this connection's own last describe_unit query shows it is one.
+        reason = fp.nack_reason_for_peer(reason, self._peer_query(key))
         return (fp.make_nack(mtype, self.drone_id, reason, cmd_id, epoch_seen=self._epoch_seen,
                              lanes_total=lanes_total if mtype == fp.ASSIGN_LANES else None, detail=detail),)
 
@@ -570,7 +638,7 @@ class EdgeAuthority:
         feed: bool,
         detail: str | None = None,
     ) -> Decision:
-        replies = self._nack(conn, msg, mtype, cmd_id, reason, detail)
+        replies = self._nack(conn, msg, mtype, cmd_id, reason, detail, key=key)
         fence = fp.fence_of(msg)
         self._note_refusal(conn, mtype, reason, epoch=fence.epoch if fence else None)
         # Only the authority's refusals are final for their cmd_id. Caching a
