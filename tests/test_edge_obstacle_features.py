@@ -11,6 +11,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -324,3 +325,82 @@ def test_required_sensing_without_onboard_avoidance_is_refused_at_takeoff(edge_e
     mode = edge_device._tell_mavlink_drone(drone, _wire(_gate_off(_resolved(_FIELD)), drone))
     # ``none``: the MAVLink drone's preflight refuses every takeoff until avoidance_status() is empty.
     assert mode == mavlink_fleet.SENSING_NONE and mode in mavlink_fleet._NEEDS_AVOIDANCE_MODES
+
+
+# --- The frame-stride and capture-stamp checks read the mode the wiring flies ------------------------------
+
+
+class _ReachedTheWiring(Exception):
+    """Raised once the patched wiring is built: the start was not refused."""
+
+
+def _start_to_the_wiring(edge_env):
+    """Patch ``main``'s start so it runs up to the obstacle wiring; returns the list of ``(args, wiring)``."""
+    wired = []
+    real = edge_device._build_obstacle_wiring
+
+    def wiring(args, log, *rest, **kwargs):
+        wired.append((args, real(args, log, *rest, **kwargs)))
+        raise _ReachedTheWiring()
+
+    edge_env.setattr(edge_device, "_init_edge_telemetry", lambda log: False)
+    edge_env.setattr(edge_device, "_limit_torch_threads", lambda *a, **k: None)
+    edge_env.setattr(edge_device, "_build_runner", lambda *a, **k: SimpleNamespace())
+    edge_env.setattr(edge_device, "_build_drone", lambda args, log: _Drone())
+    edge_env.setattr(edge_device, "_build_obstacle_wiring", wiring)
+    return wired
+
+
+def test_a_confirmed_launcher_sensing_off_passes_the_frame_checks_and_flies_without_a_sensor(edge_env):
+    # A frame stride and a Tello without --tello-local-ip are refused while sensing is required; the
+    # confirmed launcher off is the mode the wiring flies, so both checks pass and only warn.
+    _launcher(edge_env, "off", {"sensing.mode": "off"})
+    edge_env.setenv("FLIGHTRISK_EDGE_FRAME_STRIDE", "3")
+    wired = _start_to_the_wiring(edge_env)
+    warned = []
+    edge_env.setattr(edge_device.StructuredLogger, "warning",
+                     lambda self, event, **fields: warned.append((event, fields.get("detail"))))
+    with pytest.raises(_ReachedTheWiring):
+        edge_device.main(_ROOM)
+    (args, wiring), = wired
+    assert args.frame_stride == 3 and args.tello_local_ip is None
+    assert edge_device._effective_sensing_mode(args) == "off"
+    assert isinstance(wiring.sensor, NullSensor) and not _StubCamera.built
+    events = [event for event, _ in warned]
+    assert events.count(edge_device.EVENT_NO_CAPTURE_STAMPS) == 1
+    assert ("edge_obstacle_sensing_off",
+            "sensing.mode=off from launcher: this drone flies its lanes with NO obstacle sensing") in warned
+
+
+def test_a_launcher_sensing_required_refuses_a_frame_stride_after_the_resolution(edge_env):
+    _launcher(edge_env, "required")
+    edge_env.setenv("FLIGHTRISK_EDGE_FRAME_STRIDE", "3")
+    wired = _start_to_the_wiring(edge_env)
+    edge_env.setattr(edge_device, "_build_drone", lambda args, log: pytest.fail("the drone was built"))
+    with pytest.raises(SystemExit) as refused:
+        edge_device.main(_FAKE)
+    text = str(refused.value)
+    assert "a frame stride above 1 is refused while obstacle sensing is required (sensing.mode=required from " \
+           "launcher)" in text
+    assert "set sensing.mode=off in the launcher and confirm it there" in text
+    assert "the default" not in text and wired == []
+
+
+def test_a_launcher_sensing_required_refuses_a_tello_without_capture_stamps_after_the_resolution(edge_env):
+    _launcher(edge_env, "required")
+    _start_to_the_wiring(edge_env)
+    edge_env.setattr(edge_device, "_build_drone", lambda args, log: pytest.fail("the drone was built"))
+    with pytest.raises(SystemExit) as refused:
+        edge_device.main(_ROOM)
+    text = str(refused.value)
+    assert text.startswith("edge_device: obstacle sensing is required (sensing.mode=required from launcher), but ")
+    assert "--tello-local-ip" in text and "set sensing.mode=off in the launcher and confirm it there" in text
+
+
+def test_the_environment_mode_still_decides_the_checks_without_a_launcher(edge_env):
+    args = _args(_ROOM)
+    assert edge_device._sensing_awaits_resolution(args, os.environ) is False
+    with pytest.raises(SystemExit) as refused:
+        edge_device._check_capture_stamps(args)
+    assert str(refused.value).startswith("edge_device: obstacle sensing is required, but ")
+    assert "or set FLIGHTRISK_OBSTACLE_SENSING=off to fly with no obstacle sensing" in str(refused.value)

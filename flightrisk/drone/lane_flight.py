@@ -1503,9 +1503,10 @@ class FlightSequenceMixin:
         The executor's pitch reader returns ``(pitch_deg, stamp_s)``, the
         stamp on the executor's clock. A camera whose pitch is not measured
         (``pitch_measured`` False), no reader, a reader that raises, a value
-        that is not a finite number, and a pitch stamped before *after* (the
-        start of the look, so the pitch may be stale) all count as a missing
-        pitch.
+        that is not a finite number, a pitch stamped before *after* (so the
+        pitch may be stale) and a pitch stamped later than the executor's
+        clock reads now (the reader is on another clock) all count as a
+        missing pitch.
         """
         reader = getattr(self, "_obstacle_pitch_reader", None)
         if reader is None or getattr(camera, "pitch_measured", False) is not True:
@@ -1514,7 +1515,7 @@ class FlightSequenceMixin:
             pitch, stamp = reader(camera.id)
         except Exception:  # noqa: BLE001 - a pitch that cannot be read is a missing pitch
             return None
-        if not (is_finite_number(pitch) and is_finite_number(stamp)) or stamp < after:
+        if not (is_finite_number(pitch) and is_finite_number(stamp)) or stamp < after or stamp > self._clock():
             return None
         return float(pitch)
 
@@ -1712,10 +1713,13 @@ class FlightSequenceMixin:
         it: the view arrived between the two readings. Drones that do not
         measure their heading get the sensor's answer unchanged. A camera
         on a gimbal mount is held to its pitch the same way
-        (``_level_off``): a missing, unmeasured or stale pitch (one read
-        before *after*), or one beyond the tolerance, is
-        ``unavailable`` (reason ``stale``, cause ``camera not level``), before
-        the look and again after a ``clear`` one. *deadline* and
+        (``_level_off``): a missing, unmeasured or stale pitch, or one beyond
+        the tolerance, is ``unavailable`` (reason ``stale``, cause ``camera
+        not level``), before the look and again after a ``clear`` one. Before
+        the look a pitch read before *after* is stale; after it, one read
+        before the look ended, so the sample read before the look does not
+        count again: no judged frame was captured later than the end of the
+        look, so the pitch is no older than the frame. *deadline* and
         *person_wait* are passed to ``_sense_once``.
         """
         off = self._heading_off() or self._level_off(after)
@@ -1723,7 +1727,8 @@ class FlightSequenceMixin:
             return SenseResult.make_unavailable(REASON_STALE, detail=off), 0.0
         result, latency_ms = self._sense_once(after, deadline, person_wait=person_wait)
         if result.clear:
-            off = self._heading_off() or self._level_off(after)
+            # No frame the look judged was captured later than the look's end.
+            off = self._heading_off() or self._level_off(max(after, self._clock()))
             if off is not None:
                 return SenseResult.make_unavailable(REASON_STALE, latency_ms=latency_ms, detail=off), latency_ms
         return result, latency_ms

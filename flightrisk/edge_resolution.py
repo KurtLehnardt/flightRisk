@@ -860,23 +860,42 @@ def obstacle_arguments(resolution: EdgeResolution, today: Mapping[str, Any],
     it. Without that confirmation the resolver refuses the start (``resolver.LAUNCHER_NEEDS_CONFIRMATION``),
     where today's edge ignored the launcher value and sensed as usual (design item 47).
     """
-    from flightrisk.params.spec import Source
     from flightrisk.params.table import TABLE
 
-    names ={spec.id: spec.env for spec in TABLE if spec.id in OBSTACLE_ROWS.values()}
+    names = {spec.id: spec.env for spec in TABLE if spec.id in OBSTACLE_ROWS.values()}
     arguments = dict(today)
     for name, row in OBSTACLE_ROWS.items():
-        value = resolution.values.get(row)
-        if value is None:
-            continue
-        if Source(value.source) in (Source.ENV, Source.CLI):
-            _refuse_shadowed(resolution, row, value, today[name])
-            continue
-        variable = names.get(row)
-        if variable and (environ.get(variable) or "").strip():
-            continue
-        arguments[name] = value.value
+        arguments[name] = _obstacle_value(resolution, row, today[name], names.get(row), environ)
     return arguments
+
+
+def _obstacle_value(resolution: EdgeResolution, row: str, today: Any, variable: Optional[str],
+                    environ: Mapping[str, str]) -> Any:
+    """One setting of ``obstacle_arguments``: the resolved value of ``row``, or ``today`` in the cases it keeps."""
+    from flightrisk.params.spec import Source
+
+    value = resolution.values.get(row)
+    if value is None:
+        return today
+    if Source(value.source) in (Source.ENV, Source.CLI):
+        _refuse_shadowed(resolution, row, value, today)
+        return today
+    if variable and (environ.get(variable) or "").strip():
+        return today
+    return value.value
+
+
+def resolved_sensing_mode(resolution: EdgeResolution, today: str, environ: Mapping[str, str]) -> Any:
+    """The obstacle sensing mode the edge flies, exactly as ``obstacle_arguments`` gives it to the wiring.
+
+    ``today`` is the mode of ``FLIGHTRISK_OBSTACLE_SENSING`` (``edge_device._obstacle_sensing_mode``).
+    Raises ``EdgeStartRefused`` as ``obstacle_arguments`` does.
+    """
+    from flightrisk.params.table import TABLE
+
+    row = OBSTACLE_ROWS["mode"]
+    variable = next((spec.env for spec in TABLE if spec.id == row), None)
+    return _obstacle_value(resolution, row, today, variable, environ)
 
 
 def forward_sensing_on(resolution: Optional[EdgeResolution]) -> Optional[bool]:

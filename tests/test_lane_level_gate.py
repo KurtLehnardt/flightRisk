@@ -294,3 +294,56 @@ def test_removing_the_camera_turns_the_gate_off(rigs):
     rig.executor.set_obstacle_camera(None)
     fly(rig, lanes_of(("forward", 50),))
     assert rig.executor.obstacle_cuts == [] and level_events(rig) == []
+
+
+# The pitch's clock: a stamp later than the executor's clock is on another clock, and the check after a look
+# needs a sample no older than the frame the look judged.
+
+
+class HeldSample:
+    """A reader that keeps returning the sample it read first: ``(pitch, stamp)`` with the first stamp."""
+
+    def __init__(self, pitch):
+        self.pitch = pitch
+        self.clock = None
+        self.stamp = None
+
+    def __call__(self, camera_id):
+        if self.stamp is None:
+            self.stamp = self.clock()
+        return self.pitch, self.stamp
+
+
+def _slow_look(rig, look_s=0.1):
+    """Each look takes *look_s* on the rig's clock, so its frame is newer than a sample read before it."""
+    rig.sensor.on_call = lambda n: rig.clock.advance(look_s)
+    return rig
+
+
+def test_a_pitch_stamped_later_than_the_executors_clock_is_a_missing_pitch(rigs):
+    rig = gimbal_rig(rigs, reader=PitchReader(0.0, age_s=-5.0))
+    fly(rig, lanes_of(("forward", 50),))
+    assert rig.sensor.calls == [] and lane_moves(rig) == []
+    assert rig.executor.obstacle_cuts == [Cut(0, 0, CUT_SENSOR_STALE)]
+    assert len(level_events(rig)) == OBSTACLE_SENSE_RETRIES
+    assert all(e["pitch_deg"] is None for e in level_events(rig))
+
+
+def test_the_sample_read_before_the_look_does_not_count_after_it(rigs):
+    reader = HeldSample(0.0)
+    rig = _slow_look(gimbal_rig(rigs, reader=reader))
+    reader.clock = rig.clock
+    fly(rig, lanes_of(("forward", 50),))
+    # Each look is clear, but the sample after it is the one from before it: older than the frame.
+    assert rig.sensor.states() == ["clear"] * OBSTACLE_SENSE_RETRIES and lane_moves(rig) == []
+    assert rig.executor.obstacle_cuts == [Cut(0, 0, CUT_SENSOR_STALE)]
+    assert len(level_events(rig)) == OBSTACLE_SENSE_RETRIES
+    assert all(e["pitch_deg"] is None for e in level_events(rig))
+
+
+def test_a_fresh_sample_after_the_look_passes(rigs):
+    rig = _slow_look(gimbal_rig(rigs, reader=PitchReader(0.0)))
+    fly(rig, lanes_of(("forward", 50),))
+    assert rig.sensor.states() == ["clear"] and len(lane_moves(rig)) == 1
+    assert rig.executor.obstacle_cuts == [] and level_events(rig) == []
+

@@ -1247,7 +1247,9 @@ def _resolve_frame_stride(args: argparse.Namespace, environ: Any = None) -> int:
     source raises ``ValueError`` rather than silently ignoring it. A stride above 1 is also
     refused while obstacle sensing is required (``FLIGHTRISK_OBSTACLE_SENSING=required``, the
     default): the sensor's person cue needs a detection of a view taken after each stop, and a
-    stride starves it. Only the ``off`` override, which flies unsensed anyway, allows a stride.
+    stride starves it. Only the ``off`` override, which flies unsensed anyway, allows a stride. The
+    mode is the one the obstacle wiring flies (``_effective_sensing_mode``); a launcher layer's mode is
+    checked once the unit is resolved (``_check_resolved_sensing``).
     """
     env = os.environ if environ is None else environ
     flag = getattr(args, "frame_stride", None)
@@ -1269,16 +1271,24 @@ def _resolve_frame_stride(args: argparse.Namespace, environ: Any = None) -> int:
         )
         remedy = f" Unset {_FRAME_STRIDE_ENV_VAR} to run this source." if flag is None else ""
         raise ValueError(f"{origin} only applies to --source tello and --source fake.{remedy}")
-    if stride > 1 and _obstacle_sensing_mode(env) == SENSING_ENV_REQUIRED:
+    if stride > 1:
         origin = f"{_FRAME_STRIDE_ENV_VAR}={stride} is set" if flag is None else f"--frame-stride {stride} is given"
-        raise ValueError(
-            f"{origin}, but a frame stride above 1 is refused while obstacle sensing is required "
-            f"({ENV_OBSTACLE_SENSING}={SENSING_ENV_REQUIRED}, the default). The stride starves the obstacle "
-            "sensor's person cue, which needs a detection of a view taken after each stop, so a person in the "
-            f"lane could be missed. Use a stride of 1, or set {ENV_OBSTACLE_SENSING}=off, which flies with no "
-            "obstacle sensing at all, only for bring-up with a safety observer."
-        )
+        _refuse_stride_while_sensing(args, origin, env)
     return stride
+
+
+def _refuse_stride_while_sensing(args: argparse.Namespace, origin: str, environ: Any) -> None:
+    """Refuse a frame stride above 1 while the sensing mode the edge flies is required. Raises ``ValueError``."""
+    if _effective_sensing_mode(args, environ) != SENSING_ENV_REQUIRED:
+        return
+    said, remedy = _required_sensing_text(args)
+    raise ValueError(
+        f"{origin}, but a frame stride above 1 is refused while obstacle sensing is required "
+        f"({said}). The stride starves the obstacle "
+        "sensor's person cue, which needs a detection of a view taken after each stop, so a person in the "
+        f"lane could be missed. Use a stride of 1, or {remedy}, which flies with no "
+        "obstacle sensing at all, only for bring-up with a safety observer."
+    )
 
 
 def _resolve_stride_max_skip(environ: Any = None) -> float:
@@ -1866,6 +1876,89 @@ def _obstacle_sensing_mode(environ: Any = None) -> str:
             f"{SENSING_ENV_REQUIRED!r} (the default) or {SENSING_ENV_OFF!r}. Refusing to start."
         )
     return raw
+
+
+def _sensing_awaits_resolution(args: argparse.Namespace, environ: Any) -> bool:
+    """True when the sensing mode of a flying edge is decided by its resolution, which ``main`` makes later.
+
+    That is a start with a launcher layer (``FLIGHTRISK_LAUNCHER_PARAMS``) and no
+    ``FLIGHTRISK_OBSTACLE_SENSING``: the launcher may switch sensing off, confirmed, and the wiring then
+    flies it (``edge_resolution.obstacle_arguments``). Every other start is decided by the environment, as
+    before.
+    """
+    if getattr(args, "edge_resolution", None) is not None or _drone_kind(args) is None:
+        return False
+    if (environ.get(ENV_OBSTACLE_SENSING) or "").strip():
+        return False
+    from flightrisk.edge_resolution import LAUNCHER_PARAMS_ENV_VAR
+
+    return bool((environ.get(LAUNCHER_PARAMS_ENV_VAR) or "").strip())
+
+
+def _effective_sensing_mode(args: argparse.Namespace, environ: Any = None) -> str | None:
+    """The obstacle sensing mode this edge flies, the one ``_build_obstacle_wiring`` uses. Raises ``SystemExit``.
+
+    Without a resolution it is ``FLIGHTRISK_OBSTACLE_SENSING``, as before. With ``args.edge_resolution`` it is
+    the resolved mode (``edge_resolution.resolved_sensing_mode``), so a confirmed launcher off counts. None
+    while the mode awaits the resolution (``_sensing_awaits_resolution``); ``_check_resolved_sensing`` then
+    checks again once the unit is resolved.
+    """
+    env = os.environ if environ is None else environ
+    mode = _obstacle_sensing_mode(env)
+    if _sensing_awaits_resolution(args, env):
+        return None
+    resolution = getattr(args, "edge_resolution", None)
+    if resolution is None:
+        return mode
+    from flightrisk.edge_resolution import EdgeStartRefused, resolved_sensing_mode
+
+    try:
+        mode = resolved_sensing_mode(resolution, mode, env)
+    except EdgeStartRefused as exc:
+        raise SystemExit(f"edge_device: {exc}") from None
+    if mode not in (SENSING_ENV_REQUIRED, SENSING_ENV_OFF):
+        raise SystemExit(f"edge_device: the resolved obstacle sensing mode {mode!r} is not valid. Refusing to start.")
+    return mode
+
+
+def _required_sensing_text(args: argparse.Namespace) -> tuple[str, str]:
+    """For a refusal: where the required sensing mode comes from, and how to switch sensing off.
+
+    The environment variable as before, unless the resolved mode came from another layer (a launcher's
+    ``sensing.mode`` or the profile's default under a launcher layer).
+    """
+    resolution = getattr(args, "edge_resolution", None)
+    where = None
+    if resolution is not None:
+        from flightrisk.edge_resolution import resolved_elsewhere
+
+        where = resolved_elsewhere(resolution, "sensing.mode")
+    if where is None:
+        return f"{ENV_OBSTACLE_SENSING}={SENSING_ENV_REQUIRED}, the default", f"set {ENV_OBSTACLE_SENSING}=off"
+    return (
+        f"sensing.mode={SENSING_ENV_REQUIRED} from {where}",
+        f"set sensing.mode=off in the launcher and confirm it there (or set {ENV_OBSTACLE_SENSING}=off)",
+    )
+
+
+def _check_resolved_sensing(args: argparse.Namespace, log: StructuredLogger, environ: Any = None) -> None:
+    """The frame-stride and capture-stamp checks again, on the resolved sensing mode. Raises ``SystemExit``.
+
+    ``main`` sets ``args.sensing_awaits_resolution`` when a launcher layer decides the mode
+    (``_sensing_awaits_resolution``); its two checks before the resolution then refused nothing, and
+    ``_run_flight_edge`` calls this once the unit is resolved, before the drone is built.
+    """
+    drone_id = getattr(args, "drone_id", None)
+    stride = getattr(args, "frame_stride", None) or 1
+    if stride > 1:
+        try:
+            _refuse_stride_while_sensing(args, f"a frame stride of {stride} is set", environ)
+        except ValueError as exc:
+            log.error("edge_start_refused", drone_id=drone_id, reason=str(exc))
+            raise SystemExit(f"edge_device: {exc} Refusing to start.") from None
+    problem = _check_capture_stamps(args, environ)
+    if problem is not None:
+        log.warning(EVENT_NO_CAPTURE_STAMPS, drone_id=drone_id, detail=problem)
 
 
 # Plain ASCII numbers only: ``int()`` and ``float()`` would also take ``5_0``,
@@ -2471,16 +2564,23 @@ def _check_capture_stamps(args: argparse.Namespace, environ: Any = None) -> str 
     """Refuse a Tello edge whose required obstacle sensor would get no capture stamps. Raises ``SystemExit``.
 
     Returns the problem to log as a warning when sensing is ``off``, else None. Called at startup,
-    before any model loads or anything connects.
+    before any model loads or anything connects. The mode is the one the obstacle wiring flies
+    (``_effective_sensing_mode``); while it awaits the resolution this returns None, and
+    ``_check_resolved_sensing`` checks again once the unit is resolved.
     """
     problem = _no_capture_stamps(args)
     if problem is None:
         return None
-    if _obstacle_sensing_mode(environ) == SENSING_ENV_REQUIRED:
+    mode = _effective_sensing_mode(args, environ)
+    if mode is None:
+        return None
+    if mode == SENSING_ENV_REQUIRED:
+        said, remedy = _required_sensing_text(args)
+        required = "obstacle sensing is required" + ("" if said.startswith(ENV_OBSTACLE_SENSING) else f" ({said})")
         raise SystemExit(
-            f"edge_device: obstacle sensing is required, but {problem}. Start the edge with "
+            f"edge_device: {required}, but {problem}. Start the edge with "
             f"--tello-local-ip <the IP of the Wi-Fi adapter on this Tello's network> (or {_TELLO_LOCAL_IP_ENV_VAR}; "
-            f"one drone works the same way, docs/two-tellos-one-pc.md), or set {ENV_OBSTACLE_SENSING}=off to fly "
+            f"one drone works the same way, docs/two-tellos-one-pc.md), or {remedy} to fly "
             "with no obstacle sensing. Refusing to start."
         )
     return problem
@@ -2685,6 +2785,10 @@ def _run_flight_edge(
     # After today's own start checks, so they keep refusing with today's messages, and before the
     # drone is built or contacted (EDGE-1).
     _resolve_edge_start(args, log, argv=argv, parser=parser)
+    if getattr(args, "sensing_awaits_resolution", False):
+        # A launcher layer decides the sensing mode: the frame-stride and capture-stamp checks of ``main``
+        # waited for the resolution.
+        _check_resolved_sensing(args, log)
     if start_envelope:
         # Built again from the resolved values (EDGE-2). An envelope the caller passed is never rebuilt
         # from the resolution and wins over it; only tests pass one, main never does.
@@ -3035,6 +3139,7 @@ def main(argv: list[str] | None = None) -> None:
         _resolve_appearance_only(args)
     except ValueError as exc:
         parser.error(str(exc))
+    args.sensing_awaits_resolution = _sensing_awaits_resolution(args, os.environ)
     try:
         args.frame_stride = _resolve_frame_stride(args)
         args.stride_max_skip_s = _resolve_stride_max_skip()
