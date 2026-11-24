@@ -1,4 +1,7 @@
 # Hashed by tests/test_param_change_control.py: never convert line endings.
+# Git does not rewrite an unchanged file when only its attributes change, so a Windows
+# checkout made before these lines existed keeps CRLF copies until they are checked out
+# again: git checkout -- <the four files below>.
 /flightrisk/params/table.py -text
 /tests/golden/flight_params.json -text
 /tests/param_literal_allowlist.py -text

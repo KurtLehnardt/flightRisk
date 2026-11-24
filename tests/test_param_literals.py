@@ -359,7 +359,7 @@ def scan_repo(root: Path = ROOT, ids=None) -> Counter:
     unit_re = build_unit_re(words_from_registry(ids))
     keys: Counter = Counter()
     for p in scope_files(root):
-        found = scan_source(p.read_text(encoding="utf-8"), str(p.relative_to(root)), unit_re)
+        found = scan_source(p.read_text(encoding="utf-8"), p.relative_to(root).as_posix(), unit_re)
         keys.update(k for k, _ in found)
     return keys
 
@@ -461,7 +461,7 @@ def test_key_has_six_fields_and_exact_counts():
 def test_self_allowlist_sections_are_per_file_in_scope():
     from tests.param_literal_allowlist import ALLOWLIST
 
-    in_scope = {str(p.relative_to(ROOT)) for p in scope_files()}
+    in_scope = {p.relative_to(ROOT).as_posix() for p in scope_files()}
     assert set(ALLOWLIST) <= in_scope
 
 
