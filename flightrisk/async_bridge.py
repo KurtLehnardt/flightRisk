@@ -57,6 +57,9 @@ def _drain_and_close(loop: asyncio.AbstractEventLoop, name: str) -> None:
     finally:
         loop.close()
 
+# Longest start_loop() waits for the loop thread to begin running.
+_START_TIMEOUT = 5.0
+
 
 class AsyncBridge:
     """Runs an asyncio event loop on a background thread for sync-over-async patterns."""
@@ -82,13 +85,34 @@ class AsyncBridge:
         """
         if self.is_running:
             return
-        self.loop = asyncio.new_event_loop()
-        self.loop_thread = threading.Thread(
-            target=self.loop.run_forever,
+        loop = asyncio.new_event_loop()
+        thread = threading.Thread(
+            target=loop.run_forever,
             daemon=True,
             name=f"{self._name}-loop",
         )
-        self.loop_thread.start()
+        # Thread.start() returns before run_forever() has marked the loop as
+        # running, and run() refuses a loop that is not running. Queue a
+        # callback first, so that once it has fired the loop is certainly
+        # running, and wait for it before returning.
+        started = threading.Event()
+        loop.call_soon(started.set)
+        thread.start()
+        if not started.wait(timeout=_START_TIMEOUT):
+            # Never hand back a loop that is not running: stop the thread and
+            # release the loop before raising.
+            try:
+                loop.call_soon_threadsafe(loop.stop)
+            except RuntimeError:
+                pass
+            thread.join(timeout=_START_TIMEOUT)
+            if not thread.is_alive() and not loop.is_closed():
+                loop.close()
+            raise RuntimeError(
+                f"[{self._name}] Event loop did not start within {_START_TIMEOUT:.0f}s"
+            )
+        self.loop = loop
+        self.loop_thread = thread
 
     def stop_loop(self) -> None:
         """Stop the background event loop and join its thread.

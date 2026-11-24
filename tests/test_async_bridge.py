@@ -345,3 +345,44 @@ def test_a_command_cancelled_by_stop_loop_raises_runtime_error():
     bridge.stop_loop()
     thread.join(10)
     assert len(outcome) == 1 and isinstance(outcome[0], RuntimeError) and "event loop stopped" in str(outcome[0])
+
+
+class TestStartLoopWaitsForRunning:
+    def _delay_thread_run(self, monkeypatch, delay):
+        real_run = threading.Thread.run
+
+        def slow_run(self):
+            time.sleep(delay)
+            real_run(self)
+
+        monkeypatch.setattr(threading.Thread, "run", slow_run)
+
+    def test_run_straight_after_start_loop_succeeds_when_the_thread_is_slow(self, monkeypatch):
+        self._delay_thread_run(monkeypatch, 0.2)
+        bridge = AsyncBridge(name="slow-start")
+        bridge.start_loop()
+        try:
+            assert bridge.is_running
+
+            async def _one():
+                return 1
+
+            assert bridge.run(_one(), timeout=5) == 1
+        finally:
+            bridge.stop_loop()
+
+    def test_start_loop_raises_and_leaves_nothing_running_when_the_loop_never_starts(self, monkeypatch):
+        import flightrisk.async_bridge as ab
+
+        monkeypatch.setattr(ab, "_START_TIMEOUT", 0.1)
+        self._delay_thread_run(monkeypatch, 0.5)
+        before = {t for t in threading.enumerate()}
+        bridge = AsyncBridge(name="never-start")
+        with pytest.raises(RuntimeError, match="did not start"):
+            bridge.start_loop()
+        assert bridge.loop is None
+        assert bridge.loop_thread is None
+        assert not bridge.is_running
+        time.sleep(1.0)
+        leaked = [t for t in threading.enumerate() if t not in before and t.is_alive() and "never-start" in t.name]
+        assert leaked == []
