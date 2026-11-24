@@ -9,7 +9,7 @@ import Foundation
 public enum NackReason: WireEnum {
     case altitude, battery, busy, ceiling, droneUnreachable, floor, geofence, invalid, landing
     case noValidPlan, notAuthority, notFlying, notManual, otherDrone, planMismatch, slotBand
-    case staleEpoch, stalePlan, unsupported
+    case staleEpoch, stalePlan, straightLineHome, unsupported
     /// Ground-reported: the edge did not answer in time. Not in `nack_reasons.json`.
     case noReply
     case unknown(String)
@@ -20,7 +20,8 @@ public enum NackReason: WireEnum {
         ("invalid", .invalid), ("landing", .landing), ("no_valid_plan", .noValidPlan),
         ("not_authority", .notAuthority), ("not_flying", .notFlying), ("not_manual", .notManual),
         ("other_drone", .otherDrone), ("plan_mismatch", .planMismatch), ("slot_band", .slotBand),
-        ("stale_epoch", .staleEpoch), ("stale_plan", .stalePlan), ("unsupported", .unsupported),
+        ("stale_epoch", .staleEpoch), ("stale_plan", .stalePlan),
+        ("straight_line_home", .straightLineHome), ("unsupported", .unsupported),
         ("no_reply", .noReply),
     ]
     public static let knownWireValues = table.map { $0.0 }

@@ -119,6 +119,10 @@ def make_assign_lanes(
     plan_seq: int | None = None,
     on_complete: str | None = None,
     hover_timeout_s: float | None = None,
+    corridor: Iterable[Mapping[str, Any]] | None = None,
+    landing: Mapping[str, Any] | None = None,
+    no_entry: Iterable[Mapping[str, Any]] | None = None,
+    speed_cm_s: float | None = None,
 ) -> dict[str, Any]:
     """Ground -> edge lane assignment for one drone.
 
@@ -128,7 +132,14 @@ def make_assign_lanes(
     orders plans by ``(epoch, plan_seq)`` and refuses an older one with
     ``stale_plan``. *on_complete* says what the drone does after its last
     lane: ``"hover"`` for *hover_timeout_s* (default
-    ``DEFAULT_HOVER_TIMEOUT_S``) and then land, or ``"land"``.
+    ``DEFAULT_HOVER_TIMEOUT_S``) and then land, or ``"land"``; in protocol
+    v2 also ``"return_home"``, with *hover_timeout_s* as the re-task window
+    (no default).
+
+    The protocol v2 return keys are optional and added only when given:
+    *corridor* (point objects ``{"x_cm", "y_cm"}``), *landing* (``area_id``,
+    ``place``, ``interval_s``), *no_entry* (area objects) and *speed_cm_s*
+    (``flightrisk/fleet_protocol/returns.py``).
     """
     msg: dict[str, Any] = {
         "type": ASSIGN_LANES,
@@ -147,6 +158,16 @@ def make_assign_lanes(
             msg["hover_timeout_s"] = DEFAULT_HOVER_TIMEOUT_S if hover_timeout_s is None else hover_timeout_s
     if hover_timeout_s is not None and "hover_timeout_s" not in msg:
         msg["hover_timeout_s"] = hover_timeout_s
+    if corridor is not None:
+        msg["corridor"] = [dict(point) for point in corridor]
+    if landing is not None:
+        msg["landing"] = dict(landing)
+    if no_entry is not None:
+        msg["no_entry"] = [
+            {**dict(area), "points": [dict(point) for point in area.get("points", [])]} for area in no_entry
+        ]
+    if speed_cm_s is not None:
+        msg["speed_cm_s"] = speed_cm_s
     return _checked(msg, _fenced(msg, fence, cmd_id))
 
 
@@ -225,8 +246,13 @@ def make_telemetry(
     takeoff_at_local_s: float | None,
     *,
     v2: TelemetryV2 | None = None,
+    rth: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Edge -> ground state report, sent every ``TELEMETRY_INTERVAL_S``."""
+    """Edge -> ground state report, sent every ``TELEMETRY_INTERVAL_S``.
+
+    *rth* is the optional return object (``make_rth_object``), a protocol v2
+    field, so it needs *v2*. Without it the message is unchanged.
+    """
     msg: dict[str, Any] = {
         "type": TELEMETRY,
         "drone_id": drone_id,
@@ -242,8 +268,12 @@ def make_telemetry(
         "takeoff_at_local_s": takeoff_at_local_s,
     }
     if v2 is None:
+        if rth is not None:
+            raise ProtocolError("telemetry field 'rth' is a protocol v2 field; pass v2 as well")
         return _checked(msg)
     msg.update(v2.fields())
+    if rth is not None:
+        msg["rth"] = dict(rth)
     return _checked(msg, 2)
 
 
@@ -318,8 +348,13 @@ def make_edge_hello(
     is_flying: bool,
     battery: float | None,
     proto: int = PROTOCOL_VERSION,
+    unit_rev: str | None = None,
 ) -> dict[str, Any]:
-    """Edge -> ground, sent in reply to each ground ``hello`` (never before one)."""
+    """Edge -> ground, sent in reply to each ground ``hello`` (never before one).
+
+    *unit_rev* (protocol v2, optional) is the hash of the edge's start-time
+    resolution; without it the message is exactly today's.
+    """
     return EdgeHello(
         drone_id=drone_id,
         node_id=node_id,
@@ -329,6 +364,7 @@ def make_edge_hello(
         is_flying=is_flying,
         battery=battery,
         proto=proto,
+        unit_rev=unit_rev,
     ).to_message()
 
 

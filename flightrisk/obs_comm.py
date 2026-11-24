@@ -13,6 +13,10 @@ message size and a few scalar fields: type, drone id, ``cmd_id``, ``epoch``,
   as one aggregated event per (side, direction, type, drone) every
   :data:`AGGREGATE_INTERVAL_S` seconds. Edge telemetry also feeds the drone
   gauges and the ``drone_telemetry_snapshot`` event.
+* Read-only queries (``describe_unit``, ``fleet_protocol.QUERY_TYPES``) and
+  their ``ack``/``nack`` replies are aggregated the same way (PROTO-7), so a
+  chatty ground cannot flood the log. A reply is counted under the type
+  ``ack:describe_unit`` or ``nack:describe_unit``.
 
 Every hook is wrapped so that a telemetry failure can never affect the link.
 """
@@ -49,7 +53,7 @@ _SCALAR_FIELDS = ("cmd_id", "epoch", "plan_id", "seq", "for", "reason", "leader_
 KNOWN_TYPES = frozenset(
     set(fp.GROUND_TO_EDGE_TYPES_V2) | set(fp.EDGE_TO_GROUND_TYPES_V2) | set(fp.PEER_TYPES)
     | set(fp.LEGACY_GROUND_TO_EDGE_TYPES) | set(fp.LEGACY_EDGE_TO_GROUND_TYPES) | SAMPLED_TYPES
-    | set(fp.CONFIG_COMMAND_TYPES)
+    | set(fp.CONFIG_COMMAND_TYPES) | set(fp.QUERY_TYPES)
     | {"command", "clock_sync", "link_up", "link_down", "reconnect", "unknown", "broadcast"}
 )
 
@@ -116,6 +120,16 @@ class _Aggregator:
 _agg = _Aggregator()
 
 
+def _aggregate_name(mtype: Any, msg: Mapping[str, Any]) -> str | None:
+    """The name a message is aggregated under, or None when it is logged one event per message."""
+    if mtype in SAMPLED_TYPES or mtype in fp.QUERY_TYPES:
+        return mtype
+    target = msg.get("for")
+    if mtype in ("ack", "nack") and isinstance(target, str) and target in fp.QUERY_TYPES:
+        return f"{mtype}:{target}"
+    return None
+
+
 def _fields(msg: Mapping[str, Any]) -> dict[str, Any]:
     out = {}
     for k in _SCALAR_FIELDS:
@@ -150,13 +164,14 @@ def _record(side: str, direction: str, msg: Mapping[str, Any], drone_id: str | N
         M.comm_bytes.add(size, {"side": side, "direction": direction})
     if peer and direction == "in":
         M.note_link(labels["drone_id"], side)
-    if mtype in SAMPLED_TYPES and outcome == "ok":
-        window = _agg.add((side, direction, mtype, labels["drone_id"]), size or 0)
+    aggregate = _aggregate_name(mtype, msg) if outcome == "ok" else None
+    if aggregate is not None:
+        window = _agg.add((side, direction, aggregate, labels["drone_id"]), size or 0)
         if window is None:
             return
         count, nbytes, span_s = window
-        log_event(_log, logging.INFO, "drone_comm", f"{direction} {mtype} x{count}", category="drone_comm",
-                  component=side, direction=direction, type=mtype, peer=peer, drone_id=peer, aggregated=True,
+        log_event(_log, logging.INFO, "drone_comm", f"{direction} {aggregate} x{count}", category="drone_comm",
+                  component=side, direction=direction, type=aggregate, peer=peer, drone_id=peer, aggregated=True,
                   count=count, bytes=nbytes, window_s=round(span_s, 2), rate_per_s=round(count / span_s, 2) if span_s else None)
         return
     fields = _fields(msg)
