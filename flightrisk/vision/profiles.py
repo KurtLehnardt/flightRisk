@@ -116,6 +116,10 @@ class DetectionProfile:
         weights_env: Name of an environment variable that, when set to a
             non-empty value, replaces ``weights`` (for example
             ``FLIGHTRISK_DETECTOR_MODEL`` for the ``default`` profile), or None.
+        requires_sensor: ``rgb`` or ``thermal`` when the profile runs only on that
+            sensor, or None for any (every built-in profile).
+        requires_view: ``level``, ``nadir`` or ``any`` when the profile needs that
+            camera view, or None for no requirement (every built-in profile).
     """
 
     name: str
@@ -135,6 +139,8 @@ class DetectionProfile:
     reid_weight_scale: float = 1.0
     fallback: str | None = None
     weights_env: str | None = None
+    requires_sensor: str | None = None
+    requires_view: str | None = None
 
     def __post_init__(self) -> None:
         if not is_profile_name(self.name):
@@ -143,6 +149,10 @@ class DetectionProfile:
             raise ValueError(f"fallback {self.fallback!r} is not a profile name")
         if self.fallback == self.name:
             raise ValueError("a profile cannot fall back to itself")
+        if self.requires_sensor not in (None, "rgb", "thermal"):
+            raise ValueError("requires_sensor must be rgb, thermal or None")
+        if self.requires_view not in (None, "level", "nadir", "any"):
+            raise ValueError("requires_view must be level, nadir, any or None")
         if not self.weights:
             raise ValueError("weights must name a model")
         if not 0.0 < self.confidence < 1.0:
