@@ -56,7 +56,7 @@ CLIMB_MARGIN_M = 1.5
 LAND_WAIT_S = 60.0
 LAND_MARGIN_M = 0.5
 LAND_HOLD_S = 3.0
-DISARM_WAIT_S = 5.0
+DISARM_WAIT_S = 30.0
 
 
 def _is_refused_action(exc: BaseException) -> bool:
@@ -87,7 +87,10 @@ def _takeoff(ctrl):
     assert _wait_for(
         lambda: ctrl.state.altitude_msl is not None and ctrl.state.altitude_msl >= ground + CLIMB_MARGIN_M,
         timeout=CLIMB_WAIT_S,
-    ), f"Drone did not climb {CLIMB_MARGIN_M} m above the ground altitude {ground:.1f} m"
+    ), (
+        f"Drone did not climb {CLIMB_MARGIN_M} m above the ground altitude {ground:.1f} m "
+        f"(altitude {ctrl.state.altitude_msl}, mode {ctrl.state.flight_mode}, armed {_armed(ctrl)})"
+    )
 
 
 def _armed(ctrl) -> bool:
@@ -102,6 +105,9 @@ def _armed(ctrl) -> bool:
 
 def _land(ctrl, ground):
     """Land and wait until the drone has been within 0.5 m of the ground for 3 s, then for the automatic disarm.
+
+    PX4 can take longer than 5 s to disarm after a landing that began away from the takeoff point, and a takeoff
+    commanded before the disarm is accepted and then dropped, so the disarm is awaited for up to 30 s.
 
     ``is_flying`` goes false as soon as LAND is accepted, so the measured altitude is the landing signal.
     """
@@ -120,7 +126,9 @@ def _land(ctrl, ground):
         time.sleep(0.5)
     else:
         pytest.fail(f"Drone did not land within {LAND_WAIT_S:g} s (ground {ground:.1f} m, now {ctrl.state.altitude_msl})")
-    _wait_for(lambda: not _armed(ctrl), timeout=DISARM_WAIT_S)
+    assert _wait_for(
+        lambda: not _armed(ctrl), timeout=DISARM_WAIT_S
+    ), f"Drone did not disarm within {DISARM_WAIT_S:g} s of landing (mode {ctrl.state.flight_mode})"
 
 
 def _import_real_mavlink_controller():
