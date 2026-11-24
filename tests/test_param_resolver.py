@@ -138,7 +138,8 @@ def test_off_value_is_accepted_and_marked_less_safe():
     got = _resolve(layers={"env": {"FLIGHTRISK_OBSTACLE_SENSING": "off"}})["sensing.mode"]
     assert (got.value, got.less_safe) == ("off", True)
     fact = _resolve("tello", layers={"env": {"FLIGHTRISK_TELLO_TEMP_REFUSE_C": "off"}})["tello.temp_refuse_c"]
-    assert (fact.value, fact.less_safe, fact.source) == ("off", True, Source.ENV)
+    # A test-adapter fact is applied but never classified as less safe (R7, R8; A3 review B1).
+    assert (fact.value, fact.less_safe, fact.source) == ("off", False, Source.ENV)
 
 
 def test_fact_override_is_ignored_on_a_production_unit_with_a_log_line(caplog):
