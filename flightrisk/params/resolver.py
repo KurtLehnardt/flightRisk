@@ -86,7 +86,9 @@ Safety (step S7):
     layer, only the launcher's ``confirmed`` object counts; it is passed as
     the reserved ``confirmed`` key of that layer (RES-11). Less-safe values
     from the launcher, the environment or a flag are accepted, and those from
-    the environment or a flag are logged at warning level.
+    the environment or a flag are logged at warning level. A test-adapter
+    fact is never less safe and never logged as less safe, from any layer or
+    value (R7, R8).
 14. A safety switch stored as off in ``params.json`` or the inventory is
     refused (RES-10). A switch that is a test-adapter fact is refused earlier
     by decision 7, without naming it. A unit's inventory ``features`` are
@@ -863,6 +865,9 @@ def check_resolved(
     confirmed = launcher_confirmed if launcher_present else (confirmations or {})
     for param_id, effective in result.items():
         spec = _BY_ID[param_id]
+        if spec.is_fact(model.profile):
+            # A fact is never confirmed or logged as less safe (R7, R8); a file or launcher cannot set one.
+            continue
         if not needs_confirmation(spec, effective):
             continue
         if effective.source in FILE_SOURCES:
@@ -907,5 +912,7 @@ def _effective(spec: ParamSpec, model: DroneModel, value: Any, base: Any, source
         model=model.id,
         applies=spec.applies,
         non_default=value != base,
-        less_safe=is_less_safe(spec, value, base) if not is_off else not _off_match(spec, base),
+        # A test-adapter fact is never classified as less safe from any layer or value (R7, R8).
+        less_safe=(not spec.is_fact(model.profile)
+                   and (is_less_safe(spec, value, base) if not is_off else not _off_match(spec, base))),
     )

@@ -210,7 +210,7 @@ def test_ground_plan_is_checked_from_the_next_takeoff_point_and_the_fence_still_
         assert not executor.handle_assign_lanes({"type": "assign_lanes", "drone_id": "drone-1", "lanes": too_far})
         assert sent[-1] == {"type": "nack", "for": "assign_lanes", "drone_id": "drone-1", "reason": "geofence",
                             "lanes_total": 2, "geofence_cm": 450.0, "x_cm": 500.0, "y_cm": 0.0,
-                            "rel_x_cm": 0.0, "rel_y_cm": 0.0}
+                            "rel_x_cm": 0.0, "rel_y_cm": 0.0, "effective_geofence_cm": 450.0}
 
         # The accepted plan flies from the new takeoff point.
         assert executor.handle_assign_lanes(
@@ -278,7 +278,7 @@ def test_v2_geofence_nack_carries_the_fields():
         (nack,) = of_type(sent, "nack")
         assert nack["reason"] == "geofence" and nack["cmd_id"] == "c-1"
         assert {k: nack[k] for k in fp.NACK_GEOFENCE_FIELDS} == {
-            "geofence_cm": 150.0, "x_cm": 0.0, "y_cm": 200.0, "rel_x_cm": 0.0, "rel_y_cm": 0.0}
+            "geofence_cm": 150.0, "x_cm": 0.0, "y_cm": 200.0, "rel_x_cm": 0.0, "rel_y_cm": 0.0, "effective_geofence_cm": 150.0}
         validate_sent(sent)
     finally:
         executor.shutdown(timeout=2.0)

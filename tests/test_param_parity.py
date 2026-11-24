@@ -358,6 +358,7 @@ def test_parity_has_no_exceptions() -> None:
 #: today's own cross-value check (for example ``--alt-slot 500`` under the default 2 m ceiling); the list
 #: is the full set the probes find. A3 to A5 record it in design section 27 when they adopt
 #: ``resolve_unit``. It must never grow silently.
+#: Recorded as design section 27, A3 item 47.
 ACCEPTED_TODAY_REFUSED_BY_RESOLVE_UNIT = frozenset({
     (T, G + "CEILING_CM", "150"),
     (T, G + "CEILING_MARGIN_CM", "900"),
@@ -423,6 +424,7 @@ def test_uncompared_list_is_small_and_explicit() -> None:
 #: Test-adapter fact overrides that today's ObstacleSettings honours on any MAVLink drone and that the
 #: resolver ignores on a production (not simulated) MAVLink unit, by N-10 and FACT-3. This is a behaviour
 #: change at adoption, pinned here so A3 records it in design section 27.
+#: Recorded as design section 27, A3 item 47.
 IGNORED_ON_PRODUCTION_UNIT = frozenset({
     (F, G + "OBSTACLE_STEP_CM"),
     (F, G + "OBSTACLE_TURN"),

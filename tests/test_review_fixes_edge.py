@@ -682,9 +682,10 @@ class LandingTello:
         self.touched_down_at: float | None = None
 
     def _touch_down(self) -> None:
+        # Stamp the touchdown before the wire reports ground, so the land confirmation can never see a landed drone without a timestamp.
+        self.touched_down_at = time.monotonic()
         self.wire.height_cm = 0
         self.landing = False
-        self.touched_down_at = time.monotonic()
 
     def __call__(self, command: str):
         word = command.split()[0]
@@ -1113,7 +1114,11 @@ def test_land_during_takeoff_spinup_confirmed_only_after_lift_guard(
     returned_at = time.monotonic()
     taker.join(WAIT_S)
     assert not taker.is_alive()
-    assert returned_at - takeoff_sent[0] >= (guard_s if with_state else reply_window_s)
+    # Measure from the code's own takeoff stamp, taken with time.monotonic()
+    # just before the packet is sent, so the guard is checked exactly. The fake
+    # wire's own stamp only ties that stamp to the real send.
+    assert 0 <= takeoff_sent[0] - ctrl._takeoff_sent_at < 0.1
+    assert returned_at >= ctrl._takeoff_sent_at + (guard_s if with_state else reply_window_s)
     assert ctrl.state.is_flying is False
     assert ctrl._land_unconfirmed is False
     assert ctrl._keepalive_once() is True

@@ -301,12 +301,20 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
 - **v1 rules kept.** On a v1 link a nack must be for `assign_lanes`, with a
   v1 reason and `lanes_total`, exactly as before.
 - **Geofence details.** A `geofence` nack for `assign_lanes`, v1 or v2, may
-  carry five optional numbers (`NACK_GEOFENCE_FIELDS`), all in cm and
+  carry six optional numbers (`NACK_GEOFENCE_FIELDS`), all in cm and
   relative to the drone's takeoff point: `geofence_cm` (the edge's fence
   half-width), `x_cm` and `y_cm` (the first point of the refused path
   outside the fence) and `rel_x_cm` and `rel_y_cm` (where that path starts:
   the drone's dead-reckoned position in the air, or 0, 0 on the ground,
-  see "Takeoff point" below). When present each must be a finite number.
+  see "Takeoff point" below), and `effective_geofence_cm` (that fence
+  half-width less the margin the edge keeps after a refused step, 0 or
+  more; the margin resets at takeoff). When present each must be a finite
+  number. The ground plans against the smallest of its configured fence,
+  the smallest `geofence_cm` an edge reported (kept across missions) and
+  the last `effective_geofence_cm` (forgotten when a new mission is
+  planned). An effective value of 0 is accepted, and one larger than
+  `geofence_cm` is capped at it, so it never widens the plan. The refusal
+  reason names the effective fence and the margin when one applies.
   The edge executor always sends them with a geofence refusal of a lane
   plan; the coordinator shows them in the refusal reason, for example
   `refused by drone-1 (geofence: the path would reach (475, 0) cm from

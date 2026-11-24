@@ -92,6 +92,7 @@ from flightrisk.drone.lane_flight import MoveNotExecutedError
 from flightrisk.drone.lane_plan import split_lane_moves
 from flightrisk.drone.safety import (
     HORIZONTAL_DIRECTIONS,
+    MAX_MOVE_CM,
     MIN_MOVE_CM,
     RelativePose,
     format_cm,
@@ -142,19 +143,39 @@ def _round(value: float) -> float:
     return round(float(value), 1)
 
 
-def _axis_moves(component_cm: float, positive: str, negative: str, *, exact: bool) -> list[tuple[str, int]]:
-    """Tello-sized moves along one axis whose net displacement is *component_cm*.
+def _axis_moves(
+    component_cm: float,
+    positive: str,
+    negative: str,
+    *,
+    exact: bool,
+    min_move_cm: int = MIN_MOVE_CM,
+    max_move_cm: int = MAX_MOVE_CM,
+) -> list[tuple[str, int]]:
+    """Moves within the unit's move range along one axis whose net displacement is *component_cm*.
 
-    A component shorter than the 20 cm minimum is flown as an overshoot and a
-    20 cm return when *exact*, and skipped otherwise (at most 20 cm short).
+    *min_move_cm* and *max_move_cm* are the unit's shortest and longest move
+    (20 and 500 cm by default). A component shorter than the minimum is flown
+    as an overshoot and a minimum-length return when *exact*, and skipped
+    otherwise (at most the minimum short). Both limits are whole centimetres with
+    ``0 < min_move_cm <= max_move_cm`` and ``max_move_cm >= 2 * min_move_cm - 1``; anything else raises ``ValueError``.
     """
+    for name, value in (("min_move_cm", min_move_cm), ("max_move_cm", max_move_cm)):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name} must be a whole number of centimetres, got {value!r}")
+    if not 0 < min_move_cm <= max_move_cm:
+        raise ValueError(f"need 0 < min_move_cm <= max_move_cm, got {min_move_cm} and {max_move_cm}")
+    if max_move_cm < 2 * min_move_cm - 1:
+        raise ValueError(
+            f"need max_move_cm >= 2 * min_move_cm - 1 so every split move stays in range, got {min_move_cm} and {max_move_cm}"
+        )
     distance = round(abs(component_cm))
     if distance == 0:
         return []
     direction, opposite = (positive, negative) if component_cm > 0 else (negative, positive)
-    if distance < MIN_MOVE_CM:
-        return [(direction, distance + MIN_MOVE_CM), (opposite, MIN_MOVE_CM)] if exact else []
-    return [(direction, part) for part in split_lane_moves(distance)]
+    if distance < min_move_cm:
+        return [(direction, distance + min_move_cm), (opposite, min_move_cm)] if exact else []
+    return [(direction, part) for part in split_lane_moves(distance, min_move_cm, max_move_cm)]
 
 
 class ManualControlMixin:
@@ -462,7 +483,11 @@ class ManualControlMixin:
         amount = int(msg.get("degrees") if rotation else msg.get("distance_cm"))
         # Read before the executor lock: the controller takes its own locks.
         link = self._drone_link()
-        height = self._read_height() if direction in ("up", "down") else None
+        # This first check answers at once, but the height was read before
+        # the busy check below, so a previous step may finish in between. The
+        # worker checks the vertical limits again from the height the step
+        # starts from, right before it is sent (``_run_manual_move``).
+        height = self._manual_move_height(direction)
         refusal = None
         fields: dict[str, Any] = {}
         with self._lock:
@@ -506,22 +531,55 @@ class ManualControlMixin:
             return False
         return True
 
+    def _manual_move_height(self, direction: str) -> Any:
+        """The height a vertical manual step is checked from, or None for another step.
+
+        A MAVLink drone moves from its commanded height, so the limits are
+        checked from that height (``_move_from_height``); a Tello from its
+        measured one. Read without the executor lock: the controller takes
+        its own locks.
+        """
+        return self._move_from_height(self._read_height()) if direction in ("up", "down") else None
+
     def _run_manual_move(self, cmd: dict[str, Any], payload: tuple[str, int]) -> None:
-        """Fly an accepted manual step on the worker thread and answer it."""
+        """Fly an accepted manual step on the worker thread and answer it.
+
+        A vertical step is checked against the ceiling, the slot band and
+        the floor again here, after this worker claimed the move and right
+        before it is sent, from the height read now. The check in
+        ``handle_manual_move`` read the height before its busy check, so a
+        previous step that finished in between left that height stale by a
+        whole step. Here no other move can run: this worker is the only one
+        and holds the move claim, so the height checked is the one the step
+        starts from.
+        """
         direction, amount = payload
         rotation = direction in MANUAL_ROTATIONS
         if not self._claim_move(allow_held=True):
             reason, detail = self._cancel_reason() if self._abort.is_set() else ("busy", "held")
             self._manual_nack(cmd, reason, detail=detail)
             return
+        limit = None
         try:
-            if rotation:
-                degrees = amount if direction == "cw" else -amount
-                result = command_result(self.drone.rotate(degrees), "rotate")
-            else:
-                result = command_result(self.drone.move(direction, amount), "move")
+            if direction in ("up", "down"):
+                height = self._manual_move_height(direction)
+                with self._lock:
+                    limit = self._manual_limit(direction, amount, height)
+            if limit is None:
+                if rotation:
+                    degrees = amount if direction == "cw" else -amount
+                    result = command_result(self.drone.rotate(degrees), "rotate")
+                else:
+                    result = command_result(self.drone.move(direction, amount), "move")
         finally:
             self._end_move()
+        if limit is not None:
+            refusal, fields = limit
+            self._log.warning("edge_manual_move", drone_id=self.drone_id, cmd_id=cmd.get("cmd_id"),
+                              direction=direction, amount=amount, outcome="refused", reason=refusal,
+                              detail=fields.get("detail"))
+            self._manual_nack(cmd, refusal, **fields)
+            return
         if not result.ok:
             # Not flown: the pose is unchanged and the drone hovers.
             outcome = result.outcome.value
@@ -612,10 +670,10 @@ class ManualControlMixin:
         """Steps from the current pose back to *target*, inside the geofence, or None. Caller holds ``_lock``.
 
         A rotation to the target heading, then a move along that heading's
-        forward axis and one along its right axis (each split into Tello
-        moves), in whichever order keeps every point inside the geofence.
+        forward axis and one along its right axis (each split into moves
+        of the default 20 to 500 cm move range), in whichever order keeps every point inside the geofence.
         Exact paths (short components flown as an overshoot and a return) are
-        tried first, then paths that skip components under 20 cm.
+        tried first, then paths that skip components under the minimum move.
         """
         pose = self.envelope.pose_snapshot()
         steps: list[tuple[str, int]] = []
