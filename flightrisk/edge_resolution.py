@@ -851,9 +851,10 @@ def obstacle_arguments(resolution: EdgeResolution, today: Mapping[str, Any],
       refusing the start when such a name hides a launcher or params-file value (``_refuse_shadowed``);
     * a row the resolution does not hold (``sensing.max_decode_lag_s`` on a MAVLink unit);
     * a row whose environment variable is set but which the resolver did not take from it. On a
-      production MAVLink unit the resolver ignores a ``FLIGHTRISK_OBSTACLE_*`` fact override with a
-      warning (FACT-3), but a MAVLink edge with a camera senses with these settings, so ignoring the
-      override here would change how today's edge flies. Plan risk R6 leaves that change to B1.
+      production MAVLink unit the resolver leaves a ``FLIGHTRISK_OBSTACLE_*`` fact override out of the
+      resolution (FACT-3) and logs that the edge reads it itself (``resolver.READ_BY_THE_EDGE``): a
+      MAVLink edge with a camera senses with these settings, so ignoring the override here would change
+      how today's edge flies. Plan risk R6 leaves that change to B1.
     """
     from flightrisk.params.spec import Source
     from flightrisk.params.table import TABLE

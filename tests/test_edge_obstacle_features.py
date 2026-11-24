@@ -22,6 +22,7 @@ from flightrisk.drone.safety import SafetyEnvelope
 from flightrisk.edge_resolution import LAUNCHER_PARAMS_ENV_VAR, OBSTACLE_ROWS, PARAMS_FILE_ENV_VAR
 from flightrisk.hardware.features import FORWARD_OBSTACLE_SENSING
 from flightrisk.params.spec import Source
+from flightrisk.params.table import TABLE
 from tests.test_edge_envelope_resolved import _FAKE, _FIELD, _ROOM, _args, _Log
 from tests.test_edge_guards_resolved import _resolved, _with_layer, edge_env  # noqa: F401 - fixture
 
@@ -105,14 +106,45 @@ def test_an_environment_value_keeps_todays_reader(edge_env, argv):
 
 
 def test_a_production_mavlink_unit_still_flies_todays_obstacle_override(edge_env):
-    # The resolver ignores the fact override on a production unit, but today's MAVLink camera edge senses
-    # with it, so the settings keep it (plan risk R6 leaves the change to B1).
+    # The resolver leaves the fact override out of the resolution on a production unit, but today's MAVLink
+    # camera edge senses with it, so the settings keep it (plan risk R6 leaves the change to B1).
     edge_env.setenv("FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH", "0.5")
     args = _resolved(_FIELD)
     assert "sensing.min_safe_depth" in args.edge_resolution.values
     assert args.edge_resolution.values["sensing.min_safe_depth"].source != Source.ENV
     _, resolved = _settings(_FIELD, args)
     assert resolved["min_safe_depth"] == 0.5
+
+
+_OBSTACLE_OVERRIDES = {
+    "FLIGHTRISK_OBSTACLE_TURN": ("turn", "0", False),
+    "FLIGHTRISK_OBSTACLE_STEP_CM": ("step_cm", "300", 300),
+    "FLIGHTRISK_OBSTACLE_SETTLE_S": ("settle_s", "0.5", 0.5),
+    "FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH": ("min_safe_depth", "0.5", 0.5),
+    "FLIGHTRISK_OBSTACLE_PERSON_FRACTION": ("person_fraction", "0.6", 0.6),
+    "FLIGHTRISK_OBSTACLE_CLEAR_VOTES": ("clear_votes", "3", 3),
+    "FLIGHTRISK_OBSTACLE_RELOOK": ("relook", "1", 1),
+    "FLIGHTRISK_OBSTACLE_SIDESTEP_CM": ("sidestep_cm", "40", 40),
+    "FLIGHTRISK_OBSTACLE_SIDESTEPS": ("sidesteps", "1", 1),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_OBSTACLE_OVERRIDES))
+def test_an_obstacle_override_on_a_production_mavlink_unit_is_logged_as_read_by_the_edge(edge_env, caplog, name):
+    # The resolver leaves the fact override out of the resolution, but the MAVLink camera edge senses with
+    # it, so the log says the edge reads it rather than that it is ignored (plan risk R6 leaves it to B1).
+    setting, raw, value = _OBSTACLE_OVERRIDES[name]
+    edge_env.setenv(name, raw)
+    with caplog.at_level("DEBUG", logger="flightrisk.params.resolver"):
+        args = _resolved(_FIELD)
+    assert args.edge_resolution.simulated is False
+    row = next(spec.id for spec in TABLE if spec.env == name)
+    assert args.edge_resolution.values[row].source is Source.PROFILE  # No value changes in the resolution.
+    lines = [(r.levelname, r.getMessage()) for r in caplog.records
+             if r.name == "flightrisk.params.resolver" and name in r.getMessage()]
+    assert lines == [("INFO", f"{name} is not resolved on drone-1, a production unit; the edge reads it itself")]
+    _, resolved = _settings(_FIELD, args)
+    assert resolved[setting] == value
 
 
 # --- The launcher layer and the params file ---------------------------------------------------------------

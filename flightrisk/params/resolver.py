@@ -644,9 +644,23 @@ _NUMERIC_KINDS = (Kind.INT, Kind.FLOAT, Kind.INT_LIST, Kind.INT_PAIR)
 IGNORED_WITHOUT_BOUND = frozenset({("tello", "FLIGHTRISK_LINK_LOSS_WAIT_S")})
 
 #: Fact rows whose variable the edge still reads itself on every unit, so a test-adapter override of one on
-#: a production unit is left out of the resolution but is not ignored: the hover-only test is a mission
-#: switch that today's reader honours (``edge_device._flight_guards``). Pinned by a test.
-READ_BY_THE_EDGE = frozenset({"mode.hover_test"})
+#: a production unit is left out of the resolution but is not ignored. The hover-only test is a mission
+#: switch that today's reader honours (``edge_device._flight_guards``). The nine obstacle facts with a
+#: ``FLIGHTRISK_OBSTACLE_*`` variable are read by ``edge_device.ObstacleSettings`` on every flying edge's
+#: start, and a MAVLink edge with a camera senses with them (``edge_resolution.obstacle_arguments``); plan
+#: risk R6 leaves that change to B1. Pinned by a test.
+READ_BY_THE_EDGE = frozenset({
+    "mode.hover_test",
+    "sensing.turn",
+    "sensing.step_cm",
+    "sensing.settle_s",
+    "sensing.min_safe_depth",
+    "sensing.person_fraction",
+    "avoid.clear_votes",
+    "avoid.relook",
+    "avoid.sidestep_cm",
+    "avoid.sidesteps",
+})
 
 
 #: Test-adapter fact rows that a production unit's model does not hold, but whose variable today's edge

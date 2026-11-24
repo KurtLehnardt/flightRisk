@@ -29,7 +29,7 @@ from flightrisk.edge_resolution import (
     TEMP_ROWS,
 )
 from flightrisk.hardware.inventory import ENV_FILE
-from flightrisk.params.spec import Source
+from flightrisk.params.spec import Edit, Source
 from tests.test_edge_envelope_resolved import (
     _FAKE,
     _FIELD,
@@ -196,10 +196,16 @@ def test_the_hover_test_on_a_production_mavlink_unit_is_not_logged_as_ignored(ed
     assert any("the edge reads it itself" in line for line in hover)
 
 
-def test_only_the_hover_test_is_read_by_the_edge():
+def test_the_rows_read_by_the_edge_are_the_hover_test_and_the_obstacle_facts():
+    from flightrisk.edge_resolution import OBSTACLE_ROWS
     from flightrisk.params.resolver import READ_BY_THE_EDGE
+    from flightrisk.params.table import TABLE
 
-    assert READ_BY_THE_EDGE == frozenset({"mode.hover_test"})
+    obstacle_facts = {spec.id for spec in TABLE
+                      if spec.id in OBSTACLE_ROWS.values() and (spec.env or "").startswith(G + "OBSTACLE_")
+                      and spec.edit.get("generic_multirotor") is Edit.FACT}
+    assert len(obstacle_facts) == 9
+    assert READ_BY_THE_EDGE == frozenset({"mode.hover_test"}) | obstacle_facts
 
 
 # --- Test-adapter overrides on a production MAVLink unit --------------------------------------------------

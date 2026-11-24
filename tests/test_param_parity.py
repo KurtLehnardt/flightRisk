@@ -422,7 +422,8 @@ def test_uncompared_list_is_small_and_explicit() -> None:
 
 
 #: Test-adapter fact overrides that today's ObstacleSettings honours on any MAVLink drone and that the
-#: resolver ignores on a production (not simulated) MAVLink unit, by N-10 and FACT-3. This is a behaviour
+#: resolver leaves out of the resolution on a production (not simulated) MAVLink unit, by N-10 and FACT-3.
+#: The edge still reads them itself (``resolver.READ_BY_THE_EDGE``, plan risk R6). This is a behaviour
 #: change at adoption, pinned here so A3 records it in design section 27.
 #: Recorded as design section 27, A3 item 47.
 IGNORED_ON_PRODUCTION_UNIT = frozenset({
