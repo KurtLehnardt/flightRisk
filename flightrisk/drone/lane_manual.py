@@ -158,13 +158,17 @@ def _axis_moves(
     (20 and 500 cm by default). A component shorter than the minimum is flown
     as an overshoot and a minimum-length return when *exact*, and skipped
     otherwise (at most the minimum short). Both limits are whole centimetres with
-    ``0 < min_move_cm <= max_move_cm``; anything else raises ``ValueError``.
+    ``0 < min_move_cm <= max_move_cm`` and ``max_move_cm >= 2 * min_move_cm - 1``; anything else raises ``ValueError``.
     """
     for name, value in (("min_move_cm", min_move_cm), ("max_move_cm", max_move_cm)):
         if isinstance(value, bool) or not isinstance(value, int):
             raise ValueError(f"{name} must be a whole number of centimetres, got {value!r}")
     if not 0 < min_move_cm <= max_move_cm:
         raise ValueError(f"need 0 < min_move_cm <= max_move_cm, got {min_move_cm} and {max_move_cm}")
+    if max_move_cm < 2 * min_move_cm - 1:
+        raise ValueError(
+            f"need max_move_cm >= 2 * min_move_cm - 1 so every split move stays in range, got {min_move_cm} and {max_move_cm}"
+        )
     distance = round(abs(component_cm))
     if distance == 0:
         return []
@@ -630,7 +634,7 @@ class ManualControlMixin:
 
         A rotation to the target heading, then a move along that heading's
         forward axis and one along its right axis (each split into moves
-        of the unit's move range), in whichever order keeps every point inside the geofence.
+        of the default 20 to 500 cm move range), in whichever order keeps every point inside the geofence.
         Exact paths (short components flown as an overshoot and a return) are
         tried first, then paths that skip components under the minimum move.
         """

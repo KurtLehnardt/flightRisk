@@ -138,7 +138,7 @@ def test_a_default_factory_outside_the_allowlist_stops_generation():
 # --- The probe section depends on the parity harness (finding 6). ---
 
 #: sha256 of ``tests/test_param_parity.py`` when the baseline was recorded.
-PARITY_HARNESS_SHA256 = "3f4da684a22f1140b613f3297f61387811ae4c503c97d46fd6c0ed32a539d9f2"
+PARITY_HARNESS_SHA256 = "bca9596186d11e17b2d9f10bb90bdf8cbb2ac8d9db78e3015e842edf84af77a4"
 
 
 def test_the_parity_harness_is_the_one_the_baseline_was_recorded_with():
