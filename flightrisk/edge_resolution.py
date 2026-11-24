@@ -9,7 +9,7 @@ first of these that names one:
 3. the inventory unit for ``--drone-id`` (``FLIGHTRISK_INVENTORY_FILE``);
 4. the launcher layer's ``model`` (``FLIGHTRISK_LAUNCHER_PARAMS``);
 5. the backend's default: the first model its registered backend declares
-   (``BackendSpec.models``). ``fake`` runs the registry's default backend.
+   (``BackendSpec.models``). ``fake`` runs the registry's fake backend (``FAKE_DRONE_BACKEND``).
 
 The edge refuses to start when the model's scale, adapter or frame path
 differs from its backend's, so a Tello can never fly with outdoor bounds. With
@@ -100,13 +100,13 @@ class ModelChoice:
 def _backend_spec(drone: str) -> Any:
     """The registered backend that edge drone kind ``drone`` runs.
 
-    ``fake`` runs the registry's default backend. Any other kind is the name
+    ``fake`` runs the registry's fake backend (``FAKE_DRONE_BACKEND``). Any other kind is the name
     of a registered backend that declares the catalogue models it flies.
     Raises ``ValueError`` for any other kind.
     """
     from flightrisk.drone import registry  # Lazy: the registry bootstraps every backend.
 
-    name = registry.DEFAULT_BACKEND if drone == FAKE_DRONE else drone
+    name = registry.FAKE_DRONE_BACKEND if drone == FAKE_DRONE else drone
     if not registry.is_registered(name) or not registry.get(name).models:
         raise ValueError(f"unknown edge drone {drone!r}")
     return registry.get(name)
