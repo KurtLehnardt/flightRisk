@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import random
 from pathlib import Path
@@ -20,6 +21,7 @@ from flightrisk.params.resolver import (
 )
 from flightrisk.params.spec import Source
 from flightrisk.params.table import TABLE
+from tests.support.symlinks import symlink_or_skip
 
 GOLDEN = Path(__file__).resolve().parent / "golden" / "flight_params.json"
 TODAY = today_accepts_from_golden(json.loads(GOLDEN.read_text(encoding="utf-8")))
@@ -49,7 +51,7 @@ def test_precedence_order_is_res_1():
     assert PRECEDENCE == (Source.PROFILE, Source.FILE, Source.INVENTORY, Source.LAUNCHER, Source.ENV, Source.CLI)
 
 
-@pytest.mark.parametrize("lower, higher", list(zip(PRECEDENCE, PRECEDENCE[1:])))
+@pytest.mark.parametrize("lower, higher", list(itertools.pairwise(PRECEDENCE)))
 def test_each_adjacent_pair_the_higher_source_wins(lower, higher):
     layers = {s: CEILING_LAYERS[s] for s in (lower, higher) if s in CEILING_LAYERS}
     got = _resolve(layers=layers)[CEILING]
@@ -280,7 +282,7 @@ def test_fact_id_in_params_file_is_refused_without_naming_it(tmp_path, fact_id):
 
 
 def test_read_only_everywhere_id_in_params_file_is_refused(tmp_path):
-    ro = next(s for s in TABLE if set(e.value for e in s.edit.values()) == {"read_only"})
+    ro = next(s for s in TABLE if {e.value for e in s.edit.values()} == {"read_only"})
     with pytest.raises(ParamRefused):
         files.load_params_file(_write(tmp_path, {"version": 1, "defaults": {ro.id: ro.defaults[G]}}))
 
@@ -415,7 +417,7 @@ def test_a_params_file_version_must_be_the_integer_1(version):
 
 def test_a_dangling_params_symlink_is_refused_not_treated_as_missing(tmp_path):
     path = tmp_path / "params.json"
-    path.symlink_to(tmp_path / "missing.json")
+    symlink_or_skip(path, tmp_path / "missing.json")
     with pytest.raises(ParamRefused):
         files.load_params_file(path)
 
