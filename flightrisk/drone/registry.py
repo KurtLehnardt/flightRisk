@@ -26,6 +26,11 @@ from flightrisk.drone.controller import DroneController
 #: registration while the dashboard is replaying a video file).
 DEFAULT_BACKEND = "tello"
 
+#: Backend the fake drone simulates. The fake drone simulates a Tello. Callers
+#: that need the fake drone's backend look it up through this name, so it stays
+#: a Tello whatever DEFAULT_BACKEND is.
+FAKE_DRONE_BACKEND = "tello"
+
 #: Module that registers the built-in backends.
 _BOOTSTRAP_MODULE = "flightrisk.drone.backends"
 
@@ -202,6 +207,7 @@ def edge_kinds() -> tuple[str, ...]:
 
 __all__ = [
     "DEFAULT_BACKEND",
+    "FAKE_DRONE_BACKEND",
     "BackendSpec",
     "UnknownBackendError",
     "edge_kinds",
