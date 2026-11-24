@@ -86,7 +86,9 @@ Safety (step S7):
     layer, only the launcher's ``confirmed`` object counts; it is passed as
     the reserved ``confirmed`` key of that layer (RES-11). Less-safe values
     from the launcher, the environment or a flag are accepted, and those from
-    the environment or a flag are logged at warning level. A test-adapter
+    the environment or a flag are logged at warning level. A row in
+    ``LAUNCHER_CONFIRMED_ONLY`` (the regulatory altitude cap switch) needs the
+    launcher's ``confirmed`` object for a less-safe launcher value too. A test-adapter
     fact is never less safe and never logged as less safe, from any layer or
     value (R7, R8).
 14. A safety switch stored as off in ``params.json`` or the inventory is
@@ -146,6 +148,7 @@ from flightrisk.params.constraints import FILE_SOURCES, check_constraints, store
 from flightrisk.params.messages import render_refused_input, render_unavailable_capability
 from flightrisk.params.spec import Bound, Confirm, EffectiveValue, Edit, Kind, ParamSpec, Safer, Source, Unit
 from flightrisk.params.table import (
+    LAUNCHER_CONFIRMED_ONLY,
     PARSE_AREA,
     PARSE_ASCII_FLOAT,
     PARSE_ASCII_INT,
@@ -900,7 +903,8 @@ def check_resolved(
             continue
         if not needs_confirmation(spec, effective):
             continue
-        if effective.source in FILE_SOURCES:
+        launcher_only = param_id in LAUNCHER_CONFIRMED_ONLY and effective.source is Source.LAUNCHER
+        if effective.source in FILE_SOURCES or launcher_only:
             if not _confirmed(spec, confirmed.get(param_id), effective.value):
                 raise _unconfirmed(spec, model, effective, effective.base_default, launcher_present)
         elif effective.source in _NAME_LAYERS:
