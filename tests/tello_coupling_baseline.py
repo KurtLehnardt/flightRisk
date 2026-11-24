@@ -31,9 +31,7 @@ COUPLING_BASELINE: dict[str, dict[tuple[str, str, str, str], int]] = {
         ('flightrisk/hardware/features.py', '_is_tello', 'compare', 'TELLO_ADAPTER'): 1,
         ('flightrisk/hardware/features.py', 'feature_reason', 'name', '_is_tello'): 3,
         # flightrisk/params/docs.py
-        ('flightrisk/params/docs.py', '', 'literal', 'tello'): 1,
         ('flightrisk/params/docs.py', '_fact_table', 'literal', 'tello'): 1,
-        ('flightrisk/params/docs.py', '_settings_table', 'literal', 'tello'): 2,
     },
     "X-legacy": {
         # flightrisk/drone/fleet.py
