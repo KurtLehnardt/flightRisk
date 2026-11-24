@@ -125,8 +125,8 @@ class Feature:
 FEATURES: Mapping[str, Feature] = {f.id: f for f in (
     Feature(
         FORWARD_OBSTACLE_SENSING,
-        "a mount in the level role with an RGB sensor, and a frame path: drone_video with the backend's "
-        "STEPPED_SENSING (Tello), or capture_source with --source camera or url (MAVLink)",
+        "a mount in the level role with an RGB sensor, and a frame path: drone_video with stepped sensing "
+        "capability, or capture_source with --source camera or url using generic autopilot protocol",
         "gimbal pitch measured and within tolerance at every gate",
         "refuse the takeoff when sensing.mode is required and onboard_avoidance is not declared; "
         "refuse the start when switched on but statically unavailable",
@@ -196,9 +196,9 @@ def feature_reason(feature_id: str, model: DroneModel, *, mission_pitch_deg: Map
     """Why ``feature_id`` is statically unavailable for ``model``, or None when it is available.
 
     ``source`` is the edge's ``--source`` (``camera``, ``url`` ...) for a capture-source unit.
-    ``stepped_sensing`` is whether the backend declares STEPPED_SENSING; it defaults to the adapter
-    spec's ``stepped_sensing`` fact (False for an adapter missing from ``ADAPTER_SPECS``) and is never
-    consulted for a capture-source (MAVLink) unit.
+    ``stepped_sensing`` is whether the backend declares stepped sensing capability; it defaults to the
+    adapter spec's ``stepped_sensing`` fact (False for an adapter missing from ``ADAPTER_SPECS``) and
+    is never consulted for a capture-source unit with generic autopilot protocol.
     """
     if feature_id not in FEATURES:
         raise KeyError(f"unknown feature {feature_id!r}")
