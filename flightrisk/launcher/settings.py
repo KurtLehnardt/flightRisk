@@ -50,6 +50,7 @@ from flightrisk.drone.safety import (
 )
 from flightrisk.drone.temp_preflight import TempLimits
 from flightrisk.fleet_protocol import is_identifier
+from flightrisk.hardware.ids import DRONE_ID
 from flightrisk.launcher.netinfo import Adapter, adapters_for_host
 
 ROLES = ("ground", "edges")
@@ -78,9 +79,8 @@ MAX_PRESET_NAME = 60
 #: The largest geofence accepted, in cm (50 m); the indoor floor is about 4 m.
 MAX_GEOFENCE_CM = 5000
 MAX_TEXT_LEN = 256
-#: Drone ids name log files and processes, so they are stricter than the protocol's identifiers: no
-#: '.' or ':' (``edge-drone:1.log`` would be a hidden NTFS stream on Windows).
-_DRONE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+#: Drone ids name log files and processes; the rule lives in ``flightrisk.hardware.ids``.
+_DRONE_ID = DRONE_ID
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 ERROR = "error"
