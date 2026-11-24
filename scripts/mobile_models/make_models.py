@@ -1848,7 +1848,7 @@ def write_golden(golden_dir: Path, detector: Callable[[Any], Any], embedder: Emb
         "compare_with": {k: TOLERANCES[k] for k in TOLERANCES},
         "contract": contract(),
     }
-    (golden_dir / "golden.json").write_text(json.dumps(doc, indent=2) + "\n")
+    (golden_dir / "golden.json").write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8", newline="\n")
     log(f"verify: golden fixtures in {golden_dir} (channel swap moves detector scores by {det_swap:.3f}, "
         f"embedding cosine {emb_swap:.4f})")
     problems = []
@@ -1912,7 +1912,7 @@ def run_verify(work_dir: Path, targets: str, log: Callable[[str], None], allow_u
         "golden": golden,
         "licence_guard": guard,
     }
-    (work_dir / VERIFY_NAME).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    (work_dir / VERIFY_NAME).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
     return report
 
 
@@ -2176,7 +2176,7 @@ def cmd_convert(args) -> int:
                             "bytes": tree_size(out_dir / o.platform / o.filename)}
                     for o in outputs_for(args.targets)},
     }
-    (work_dir / BUILD_NAME).write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    (work_dir / BUILD_NAME).write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
     for key, info in record["outputs"].items():
         _log(f"convert: {key} {info['bytes'] / 1e6:.1f} MB sha256={info['sha256']}")
     return 0

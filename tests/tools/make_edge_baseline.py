@@ -364,7 +364,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     sys.path.insert(0, str(ROOT))
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(build(), indent=1, sort_keys=True) + "\n")
+    args.output.write_text(json.dumps(build(), indent=1, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
     print(f"wrote {args.output}")
     return 0
 
