@@ -199,13 +199,18 @@ def _bind_fake_mavsdk(monkeypatch):
     (e.g. test_capabilities_max_altitude.py) imports it first, so it binds
     the real mavsdk's OffboardError, and ``except OffboardError`` in the
     product no longer catches the _FakeOffboardError these tests raise.
-    """
-    import flightrisk.drone.mavlink as mav
 
-    monkeypatch.setattr(mav, "HAS_MAVSDK", True)
-    monkeypatch.setattr(mav, "System", _FakeSystem, raising=False)
-    monkeypatch.setattr(mav, "OffboardError", _FakeOffboardError, raising=False)
-    monkeypatch.setattr(mav, "VelocityBodyYawspeed", _FakeVelocityBodyYawspeed, raising=False)
+    Patch the globals the controller's code actually reads. A test that
+    re-imports flightrisk.drone.mavlink can leave ``sys.modules`` or the
+    ``flightrisk.drone.mavlink`` package attribute pointing at a different
+    module object than the one MavlinkController was defined in.
+    """
+    mav_globals = MavlinkController._move_async.__globals__
+
+    monkeypatch.setitem(mav_globals, "HAS_MAVSDK", True)
+    monkeypatch.setitem(mav_globals, "System", _FakeSystem)
+    monkeypatch.setitem(mav_globals, "OffboardError", _FakeOffboardError)
+    monkeypatch.setitem(mav_globals, "VelocityBodyYawspeed", _FakeVelocityBodyYawspeed)
 
 
 @pytest.fixture(autouse=False)

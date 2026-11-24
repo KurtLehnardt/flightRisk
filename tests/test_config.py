@@ -34,8 +34,18 @@ def _install_fake_mavsdk(monkeypatch):
     guarantee that file is collected/imported before this one. Tests here
     must not depend on that ordering, so they install their own fake and
     force a fresh import of `flightrisk.drone.mavlink` against it.
-    `monkeypatch.setitem` auto-reverts `sys.modules` after the test.
+
+    Teardown must put back the exact original module object in two places:
+    the `sys.modules` entry and the `mavlink` attribute of the
+    `flightrisk.drone` package. The fresh import rebinds that attribute to
+    the new module, and `import flightrisk.drone.mavlink as mav` reads the
+    attribute, not `sys.modules`. Restoring only `sys.modules` left later
+    tests (test_mavlink.py's `_bind_fake_mavsdk`) patching the throwaway
+    module while `MavlinkController` still ran against the original one.
+    If mavlink was not imported before, both are removed again.
     """
+    import flightrisk.drone as drone_pkg
+
     fake_mavsdk = MagicMock()
     fake_mavsdk.System = MagicMock
     for mod in (
@@ -46,7 +56,14 @@ def _install_fake_mavsdk(monkeypatch):
         "mavsdk.manual_control",
     ):
         monkeypatch.setitem(sys.modules, mod, fake_mavsdk)
-    monkeypatch.delitem(sys.modules, "flightrisk.drone.mavlink", raising=False)
+    name = "flightrisk.drone.mavlink"
+    # setitem records the original entry (or its absence) so undo restores it
+    # exactly; delitem then forces the fresh import.
+    monkeypatch.setitem(sys.modules, name, sys.modules.get(name))
+    monkeypatch.delitem(sys.modules, name)
+    # Same for the package attribute; raising=False records a missing
+    # attribute so undo deletes the one the fresh import adds.
+    monkeypatch.setattr(drone_pkg, "mavlink", getattr(drone_pkg, "mavlink", None), raising=False)
 
 
 @pytest.fixture(autouse=True)
