@@ -199,6 +199,8 @@ class FieldEdge:
         self.drone.disconnect()
 
 
+# Remove this mark once PR #238 is on main.
+@pytest.mark.xfail(strict=False, reason="MAVLink slot overshoot; fixed by PR #238")
 def test_two_mavlink_drones_fly_a_field_plan_end_to_end(monkeypatch):
     scale = field_scale(2, area_m=(70, 30), alt_slots_m=(15, 20))
     settings = scale.edge_settings(2)

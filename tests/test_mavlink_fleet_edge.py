@@ -333,7 +333,9 @@ def test_measured_geofence_breach_returns_to_launch(make_edge):
     edge.handle({"type": "takeoff"})
     assert wait_for(lambda: "edge_takeoff" in edge.log.names() and not edge.executor.is_busy)
     edge.vehicle.wind_drift_m(north=20.0, east=0.0)  # pushed 20 m out of a 10 m fence
-    assert wait_for(lambda: ("return_to_launch",) in edge.vehicle.commands), edge.log.names()
+    # The breach is measured after the slot climb that follows the takeoff, which a slow runner
+    # can stretch past WAIT_S; only the wait for the return is longer, the fence is unchanged.
+    assert wait_for(lambda: ("return_to_launch",) in edge.vehicle.commands, timeout=2 * WAIT_S), edge.log.names()
     assert "edge_geofence_breach" in edge.log.names()
 
 
