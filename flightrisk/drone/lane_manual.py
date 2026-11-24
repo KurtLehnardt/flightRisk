@@ -462,7 +462,10 @@ class ManualControlMixin:
         amount = int(msg.get("degrees") if rotation else msg.get("distance_cm"))
         # Read before the executor lock: the controller takes its own locks.
         link = self._drone_link()
-        height = self._read_height() if direction in ("up", "down") else None
+        # A MAVLink drone moves from its commanded height, so the limits are
+        # checked from that height (``_move_from_height``); a Tello from its
+        # measured one.
+        height = self._move_from_height(self._read_height()) if direction in ("up", "down") else None
         refusal = None
         fields: dict[str, Any] = {}
         with self._lock:

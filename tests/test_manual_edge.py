@@ -437,3 +437,23 @@ def test_the_ground_orphan_land_is_an_ordinary_landing_on_the_edge(executors):
     assert answered(sent, "o1")["type"] == "ack"
     assert not drone.state.is_flying
     assert any(f.get("reason") == "controller_timeout" for _, e, f in log.events if e == "edge_land")
+
+
+def test_vertical_limits_use_the_measured_height_for_a_drone_that_settles_it(executors):
+    """The Tello path is unchanged: a drone with ``settled_height`` is checked from its measured height.
+
+    Only a drone with ``commanded_height_cm`` and no ``settled_height`` (the
+    MAVLink fleet drone) is checked from its commanded height.
+    """
+    from flightrisk.drone.tello import FakeTelloController, TelloController
+
+    assert not hasattr(TelloController, "commanded_height_cm")
+    assert not hasattr(FakeTelloController, "commanded_height_cm")
+    executor, drone, _, _, _ = executors(drone=SteppedTello(name="drone-1", battery=90))
+    assert executor._move_from_height(130) == 130
+    drone.commanded_height_cm = lambda: 500.0
+    drone.settled_height = lambda **_: None
+    assert executor._move_from_height(130) == 130
+    del drone.settled_height
+    assert executor._move_from_height(130) == 500.0
+    assert executor._move_from_height(None) is None  # an unknown height stays unknown

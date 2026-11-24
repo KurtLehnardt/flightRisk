@@ -338,6 +338,30 @@ def test_descent_from_a_takeoff_that_stops_short_ends_at_the_slot(make_edge, slo
     assert edge.vehicle.alt == pytest.approx(slot_cm / 100, abs=edge.drone.options.arrival_alt_m)
 
 
+def test_manual_up_is_checked_against_the_ceiling_from_the_commanded_height(make_edge):
+    """A takeoff to 20 m that stopped at 19.30 m: "up 80" ends at 20.80 m, above the 20.20 m limit, so it is refused.
+
+    From the measured 19.30 m the same step would seem to end at 20.10 m,
+    under the limit and inside the 30 cm slot band.
+    """
+    vehicle = SimVehicle(ARDUPILOT, time_scale=20.0)
+    vehicle.takeoff_stop_m = 19.30
+    edge = make_edge(vehicle, takeoff_alt_m=20.0)
+    assert edge.ready()
+    edge.envelope.configure_ceiling(2320, 300, 2000)  # ceiling limit 2020 cm, slot 2000 cm
+    edge.handle(fp.make_manual_hold(drone_id="drone-1", cmd_id="m-1"))
+    edge.handle(fp.make_manual_takeoff(drone_id="drone-1", cmd_id="m-2"))
+    assert wait_for(lambda: edge.of("ack", "manual_takeoff")), edge.of("nack")
+    assert wait_for(lambda: not edge.executor.is_busy)
+    assert edge.drone.read_height_cm() == 1930 and edge.drone.commanded_height_cm() == pytest.approx(2000)
+    gotos = len([c for c in edge.vehicle.commands if c[0] == "goto"])
+    edge.handle(fp.make_manual_move("up", distance_cm=80, drone_id="drone-1", cmd_id="m-3"))
+    nack = wait_for(lambda: edge.of("nack", "manual_move"))
+    assert nack and nack[-1]["reason"] == "ceiling", nack
+    assert nack[-1]["height_cm"] == pytest.approx(2000) and nack[-1]["max_alt_slot_cm"] == 2020
+    assert len([c for c in edge.vehicle.commands if c[0] == "goto"]) == gotos  # nothing sent
+
+
 def test_commanded_height_is_unknown_before_the_first_takeoff(make_edge):
     edge = make_edge()
     assert edge.ready()
