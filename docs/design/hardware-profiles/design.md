@@ -732,7 +732,7 @@ refused value is listed in section 27 (B4). ArduPilot names follow the connected
 | Low battery | `BATT_FS_LOW_ACT` 1 or 2; the autopilot's low level (`BATT_LOW_MAH` as a share of `BATT_CAPACITY`) at most `battery.return_floor_pct` − 5 points; a voltage-only threshold is refused because it cannot be compared; `BATT_LOW_VOLT` 0 when the capacity threshold is used, because a voltage trigger can fire before FlightRisk's return (N-18); `BATT_CRT_VOLT` kept as a backstop and shown (a critical-voltage landing short of home is the `critical_battery` fallback) | 1, 2, 3, 4, 6, 7; level not compared | `BAT_LOW_THR` at most the return floor − 5 points | not compared | drain slowly: FlightRisk returns before the autopilot's low failsafe |
 | RC loss | `FS_THR_ENABLE` 1 (RTL) or 3 (land) | 1, 3, 4, 5, 6, 7 | `NAV_RCL_ACT` 2 or 3 | 2, 3 | RC off in SITL: return or land |
 | Edge hang (N-1) | `mavsdk_server` tied to the edge; the stall watchdog kills it after `FS_GCS_TIMEOUT` | not checked (an untied server only logs a warning) | the same, with `COM_DL_LOSS_T` | not checked | stall the edge's control loop: the heartbeat stops and the GCS failsafe acts |
-| Kept from today | `FENCE_ENABLE` 1, `FENCE_TYPE` circle and max altitude, fence radius containing the edge's fence, `FENCE_ALT_MAX` above the ceiling and at most 120 m, `BATT_ARM_VOLT`, system id | same | `GF_MAX_HOR_DIST`, `GF_MAX_VER_DIST`, system id | same | existing tests |
+| Kept from today | `FENCE_ENABLE` 1, `FENCE_TYPE` circle and max altitude, fence radius containing the edge's fence, `FENCE_ALT_MAX` above the ceiling and at most 120 m while the regulatory altitude cap is on (item 53 of section 27; with the cap off, at most the unit's known airframe maximum), `BATT_ARM_VOLT`, system id | same | `GF_MAX_HOR_DIST`, `GF_MAX_VER_DIST` (at most 120 m while the cap is on, at most the known airframe maximum with it off), system id | same | existing tests |
 
 Sources: ArduPilot GCS failsafe (https://ardupilot.org/copter/docs/gcs-failsafe.html), RTL mode
 (https://ardupilot.org/copter/docs/rtl-mode.html), EKF failsafe
@@ -1193,26 +1193,70 @@ every "from <PR>" tag in `parameters.md` matches an item below naming that PR an
   line naming each variable (N-10, FACT-3). Environment and flag ranges stay today's (SEAM-10). Assertions:
   any existing test that starts an edge, a ground or a launcher with one of the pinned combinations, named in
   the description. For A5 the assertions are `tests/test_launcher_commands.py:67` and `:119-121`.
-- **A3:** 53. A MAVLink `generic_multirotor` no longer declares an airframe maximum altitude:
-  `MavlinkFleetDrone` drops its 120 m declaration (`int(FIELD_LIMITS.max_alt_slot_cm / 100)` in
-  `flightrisk/drone/mavlink_fleet.py`), and row 8 (`envelope.max_altitude_cm`) of `generic_multirotor` records
-  no airframe limit, changed in the same PR with a `safety-value-changes.md` entry. Height stays bounded,
-  unchanged, by the operator's mission ceiling (row 2, at most 12000 cm), the altitude slot range (row 4, at
-  most 12000 cm), the `FENCE_ALT_MAX` check of section 13 and, from B3 on, the uploaded autopilot fence; the
-  FlightRisk geofence is horizontal and does not bound height.
-  Every consumer of the declared maximum altitude must handle 'no limit' without crashing and without falling back to a lower or default cap.
-  `MavlinkFleetDrone` explicitly declares no limit (None), and the `DroneCapabilities` default of 120 m
-  (`flightrisk/drone/controller.py`) does not apply to it. A3 also corrects the stale "5 m" note at
-  `scripts/make_param_golden.py:178`. Phase: A3.
-  Assertions: the tests that pin that declaration or row 8's 12000 cm for `generic_multirotor`, named in its
-  description.
+  A3's detail: the edge resolves its unit at start with `resolve_unit`, so before it contacts the drone it
+  refuses these ranges of input, which a real edge start accepts today. K-3 on the Tello:
+  `FLIGHTRISK_MIN_TAKEOFF_BATTERY` from 15 to 25 %, both included, because a takeoff minimum at or under the
+  25 % return floor lets a drone take off with its battery already at the level where it must return. Today
+  accepts 15 to 100 % and keeps a fraction, so 25.5 and 26 are still accepted; no variable sets the Tello's
+  return floor. K-6 on a Tello or a MAVLink unit: `FLIGHTRISK_LINK_LOSS_LAND_S` above 0 and under 1.5 s,
+  because a detect time under 1.5 times the 1 s heartbeat interval can trigger on one missed heartbeat plus
+  0.5 s of jitter. Today accepts any value above 0, so 1.5 s and more are still accepted. K-8 on the Tello:
+  any `FLIGHTRISK_CEILING_CM` minus `FLIGHTRISK_CEILING_MARGIN_CM` under 130 cm, the highest of the Tello's
+  altitude slots (100 and 130 cm) or `--alt-slot` when that is higher, that today accepts. Today accepts a
+  ceiling minus margin of at least the start's slot (`--alt-slot`, 100 cm by default) and at least the 50 cm
+  lowest slot. So with no `--alt-slot`, 100 to 129 cm left under the ceiling is newly refused (for example a
+  margin of 871 to 900 cm under a 1000 cm ceiling); with an `--alt-slot` under 130 cm, from that slot (or
+  50 cm, if higher) to 129 cm; with an `--alt-slot` of 130 cm or more, nothing. K-12 and the Tello
+  temperature pair: none newly refused, because today's start checks already refuse every input the probes
+  find. Today's start checks also refuse the other inputs of `ACCEPTED_TODAY_REFUSED_BY_RESOLVE_UNIT` in
+  `tests/test_param_parity.py`, so refusing them changes nothing; `tests/test_edge_a3_changes.py` pins the
+  split and sweeps each range above at both of its ends. The edge also now reads the params file
+  (`~/.flightrisk/params.json`, or `FLIGHTRISK_PARAMS_FILE`) and the inventory (`FLIGHTRISK_INVENTORY_FILE`),
+  which today's edge does not read. A file that is present but cannot be read or is not valid (bad JSON, a
+  wrong shape or version, or a directory) now stops the start, as do an inventory unit whose model does not
+  fit the backend and a safety feature stored off in either file. A file that is absent is treated as empty,
+  so a start without one is unchanged. The launcher preflight and `docs/launcher.md` row still let a Tello
+  takeoff minimum of 15 to 25 % pass until A4 aligns the check (tasks.md, A4); the edge refuses it at start.
+  A production MAVLink unit also ignores the 9 overrides of the Tello obstacle-sensor facts that a MAVLink
+  edge honours today, and logs one line naming each ignored variable (FACT-3, N-10). Until B1 adds the SITL
+  board identity check (CAP-6), only the fake adapter counts as simulated, so every MAVLink unit counts as
+  production. A test-adapter fact is never classified or logged as less safe, from any layer or value
+  (R7, R8). Assertions: `tests/test_param_resolver.py:142` (a fact's off value is applied but no longer
+  marked less safe).
+- **A3, A4, A5, B4:** 53. The 120 m altitude limit, which comes from FAA rules that may not apply to a
+  search-and-rescue mission, becomes a separate regulatory cap that is on by default for every unit. An
+  operator may turn it off for a unit at launch only, with an explicit acknowledgement that the mission is
+  outside FAA jurisdiction and that the operator is entirely responsible. The acknowledgement is recorded
+  with the launch and logged by the edge, and it is never implied or carried over silently. The ground can
+  show the cap's state but cannot change it, so no wire shape changes. The airframe maximum altitude is row
+  8 (`envelope.max_altitude_cm`). For `generic_multirotor` it becomes unknown unless the inventory states
+  it. The 120 m values that stand in for it today stop counting as a known maximum: row 8's 12000 cm for
+  `generic_multirotor`, the catalogue's `max_height_m` of 120 for the generic models, MavlinkFleetDrone's
+  declared 120 m, the `DroneCapabilities` default of 120 m and the legacy controller's 120 m
+  (`flightrisk/drone/mavlink.py`, the dashboard's MavlinkController). Every consumer of the airframe maximum
+  must handle an unknown value without crashing and without falling back to a lower or default cap. With the
+  cap off, only the bounds that are 120 m because of the cap rise to the unit's known airframe maximum: the
+  field ceiling range, the field altitude slot range and the `FENCE_ALT_MAX` check (ArduPilot) and PX4's
+  `GF_MAX_VER_DIST`. `flightrisk/drone/coverage.py` `MAX_ALT_M` and the 12000 cm airspace rows stay at 120 m
+  for now, and environment and flag ceiling and slot values stay at or below 12000 cm (SEAM-10's today
+  ranges). Indoor bounds and every other bound are unchanged. The autopilot fence (B3) still applies, and
+  the FlightRisk geofence is horizontal and does not bound height. A unit with no known airframe maximum
+  cannot turn the cap off. `regulatory.altitude_cap_on` is read-only to every generic path: the edge refuses
+  an off value from a parameter file, the environment, a flag, `--confirm-less-safe` or a ground message,
+  and takes it only from the launcher layer's confirmation with a complete acknowledgement. It refuses an
+  incomplete acknowledgement. Owners: A3 for the rows listed in tasks.md, the catalogue value, the stale
+  note at `scripts/make_param_golden.py:178`, and the edge's enforcement and refusal; A5 for the launcher
+  control, the acknowledgement text and its record; A4 for the ground's display of the cap state and of an
+  unknown maximum; B4 for the `FENCE_ALT_MAX` bound. The `DroneCapabilities` type change that allows an
+  unknown maximum is behaviour-neutral and lands separately. Assertions: named in each PR's description.
 - **A4:** 1. A fleet mixing indoor and field units is refused at Plan (nitpick 12).
   48. The dashboard's default MAVLink address becomes `udpin://0.0.0.0:14540` (today `udp://:14540`, the
   listen form MAVSDK 2 and later reject). Assertions: `tests/test_config.py:107`.
   49. Without `inventory.json`, an edge-reported model that the catalogue does not know no longer becomes a
   `tello` unit; Plan refuses that unit, naming the reported model (CAP-2, INV-5). Fleets of known models are
   unchanged. Assertions: `tests/test_inventory.py:265`.
-- **X0, XCa, XCb, XL:** none.
+- **X0, XCb, XL:** none.
+- **XCa:** none for behaviour. The `DroneCapabilities` type change that allows an unknown maximum for item 53 is behaviour-neutral and lands separately.
 - **XCP:** none. Assertions: `tests/test_param_change_control.py:167`
   (`test_no_runtime_module_imports_params_or_hardware` becomes the named-adopter allowlist of
   `tests/param_adopters.py`; the coupling test `tests/test_tello_coupling.py` is added beside it).
