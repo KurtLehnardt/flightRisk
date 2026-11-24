@@ -434,19 +434,32 @@ def _safety_inputs(
     max_standoff_cm: Any = STANDOFF_FROM_GEOFENCE,
     *,
     max_area_side_cm: float | None = MAX_AREA_SIDE_CM,
+    unit_limits: Mapping[str, EnvelopeLimits] | None = None,
 ) -> dict:
     """Validated ``geofence_cm``, ``min_separation_cm``, ``placement_tolerance_cm`` and ``max_standoff_cm`` plan fields.
 
     The distances are bounded by ``max_area_side_cm`` (None: only finite and positive).
+    With no area cap and ``unit_limits`` given, they are also bounded by the smallest
+    ``max_geofence_cm`` of those profiles (the room profile's is infinite).
     """
     cap = _area_cap(max_area_side_cm)
     fence = _optional_limit("geofence_cm", geofence_cm, cap)
-    return {
+    values = {
         "geofence_cm": fence,
         "min_separation_cm": _optional_limit("min_separation_cm", min_separation_cm, cap),
         "placement_tolerance_cm": _tolerance(placement_tolerance_cm),
         "max_standoff_cm": _max_standoff(max_standoff_cm, fence, cap),
     }
+    if cap is None and unit_limits:
+        tightest = min(unit_limits.values(), key=lambda limits: limits.max_geofence_cm)
+        for name in ("geofence_cm", "min_separation_cm", "max_standoff_cm"):
+            value = values[name]
+            if value is not None and value > tightest.max_geofence_cm:
+                raise ValueError(
+                    f"{name} must be within (0, {tightest.max_geofence_cm:g}] cm, the max_geofence_cm of the "
+                    f"{tightest.name!r} unit profile, got {value!r}"
+                )
+    return values
 
 
 def _altitude_margin(altitude_deadband_cm: Any, altitude_tolerance_cm: Any) -> float:
@@ -777,7 +790,13 @@ def _check(
     min_sep = plan.min_separation_cm if min_separation_cm is _FROM_PLAN else min_separation_cm
     tolerance = plan.placement_tolerance_cm if placement_tolerance_cm is _FROM_PLAN else placement_tolerance_cm
     standoff_cap = plan.max_standoff_cm if max_standoff_cm is _FROM_PLAN else max_standoff_cm
-    limits = _safety_inputs(fence, min_sep, tolerance, standoff_cap, max_area_side_cm=max_area_side_cm)
+    planned = (
+        {drone.drone_id: unit_limits[drone.drone_id] for drone in plan.drones if drone.drone_id in unit_limits}
+        if isinstance(unit_limits, Mapping) else None
+    )
+    limits = _safety_inputs(
+        fence, min_sep, tolerance, standoff_cap, max_area_side_cm=max_area_side_cm, unit_limits=planned,
+    )
     if min_coverage is not None:
         min_coverage = _number("min_coverage", min_coverage)
         if not 0 <= min_coverage <= 1:

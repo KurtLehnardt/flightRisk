@@ -326,3 +326,19 @@ def test_the_coverage_gate_uses_the_altitude_margin_the_plan_was_derived_with():
     gates = fp.gate_footprints(raised)
     assert gates[0].near_cm == pytest.approx(raised.footprint.gate_camera(plan.drones[0].alt_cm, 10).near_cm)
     assert gates[0].near_cm > fp.gate_footprints(plan)[0].near_cm
+
+
+def test_no_area_cap_still_bounds_the_fence_by_the_planned_units_max_geofence():
+    with pytest.raises(ValueError, match=r"geofence_cm.*50000.*'field'"):
+        fpc._safety_inputs(60000, None, 0, max_area_side_cm=None, unit_limits={"d1": FIELD_LIMITS})
+    ok = fpc._safety_inputs(50000, None, 0, max_area_side_cm=None, unit_limits={"d1": FIELD_LIMITS})
+    assert ok["geofence_cm"] == 50000
+    # The smallest profile of the mapping bounds it, and no unit limits means no extra bound.
+    with pytest.raises(ValueError, match="max_geofence_cm"):
+        fpc._safety_inputs(60000, None, 0, max_area_side_cm=None, unit_limits={"d1": ROOM_LIMITS, "d2": FIELD_LIMITS})
+    assert fpc._safety_inputs(60000, None, 0, max_area_side_cm=None)["geofence_cm"] == 60000
+
+
+def test_no_area_cap_with_the_room_profile_is_unchanged():
+    with_room = fpc._safety_inputs(60000, 70000, 0, max_area_side_cm=None, unit_limits={"d1": ROOM_LIMITS})
+    assert with_room == fpc._safety_inputs(60000, 70000, 0, max_area_side_cm=None)
