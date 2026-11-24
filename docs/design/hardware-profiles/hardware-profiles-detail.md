@@ -866,6 +866,13 @@ suffix (`_cm`, `_mm`, `_m`, `_km`, `_s`, `_ms`, `_deg`, `_dps`, `_mps`, `_pct`, 
   (`failsafe`, `require`, `sensing`, `hover`, `avoid`, `refuse`, `obstacle`, `geofence`, `ceiling`,
   `land`): a function parameter default, a class-body field, or a module-level `DEFAULT_*` name;
   never a state flag assigned inside a function, an enum member, an `ENV_`/`EVENT_` name, or a text.
+- (G) a numeric value in a dict display under a unit-named string key, `{"geofence_cm": 450}`.
+
+A numeric literal is folded before the rules apply: a unary sign, and arithmetic of two numeric
+literals (`2 * 100`, `4.5 * 100`, `1.0 / 3`), count as the folded value; a numeric string may use an
+exponent (`"4.5e2"`). Rule G and the folding were added after round-1 review of PR #222; the
+prototype in `guard_rule_prototype.py.txt` predates them and `tests/test_param_literals.py` is the
+reference.
 
 **Allowlist.** Keyed by `(file, enclosing scope, kind, callee or target, name, value)` with the
 exact count of findings for that key; each key maps to `(category, reason)`. Categories: `sdk`,

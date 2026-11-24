@@ -14,4 +14,4 @@ latest entry, which is the last entry in this file.
 - Section 27 item: none.
 - SHA-256 table: f949df64f14cee5c1c025d683cabea1d56a493941db05c214c33f7deac628378
 - SHA-256 golden: 7403c28493386027b0c383326d30d2bb2645fa54c154e289276f9246289d2504
-- SHA-256 allowlist: 9511c5eccf574b615add8951a0237d0e94c65e8a7eea94fb5349ec283ba66805
+- SHA-256 allowlist: 9620d8432ea012b9c02189d4739909c64740f5ed3d680e07af32eb56f9c65743

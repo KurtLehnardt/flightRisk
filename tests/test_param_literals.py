@@ -1,6 +1,7 @@
 """Literal guard (issue #197, design section 22, requirements GRD-1 to GRD-6).
 
-Ported from ``docs/design/hardware-profiles/guard_rule_prototype.py.txt``. Name words come from the
+Ported from ``docs/design/hardware-profiles/guard_rule_prototype.py.txt`` and extended with rule G
+(dict displays) and literal folding (design detail section 22). Name words come from the
 registry ids in ``flightrisk.params.table``. A finding is keyed
 ``(file, enclosing scope, kind, callee or target, name, value)`` and every key must be in
 ``tests/param_literal_allowlist.py`` with its exact count. Scope: ``SCOPE_GLOBS``; ``params/``,
@@ -58,12 +59,24 @@ def build_unit_re(words: set[str]) -> re.Pattern:
                       re.IGNORECASE)
 
 
+_FOLD = {ast.Add: lambda a, b: a + b, ast.Sub: lambda a, b: a - b, ast.Mult: lambda a, b: a * b,
+         ast.Div: lambda a, b: a / b, ast.FloorDiv: lambda a, b: a // b, ast.Mod: lambda a, b: a % b}
+
+
 def _num(node):
+    """A numeric literal, folding unary signs and arithmetic of literals (``2 * 100`` is 200)."""
     if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
         return node.value
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
         v = _num(node.operand)
-        return None if v is None else -v
+        return None if v is None else (-v if isinstance(node.op, ast.USub) else v)
+    if isinstance(node, ast.BinOp) and type(node.op) in _FOLD:
+        left, right = _num(node.left), _num(node.right)
+        if left is not None and right is not None:
+            try:
+                return _FOLD[type(node.op)](left, right)
+            except (ArithmeticError, ValueError):
+                return None
     return None
 
 
@@ -71,7 +84,7 @@ def _numstr(node):
     v = _num(node)
     if v is not None:
         return v
-    if isinstance(node, ast.Constant) and isinstance(node.value, str) and re.fullmatch(r"-?\d+(\.\d+)?", node.value):
+    if isinstance(node, ast.Constant) and isinstance(node.value, str) and re.fullmatch(r"-?\d+(\.\d+)?([eE][-+]?\d+)?", node.value):
         return node.value
     return None
 
@@ -190,6 +203,14 @@ class Scanner(ast.NodeVisitor):
                 v = _numstr(node.args[1])
                 if v is not None:
                     self.add("env_default", callee, keyname, v, node.lineno)
+        self.generic_visit(node)
+
+    def visit_Dict(self, node):
+        """(G) a numeric value under a unit-named string key: ``{"geofence_cm": 450}``."""
+        for k, v in zip(node.keys, node.values):
+            if isinstance(k, ast.Constant) and isinstance(k.value, str) and self.unit(k.value):
+                for n in _nums(v):
+                    self.add("dict", k.value, k.value, n, v.lineno)
         self.generic_visit(node)
 
     def visit_Compare(self, node):
@@ -319,7 +340,27 @@ PLANTED = {
     "D": ("import os\nx = os.getenv('FLIGHTRISK_TIMEOUT_S', '30')\n", "env_default"),
     "E": ("from dataclasses import field\nclass C:\n    timeout_s = field(default=7)\n", "field"),
     "F": ("def f(require_failsafes=True):\n    pass\n", "safety_default"),
+    "G": ("ROOM = {'geofence_cm': 450}\n", "dict"),
+    "default": ("def f(timeout_s=3):\n    pass\n", "default"),
+    "kwonly_default": ("def f(*, timeout_s=3):\n    pass\n", "default"),
 }
+
+
+@pytest.mark.parametrize("text,value", [
+    ("GEOFENCE_CM = 2 * 100\n", 200),
+    ("GEOFENCE_CM = 4.5 * 100\n", 450.0),
+    ("GEOFENCE_CM = 2.0e2\n", 200.0),
+    ("GEOFENCE_CM = +450\n", 450),
+    ("GEOFENCE_CM = 1.0 / 4\n", 0.25),
+    ("ROOM = {'geofence_cm': 3 * 150}\n", 450),
+    ("import os\nx = os.getenv('FLIGHTRISK_GEOFENCE_CM', '4.5e2')\n", "4.5e2"),
+])
+def test_self_folded_literal_is_reported(text, value):
+    assert value in [k[5] for k in _keys(text, ids=["envelope.geofence_cm"])]
+
+
+def test_self_dict_key_not_unit_named_is_ignored():
+    assert _keys("X = {'name': 450, 1: 2}\n", ids=["envelope.geofence_cm"]) == []
 
 
 @pytest.mark.parametrize("rule", sorted(PLANTED))
