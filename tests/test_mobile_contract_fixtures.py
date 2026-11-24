@@ -578,7 +578,7 @@ def test_catalogue_has_the_builtin_models_cameras_and_feature_reasons():
         assert model["cameras"], model_id
         assert set(model["features"]) == set(FEATURE_IDS)
         for state in model["features"].values():
-            assert state["available"] == (state["reason"] is None)
+            assert state["available"] == (state["why"] is None)
 
 
 def test_tello_params_fixture_is_intentionally_not_produced():

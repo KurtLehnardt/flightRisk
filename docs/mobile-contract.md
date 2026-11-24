@@ -43,7 +43,7 @@ venv/bin/python scripts/export_mobile_contract_fixtures.py
 | `command_ack.json` | `command_ack` | `land` |
 | `stream_video_state.json` | `stream_video_state` | `off` |
 | `error.json` | `error` | `land_all_reached_no_drone`, `manual_needs_fleet_mode`, `profiles_need_edge_source`, `no_drones_connected`, `manual_refusal` |
-| `catalogue.json` | built-in drone models (reference; not decoded by the apps yet) | `builtin_models`: every model with its support level, adapter, link, cameras with mount roles, and for each feature whether it is available and the reason when it is not. See "Catalogue fixture". |
+| `catalogue.json` | built-in drone models (reference; not decoded by the apps yet) | `builtin_models`: every model with its support level, adapter, link, cameras with mount roles, and for each feature whether it is available and why not when it is not. See "Catalogue fixture". |
 | `client_emits.json` | events a phone emits | one case per allowed event; `forbidden_<event>` for each forbidden one |
 | `edge_ground_to_edge.json` | edge link, ground to edge | `ground_hello`, `heartbeat_v1`, `heartbeat_v2`, `clock`, `ping`, `set_target`, `stream_video`, `land`, `emergency_land_all` |
 | `edge_edge_to_ground.json` | edge link, edge to ground | `detections_appearance_only`, `detections_with_face`, `detections_no_video`, and fleet-edge replies for reference (`telemetry_v1`, `telemetry_v2_drone_link_down`, `ack_assign_lanes`, `nack_assign_lanes_geofence`, `nack_v2_drone_unreachable`, `profile_ack_fallback`, `profile_nack_in_flight`, `ceiling_ack`, `ceiling_nack`, `manual_ack`, `manual_nack`, `pong`) |
@@ -56,7 +56,7 @@ Identifiers, keys and images in the fixtures are fake: drone ids are `drone-1` a
 
 ## Catalogue fixture
 
-`catalogue.json` holds one case, `builtin_models`. Its payload has `models` (by model id: name, maker, support level, scale, adapter, frame path, positioning, link kind, the reason a unit of that model cannot be added to a fleet or null, `cameras` with their mount role, and `features` with `available` and `reason`), `features` (default on and safety switch per feature id) and `support_levels`. A null reason means the feature is available. Show a reason as plain text. Reasons for a camera-source model assume no capture source is chosen yet.
+`catalogue.json` holds one case, `builtin_models`. Its payload has `models` (by model id: name, maker, support level, scale, adapter, frame path, positioning, link kind, the reason a unit of that model cannot be added to a fleet or null, `cameras` with their mount role, and `features` with `available` and `why`, named so that it is not read as a nack `reason`), `features` (default on and safety switch per feature id) and `support_levels`. A null `why` means the feature is available. Show `why` as plain text. The `why` texts for a camera-source model assume no capture source is chosen yet.
 
 The file holds model facts only. It contains no flight parameter row id, no fact value, no envelope or safety fact and no Tello tuning number, and a test enforces this. The apps do not decode the file yet, and `unknown_keys.json` has no variant of it until they do.
 

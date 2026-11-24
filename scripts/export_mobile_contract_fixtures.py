@@ -2418,7 +2418,7 @@ def build_catalogue() -> dict:
             "addable_reason": feat.model_addable_reason(model),
             "cameras": [camera(spec, roles.get(spec.mount)) for spec in model.cameras],
             "features": {
-                feature_id: {"available": reason is None, "reason": reason}
+                feature_id: {"available": reason is None, "why": reason}
                 for feature_id in feat.FEATURE_IDS
                 for reason in [feat.feature_reason(feature_id, model)]
             },
@@ -2435,7 +2435,7 @@ def build_catalogue() -> dict:
          "flightrisk.hardware.features.mount_roles", "flightrisk.hardware.catalogue.DroneModel.support"],
         {"builtin_models": case(
             None, "reference", {"models": models, "features": features, "support_levels": list(cat.SUPPORT_LEVELS)},
-            "Every built-in model by id. feature reasons are shown to the operator as plain text; a null reason "
+            "Every built-in model by id. A feature's why is shown to the operator as plain text; a null why "
             "means available. Reasons for a camera-source unit assume no --source is given yet.",
         )},
     )
