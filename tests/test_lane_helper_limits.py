@@ -50,3 +50,31 @@ def test_manual_helper_honours_explicit_limits():
         ("left", 50),
     ]
     assert manual_axis_moves(40, "right", "left", exact=False, min_move_cm=50, max_move_cm=500) == []
+
+
+_BAD_LIMITS = [
+    {"max_move_cm": -500},
+    {"max_move_cm": 0},
+    {"min_move_cm": 500, "max_move_cm": 20},
+    {"min_move_cm": 30.5},
+    {"min_move_cm": 0},
+    {"min_move_cm": -20},
+    {"max_move_cm": 500.0},
+    {"min_move_cm": True},
+]
+
+
+@pytest.mark.parametrize("limits", _BAD_LIMITS)
+def test_transit_rejects_invalid_limits(limits):
+    with pytest.raises(ValueError):
+        transit((0, 0), (0, 1200), **limits)
+    with pytest.raises(ValueError):
+        transit((0, 0), (0, 0), **limits)
+
+
+@pytest.mark.parametrize("limits", _BAD_LIMITS)
+def test_manual_axis_moves_reject_invalid_limits(limits):
+    with pytest.raises(ValueError):
+        manual_axis_moves(1200, "forward", "back", exact=True, **limits)
+    with pytest.raises(ValueError):
+        manual_axis_moves(0, "forward", "back", exact=False, **limits)

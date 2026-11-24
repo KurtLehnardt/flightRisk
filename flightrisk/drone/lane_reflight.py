@@ -60,21 +60,32 @@ def _lane(direction: str, distance_cm: int) -> dict:
     return {"direction": direction, "distance_cm": int(distance_cm)}
 
 
+def _check_move_range(min_move_cm: int, max_move_cm: int) -> None:
+    """Raise ``ValueError`` unless the limits are whole centimetres with ``0 < min <= max``."""
+    for name, value in (("min_move_cm", min_move_cm), ("max_move_cm", max_move_cm)):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name} must be a whole number of centimetres, got {value!r}")
+    if not 0 < min_move_cm <= max_move_cm:
+        raise ValueError(f"need 0 < min_move_cm <= max_move_cm, got {min_move_cm} and {max_move_cm}")
+
+
 def _axis_moves(
     delta_cm: int,
     positive: str,
     negative: str,
     *,
-    min_move_cm: float = MIN_MOVE_CM,
-    max_move_cm: float = MAX_MOVE_CM,
+    min_move_cm: int = MIN_MOVE_CM,
+    max_move_cm: int = MAX_MOVE_CM,
 ) -> list[dict]:
     """Moves within the unit's move range whose net displacement is ``delta_cm``.
 
     *min_move_cm* and *max_move_cm* are the unit's shortest and longest move;
     they default to 20 and 500 cm. A displacement shorter than the minimum is
     flown as an overshoot followed by a minimum-length return, so the net
-    result stays exact.
+    result stays exact. Both limits are whole centimetres with
+    ``0 < min_move_cm <= max_move_cm``; anything else raises ``ValueError``.
     """
+    _check_move_range(min_move_cm, max_move_cm)
     if delta_cm == 0:
         return []
     direction, opposite = (positive, negative) if delta_cm > 0 else (negative, positive)
@@ -90,8 +101,8 @@ def transit(
     start: tuple[int, int],
     end: tuple[int, int],
     *,
-    min_move_cm: float = MIN_MOVE_CM,
-    max_move_cm: float = MAX_MOVE_CM,
+    min_move_cm: int = MIN_MOVE_CM,
+    max_move_cm: int = MAX_MOVE_CM,
 ) -> list[dict]:
     """Moves from ``start`` to ``end``: forward or back first, then sideways.
 

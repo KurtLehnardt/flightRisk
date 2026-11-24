@@ -149,16 +149,22 @@ def _axis_moves(
     negative: str,
     *,
     exact: bool,
-    min_move_cm: float = MIN_MOVE_CM,
-    max_move_cm: float = MAX_MOVE_CM,
+    min_move_cm: int = MIN_MOVE_CM,
+    max_move_cm: int = MAX_MOVE_CM,
 ) -> list[tuple[str, int]]:
     """Moves within the unit's move range along one axis whose net displacement is *component_cm*.
 
     *min_move_cm* and *max_move_cm* are the unit's shortest and longest move
     (20 and 500 cm by default). A component shorter than the minimum is flown
     as an overshoot and a minimum-length return when *exact*, and skipped
-    otherwise (at most the minimum short).
+    otherwise (at most the minimum short). Both limits are whole centimetres with
+    ``0 < min_move_cm <= max_move_cm``; anything else raises ``ValueError``.
     """
+    for name, value in (("min_move_cm", min_move_cm), ("max_move_cm", max_move_cm)):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name} must be a whole number of centimetres, got {value!r}")
+    if not 0 < min_move_cm <= max_move_cm:
+        raise ValueError(f"need 0 < min_move_cm <= max_move_cm, got {min_move_cm} and {max_move_cm}")
     distance = round(abs(component_cm))
     if distance == 0:
         return []
@@ -626,7 +632,7 @@ class ManualControlMixin:
         forward axis and one along its right axis (each split into moves
         of the unit's move range), in whichever order keeps every point inside the geofence.
         Exact paths (short components flown as an overshoot and a return) are
-        tried first, then paths that skip components under 20 cm.
+        tried first, then paths that skip components under the minimum move.
         """
         pose = self.envelope.pose_snapshot()
         steps: list[tuple[str, int]] = []
