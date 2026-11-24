@@ -29,7 +29,8 @@ plus the ``--confirm-less-safe`` confirmations.
 
 ``resolve_edge`` resolves them at start, before the edge contacts its drone
 (EDGE-1): it calls ``resolve_unit`` (``simulated`` only for the fake adapter,
-CAP-6), runs the static feature gates (``resolve_features``, FEA-7 static
+CAP-6, and today's ranges from ``params/today.py``, so an environment or
+flag value of a name today's code reads keeps today's range), runs the static feature gates (``resolve_features``, FEA-7 static
 part, FEA-10) and builds the start report (``build_report``). Any refusal
 raises ``EdgeStartRefused``, whose text is the operator's exit message. The
 resolved values are kept in ``EdgeResolution``; nothing reads them yet, so a
@@ -45,6 +46,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 from flightrisk.hardware.catalogue import BUILTIN_MODELS, DroneModel
+from flightrisk.params.today import TODAY_ACCEPTS
 
 MODEL_ENV_VAR = "FLIGHTRISK_MODEL"
 AIRFRAME_ENV_VAR = "FLIGHTRISK_AIRFRAME"
@@ -487,11 +489,6 @@ def _ordered(layers: Mapping[Any, Any]) -> list:
 #: The drone kind whose adapter is simulated (CAP-6, fake part). A real Tello and every MAVLink
 #: unit count as production until B1 verifies a SITL board identity.
 SIMULATED_DRONES = frozenset({"fake"})
-#: Today's ranges for the environment and flag layers at the edge. Every name today's code reads is
-#: open, because today's own readers still run at start and keep refusing exactly what they refuse
-#: today (resolver decision 1). A name today's code does not read is checked against its target bound.
-#: Runtime code cannot read the golden file under ``tests/``, which holds the recorded ranges.
-EDGE_TODAY_ACCEPTS: Mapping[str, Mapping[str, Any]] = MappingProxyType({})
 _REFUSING = "Refusing to start."
 _SENSING_MODE = "sensing.mode"
 _SENSING_REQUIRED = "required"
@@ -527,11 +524,11 @@ def check_launcher_unit(layers: EdgeLayers) -> None:
     launcher = layers.launcher
     if launcher is None or launcher.unit_id is None or launcher.unit_id == layers.unit_id:
         return
-    raise EdgeStartRefused(
-        f"{LAUNCHER_PARAMS_ENV_VAR} is for unit {launcher.unit_id}, but this edge is --drone-id "
-        f"{layers.unit_id}. Start the edge from the launcher again for {layers.unit_id}, or unset "
-        f"{LAUNCHER_PARAMS_ENV_VAR}. {_REFUSING}"
-    )
+    from flightrisk.params.messages import render_launcher_for_other_unit
+
+    raise EdgeStartRefused(_refusing(
+        render_launcher_for_other_unit(LAUNCHER_PARAMS_ENV_VAR, launcher.unit_id, layers.unit_id)
+    ))
 
 
 def requested_features(layers: EdgeLayers) -> tuple[dict[str, bool], dict[str, str]]:
@@ -566,7 +563,7 @@ def static_feature_gates(layers: EdgeLayers, values: Mapping[str, Any], *, sourc
         FeatureRefused,
         resolve_features,
     )
-    from flightrisk.params.messages import render_unavailable_capability
+    from flightrisk.params.messages import render_unavailable_capability, render_unconfirmed_switch_off
 
     model = layers.choice.model
     requested, sources = requested_features(layers)
@@ -575,8 +572,7 @@ def static_feature_gates(layers: EdgeLayers, values: Mapping[str, Any], *, sourc
     except FeatureRefused as exc:
         if exc.reason == CONFIRM_OFF_REASON.format(feature=exc.feature):
             raise EdgeStartRefused(_refusing(
-                f"{layers.unit_id}: {exc.reason}, which a feature switch from {sources.get(exc.feature)} "
-                "cannot give."
+                render_unconfirmed_switch_off(layers.unit_id, exc.reason, sources.get(exc.feature))
             )) from None
         raise EdgeStartRefused(_refusing(render_unavailable_capability(
             layers.unit_id, _capability(exc.feature), model.name, f"does not have it here ({exc.reason})"
@@ -610,7 +606,7 @@ def resolve_edge(
     argv: Iterable[str] = (),
     parser: Any = None,
     load_inventory: Optional[Callable[[], Any]] = None,
-    today_accepts: Optional[Mapping[str, Mapping[str, Any]]] = EDGE_TODAY_ACCEPTS,
+    today_accepts: Optional[Mapping[str, Mapping[str, Any]]] = TODAY_ACCEPTS,
 ) -> EdgeResolution:
     """Resolve the unit ``drone_id`` flying ``choice`` on edge drone kind ``drone``, before any contact.
 

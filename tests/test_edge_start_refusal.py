@@ -258,6 +258,23 @@ def test_a_cross_value_constraint_today_accepts_is_refused(edge_env, drone_calls
     _refused(["--source", "fake", "--drone-id", "drone-1"], drone_calls)
 
 
+def test_an_out_of_range_value_today_reads_is_refused_before_the_drone(edge_env, drone_calls):
+    # R4: a name today's code reads keeps today's range (150 to 1000 cm on the Tello) at the environment
+    # layer, so the resolver refuses it before the drone is built, as today's reader also does.
+    from tests.test_param_parity import PROBES, REFUSED, T, _today
+
+    probe = next(p for p in PROBES if p.name == "FLIGHTRISK_CEILING_CM" and p.model == T and not p.flag)
+    assert _today(lambda: probe.read("10")) == REFUSED
+    edge_env.setenv("FLIGHTRISK_CEILING_CM", "10")
+    args = _args(["--source", "tello", "--drone-id", "drone-1"])
+    with pytest.raises(SystemExit, match="Refusing to start") as refused:
+        edge_device._resolve_edge_start(args, _Log())
+    assert "FLIGHTRISK_CEILING_CM" in str(refused.value.code) and "150 to 1000 cm" in str(refused.value.code)
+    # The whole start is refused too, before the drone is built; today's own reader still runs as well.
+    assert _start(["--source", "tello", "--drone-id", "drone-1"]) is not None
+    assert drone_calls == []
+
+
 def test_a_stored_safety_feature_switched_off_is_refused(edge_env, tmp_path, drone_calls):
     _inventory(tmp_path, edge_env, [{"unit_id": "drone-1", "model": "tello",
                                      "features": {FORWARD_OBSTACLE_SENSING: False}}])
