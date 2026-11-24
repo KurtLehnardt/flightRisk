@@ -36,13 +36,20 @@ ARDUPILOT_PARAMS = {
     "BATT_FS_LOW_ACT": 2, "BATT_FS_CRT_ACT": 1, "BATT_LOW_VOLT": 10.5, "BATT_LOW_MAH": 0, "BATT_ARM_VOLT": 11.4,
     "FS_THR_ENABLE": 1, "RTL_ALT": 1500, "SYSID_THISMAV": 1,
 }
+#: The same settings as an ArduCopter 4.7 vehicle reports them: RTL_ALT (cm) became RTL_ALT_M (m),
+#: SYSID_THISMAV became MAV_SYSID, and FENCE_ALT_MAX_TP (1, above home) is new. Pass it as
+#: ``SimVehicle("ardupilot", params=ARDUPILOT_47_PARAMS)``.
+ARDUPILOT_47_PARAMS = {
+    **{k: v for k, v in ARDUPILOT_PARAMS.items() if k not in ("RTL_ALT", "SYSID_THISMAV")},
+    "RTL_ALT_M": 15.0, "MAV_SYSID": 1, "FENCE_ALT_MAX_TP": 1,
+}
 PX4_PARAMS = {
     "GF_ACTION": 3, "GF_MAX_HOR_DIST": 100.0, "GF_MAX_VER_DIST": 40.0, "COM_LOW_BAT_ACT": 3, "NAV_RCL_ACT": 2,
     "NAV_DLL_ACT": 2, "RTL_RETURN_ALT": 15.0, "MAV_SYS_ID": 1,
 }
 #: Parameters stored as floats (get_param_int refuses them, as MAVSDK does).
 _FLOAT_PARAMS = {"BATT_LOW_VOLT", "BATT_ARM_VOLT", "FENCE_RADIUS", "FENCE_ALT_MAX", "GF_MAX_HOR_DIST",
-                 "GF_MAX_VER_DIST", "RTL_RETURN_ALT"}
+                 "GF_MAX_VER_DIST", "RTL_RETURN_ALT", "RTL_ALT_M"}
 
 
 class FlightMode(Enum):
@@ -239,8 +246,12 @@ class SimVehicle:
             if self.in_air:
                 self.landed = LandedState.LANDING
         elif mode is FlightMode.RETURN_TO_LAUNCH:
-            rtl = self.params.get("RTL_ALT", 1500) / 100.0 if self.autopilot == "ardupilot" else self.params.get(
-                "RTL_RETURN_ALT", 15.0)
+            if self.autopilot != "ardupilot":
+                rtl = self.params.get("RTL_RETURN_ALT", 15.0)
+            elif "RTL_ALT_M" in self.params:  # ArduCopter 4.7, metres
+                rtl = self.params["RTL_ALT_M"]
+            else:  # ArduCopter 4.6, centimetres
+                rtl = self.params.get("RTL_ALT", 1500) / 100.0
             climb_to = self.alt if rtl <= 0 else max(self.alt, rtl)
             self.goal = _Goal(self.north, self.east, climb_to)
             self._rtl_phase = "climb"

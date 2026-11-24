@@ -182,6 +182,7 @@ object GroundText {
         "slot_band" -> "outside the altitude slot"
         "stale_epoch" -> "stale command epoch"
         "stale_plan" -> "stale plan"
+        "straight_line_home" -> "The straight line home leaves this drone's area."
         "unsupported" -> "not supported by this edge"
         "no_reply" -> "no reply from the edge"
         else -> shorten(reason.raw, 60)

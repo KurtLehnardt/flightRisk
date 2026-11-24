@@ -282,8 +282,9 @@ The peer link's auth message (`{"type": "auth", "token": ..., "role": "peer",
 - **Nack reasons.** v1 keeps `geofence`, `altitude`, `battery`,
   `other_drone` and `invalid`. v2 adds `stale_epoch`, `not_authority`,
   `no_valid_plan`, `busy`, `landing`, `not_flying`, `plan_mismatch`,
-  `stale_plan` and `drone_unreachable` (the edge cannot talk to its drone,
-  so it refuses to take off; see "Drone link preflight").
+  `stale_plan`, `drone_unreachable` (the edge cannot talk to its drone,
+  so it refuses to take off; see "Drone link preflight") and
+  `straight_line_home` (see "Return commands").
 - **Stale leaders.** A `stale_epoch` or `not_authority` nack should carry
   `epoch_seen`, so that a stale leader learns the epoch it lost to and steps
   down.
@@ -496,7 +497,7 @@ The ground announces each change of a re-flight with a `fleet_event` whose `even
   |---|---|
   | Encoded fleet message (`decode`/`encode`) | 64 KiB (a ground-to-edge landing over it goes through the 1 MiB fail-safe fallback) |
   | Encoded legacy message (`detections` from an edge, `set_target` or `stream_video` from a ground) | 1 MiB (`LEGACY_MAX_BYTES`, the WebSocket frame limit; a larger caller `max_bytes` raises it) |
-  | Top-level fields | 48 (`MAX_FIELDS`; it was 32 before the MAVLink edge's GPS, drone link, obstacle and profile fields together passed that, so a ground older than this limit drops such an edge's telemetry). The edge's own worst-case telemetry is 38 fields, and `tests/test_telemetry_field_cap.py` requires at most `MAX_FIELDS - 5`. The detection profile status travels as one `detection_profile` object for that reason; group a new family of related fields the same way |
+  | Top-level fields | 48 (`MAX_FIELDS`; it was 32 before the MAVLink edge's GPS, drone link, obstacle and profile fields together passed that, so a ground older than this limit drops such an edge's telemetry). The edge's own worst-case telemetry, with every optional group the producers can add, is 40 fields and 41 with the v2 `rth` group; `tests/test_telemetry_field_cap.py` and `tests/test_fleet_protocol_rth_telemetry.py` compute it from the producers and require at most `MAX_FIELDS - 5`. The detection profile status travels as one `detection_profile` object for that reason; group a new family of related fields the same way |
   | Nesting depth | 8 |
   | Values in one message | 10,000 |
   | Identifiers (`drone_id`, `node_id`, `leader_id`, `cmd_id`, `plan_id`, `to_node`) | 64 characters |
@@ -1173,3 +1174,201 @@ authority at the current epoch. Its `ack` (the values now in force) and `nack` (
 `not_authority`) have their own rules on every link version, and `shape_for_peer` copies the
 command and its replies unchanged, so the `cmd_id` survives a v1 link. Landing is unaffected.
 See `docs/ceiling-and-altitude.md`.
+
+## Return commands
+
+Phase A2 defines these shapes (design `docs/design/hardware-profiles/design.md`
+section 18, requirement RTH-11) in `flightrisk/fleet_protocol/returns.py`. No code
+sends them yet; the edge (A3) and the ground (A4) adopt them.
+
+**New ground-to-edge commands, protocol v2 only.** Each carries `drone_id` and `cmd_id`
+and is answered with an `ack` (`result: "ok"`) or a `nack` whose reason comes from
+`NACK_REASONS_V2` (`landing` while the drone lands). A v1 link refuses each command and
+each reply, and `shape_for_peer` refuses to shape one for a v1 peer. They are kept out of
+`GROUND_TO_EDGE_TYPES_V2`, `FENCED_COMMAND_TYPES` and `COMMAND_TYPES`
+(`RETURN_COMMAND_TYPES` holds them), so the routing, retry and authority rules of today's
+commands are unchanged.
+
+| Type | Fields | Who may send it |
+| --- | --- | --- |
+| `return_home` | optional `wait` (boolean) and, with `wait: true`, `max_wait_s` (above 0, at most 3600) | without `wait`: any authenticated ground, like `land` (M-5), fence optional; with `wait` (an ordered wait, or `wait: false` as a release): the authority, fence required |
+| `set_no_entry` | `areas`: the full current list of no-entry areas, possibly empty | the authority, fence required (a standby that adds an area uses the epoch it has seen) |
+| `set_speed` | `speed_cm_s` (above 0, at most 2000) | the authority, fence required |
+| `escort_setpoint` | `x_cm`, `y_cm`, `alt_cm`, `bearing_deg` (0 to below 360), `valid_s` (above 0, at most 10) | the authority, fence required; field units only |
+
+**New optional `assign_lanes` keys, protocol v2 only.** An older edge never receives them
+(see the gate below); a v1 link refuses each of them.
+
+- `on_complete: "return_home"`: the drone returns after its last lane. `hover_timeout_s`
+  is then the re-task window and must be at least 1 s (`MIN_RETURN_HOVER_TIMEOUT_S`, M-7)
+  and at most `MAX_HOVER_TIMEOUT_S`. A v1 link keeps `hover` and `land`
+  (`ON_COMPLETE_ACTIONS_V2` is the v2 set).
+- `corridor`: the way home from the zone, 2 to 256 point objects `{"x_cm", "y_cm"}`.
+- `landing`: `{"area_id", "place", "interval_s"}`, the landing area, the drone's place in
+  its order (0 to `MAX_ROSTER` - 1) and the order's interval (above 0, at most 300 s).
+- `no_entry`: the known no-entry areas, at most 32, each `{"id", "kind", "points"}` with an
+  optional `drone_id` naming the drone that owns the area (a lost or stranded drone, which
+  is exempt from its own area). `kind` is one of `person_cue`, `lost_drone`,
+  `stranded_drone` and `operator` (`NO_ENTRY_KINDS`); `points` is a polygon of 3 to 64
+  point objects.
+- `speed_cm_s`: the search speed, as in `set_speed`.
+
+Points are objects, not number pairs, so a 200-point corridor never meets the 16-per-list
+and 64-per-message number caps of the privacy screen. Point, area and landing objects are
+strict: an unknown field is refused. Every new key passes the privacy screen.
+
+**The gate (spec erratum R1).** Design section 18 says a ground sends these only to an edge
+whose `describe_unit` reply advertises them, but the reply shape of
+`hardware-profiles-detail.md` section 12.2 has no key for that. The reply therefore gains
+`accepts`, a sorted list of names from a closed set: `return_home`, `set_no_entry`,
+`set_speed`, `escort_setpoint` (field units only), `assign_lanes.on_complete.return_home`,
+`assign_lanes.corridor`, `assign_lanes.landing`, `assign_lanes.no_entry` and
+`assign_lanes.speed_cm_s`. A ground ignores a name it does not know. An edge that does not
+list `return_home` is shown "cannot return (older edge)" and held, never landed.
+
+**The nack reason `straight_line_home`.** An edge refuses an assignment whose straight line
+home, from some point of its zone and corridor, leaves them while the drone's link-loss
+action cannot be `land` (MAV-19, B-3). An older ground rejects an unknown reason and drops
+the nack as malformed, so an edge sends `straight_line_home` only to a ground that has sent
+it `describe_unit` (proof that the ground knows the reason), and otherwise sends `invalid`
+with the same `detail`.
+
+**Vocabularies for the edge's reports.** `AP_LINK_LOSS_ACTIONS` (`return`, `land`,
+`unknown`; `unknown` counts as `return`), `RTH_STATES` (design section 10.3) and
+`RTH_REASONS` (the closed list of design section 10.5). `unit_rev` (edge `hello`) and `rth`
+(telemetry) are in `V2_FIELDS`, so `shape_for_peer` strips them on a v1 link.
+
+**Roster cap.** `MAX_ROSTER` stays 8: fleets and every SITL scenario have at most eight
+drones, and raising the cap is out of scope (N-9). No return command carries a roster.
+
+## describe_unit and unit_rev
+
+Phase A2 defines these shapes (`flightrisk/fleet_protocol/unit.py`,
+`hardware-profiles-detail.md` sections 12.2 and 12.3, requirements PROTO-1 to PROTO-3,
+PROTO-5 and PROTO-7). No code sends them yet: the edge adopts them in A3 and the ground in A4.
+
+**The query.** `{"type": "describe_unit", "drone_id": "drone-1", "cmd_id": "<id>"}`, protocol
+v2 only. It is a read-only query (`QUERY_TYPES`), not a configuration command, so it is not
+in `CONFIG_COMMAND_TYPES` or `COMMAND_TYPES` and needs no fence: any ground may ask. The edge
+checks it with `validate_describe_unit` before its authority and fence checks;
+`validate_ground_to_edge` keeps refusing it until the edge adopts it. A query never feeds the
+link watchdog (A3).
+
+**The reply** is an `ack` with `for: "describe_unit"`, `result: "ok"`, `unit_rev` and:
+
+- `unit`: `model`, `model_name`, `adapter`, `scale`, `positioning`, `link` and `cameras`
+  (`{"<id>": {"mount", "mount_kind", "orient", "pitch_min_deg", "pitch_max_deg", "role",
+  "w_px", "h_px", "hfov_deg", "sensor", "radiometric"}}`). `link` is only the link kind
+  (`wifi_ap`, `wifi_station` or `radio`), never an SSID, host or address. `unit` and each
+  camera are strict: an unknown key is refused.
+- `gates`: `{"<feature id>": {"on", "ok", "why", "src"}}`. `why` is the reason a feature is
+  unavailable, 1 to 200 printable characters, or null when there is none (an available feature).
+- `values`: `{"<param id>": {"v", "src", "d", "lo", "hi", "edit"}}`, drone-scope rows only.
+  `edit` is `ui`, `file_env` or `read_only`, so a phone-facing view can show read-only rows
+  as read-only and never as settings. A test-adapter fact (`edit: fact`, for example the
+  Tello tuning thresholds) is never reported, and a reply with `edit: "fact"` is refused. A
+  list value is sent as comma-separated text, so the reply holds no list of numbers.
+- `ap_link_loss` (optional): the autopilot's link-loss action, from `AP_LINK_LOSS_ACTIONS`
+  (MAV-19).
+- `accepts` (optional): the gate names of the "Return commands" section above.
+
+A refused query gets a `nack` with reason `busy` (queries faster than one per 2 s per
+connection) or `invalid`. The query and both replies are refused on a v1 link, and
+`shape_for_peer` refuses to shape them for a v1 peer. A reply is at most 16 KB
+(`MAX_DESCRIBE_UNIT_BYTES`); the worst case (a custom model with three cameras and every
+registry row) stays under it.
+
+**Spec correction (R1).** `accepts` is not in the reply shape of detail section 12.2. It is
+added because design section 18 sends the new commands only to an edge whose reply
+advertises them. `escort_setpoint` is valid in `accepts` only when `unit.scale` is `field`.
+
+**`unit_rev`.** The first 12 lowercase hex digits of SHA-256 over the canonical JSON of the
+unit's start-time description (`unit`, `gates` and `values`), built by
+`flightrisk/params/report.py`. Canonical JSON sorts keys, uses compact separators, rounds
+floats to 9 significant digits and writes a whole float as an integer, so key order and float
+formatting never change it. Runtime changes such as a later `set_ceiling` are not inputs, so
+`unit_rev` changes exactly when the start-time description changes. Test-adapter facts are not
+hashed either, so no fact value can be recovered from it.
+
+`unit_rev` is an optional key of the protocol v2 edge `hello` (`make_edge_hello(...,
+unit_rev=...)`, `EdgeHello.unit_rev`). Without it the `hello` is byte-identical to before. An
+older ground ignores the key, and `shape_for_peer` strips it for a v1 peer.
+
+**Gates for the ground and the edge.**
+
+- `may_describe(edge_hello)`: a ground sends `describe_unit` only to an edge whose protocol v2
+  `hello` carries a valid `unit_rev` (PROTO-3), so an older edge is never asked.
+- `may_send(peer_description, name_or_message)`: a return command, or an `assign_lanes` with
+  `corridor`, `landing`, `no_entry`, `speed_cm_s` or `on_complete: "return_home"`, goes only to
+  an edge whose validated reply lists every name the message needs (`required_accepts`).
+  Today's messages are always allowed.
+
+  **Correction (A2 review).** An edge from before A2 accepts an `assign_lanes` with `corridor`,
+  `landing`, `no_entry` or `speed_cm_s` on a v2 link and silently drops those keys, so a drone
+  would fly through a no-entry area with no refusal. The gate is therefore enforced on the send
+  path, not left to each sender: `shape_for_peer(msg, peer_proto, peer_description=...)` raises
+  `ProtocolError` for an `assign_lanes` that carries any of those keys or `on_complete:
+  "return_home"` unless `peer_description` (the edge's validated `describe_unit` ack) lists every
+  name the message needs, and always for a v1 peer. No sender sets these keys in A2; A3 and A4
+  pass the edge's reply when they start. `scripts/check_wire_compat.py` reports these messages as
+  "accepted by base but stripped of meaning (now refused by the send path)" and fails if the send
+  path stops refusing one.
+- `nack_reason_for_peer(reason, peer_query)`: an edge sends `straight_line_home` only to a
+  ground that has sent it `describe_unit`, and `invalid` otherwise. A query carries no sender
+  identity, so `peer_query` must be the last query received on the same connection as the
+  nack's destination, never the last one from any ground (a failover to an older standby would
+  otherwise send it a reason it drops as malformed).
+
+**Logging (PROTO-7).** `flightrisk/obs_comm.py` counts `describe_unit` queries and their
+replies on every message and logs them as one aggregated event per side, direction, type and
+drone, like telemetry. Replies are aggregated as `ack:describe_unit` and `nack:describe_unit`.
+
+## rth telemetry
+
+Phase A2 defines the `rth` telemetry object (`flightrisk/fleet_protocol/returns.py`,
+`validate_rth_object` and `make_rth_object`; design section 18; requirement MAV-19). No code
+sends it yet: C1 is the first sender. It is the edge's return state, reported in its
+`telemetry`:
+
+```json
+{"type": "telemetry", "drone_id": "drone-1", "...": "...",
+ "rth": {"state": "rth_returning", "reason": "battery_cannot_reach_home",
+         "home": {"x_cm": 120, "y_cm": -40}, "distance_cm": 3400, "uncertainty_cm": 250,
+         "reserve_pct": 12, "threshold_pct": 38.5, "countdown_s": 0, "cannot_recall": false,
+         "landing_area_id": "pad-1", "landing_place": 0, "ap_link_loss": "land"}}
+```
+
+- `state` (required): from `RTH_STATES` (design section 10.3).
+- `reason`: why the drone lands in place instead of returning, from `RTH_REASONS` (design
+  section 10.5), or null.
+- `home`: a point object `{"x_cm", "y_cm"}` within `MAX_LANE_DISTANCE_CM` of the take-off
+  point, or null when the edge knows no home.
+- `distance_cm` (to home), `uncertainty_cm` (of the position) and `countdown_s` (of the
+  running countdown): numbers of 0 or more, or null.
+- `reserve_pct` (the battery reserve) and `threshold_pct` (the return threshold): numbers from
+  0 to 100, or null.
+- `cannot_recall`: true while the ground cannot recall the drone (the drone link is lost).
+- `landing_area_id` and `landing_place`: the landing area and the drone's place in its landing
+  order (0 to `MAX_ROSTER - 1`), each or null.
+- `ap_link_loss`: the autopilot's link-loss action, from `AP_LINK_LOSS_ACTIONS` (`return`,
+  `land` or `unknown`; `unknown` counts as `return`), as in the `describe_unit` reply (MAV-19,
+  B-3).
+
+Only `state` is required. Every other key is checked when present, and a key this version
+does not define is ignored, as an unknown top-level telemetry key is. Every number is a named
+key, so the object holds no list of numbers and never meets the privacy screen's number caps.
+Its depth is 3 (`telemetry`, `rth`, `home`), within `MAX_DEPTH`.
+
+**One field of the cap.** `rth` is one grouped top-level field, like `detection_profile`
+(#211), so it adds one field to the worst-case telemetry. With every optional group the
+producers can add (the bound of `tests/test_telemetry_field_cap.py`, which no real edge
+reaches) the worst case is 40 fields today and 41 with `rth`, within the headroom guard of
+`MAX_FIELDS - 5` (43). `tests/test_fleet_protocol_rth_telemetry.py` computes that count from
+the producers.
+
+**Builder.** `make_telemetry(..., v2=..., rth=make_rth_object(...))` adds the object; `rth`
+without `v2` is refused. Without `rth` the message is byte-identical to before.
+
+**Older peers.** `rth` is in `V2_FIELDS`, so `shape_for_peer` strips it, and the
+`ap_link_loss` inside it, for a v1 peer. An older v2 ground ignores it, because its telemetry
+validator checks named keys only.

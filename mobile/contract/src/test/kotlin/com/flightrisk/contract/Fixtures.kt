@@ -19,7 +19,7 @@ import java.io.File
 object Fixtures {
     /** Every fixture file docs/mobile-contract.md lists. */
     val EXPECTED_FILES: Set<String> = setOf(
-        "alert_upgrade.json", "ceiling_settings.json", "client_emits.json", "command_ack.json", "demo_scenario.json",
+        "alert_upgrade.json", "catalogue.json", "ceiling_settings.json", "client_emits.json", "command_ack.json", "demo_scenario.json",
         "detection_profiles.json",
         "edge_edge_to_ground.json", "edge_ground_to_edge.json", "error.json", "fleet_detection.json",
         "fleet_event.json", "fleet_plan.json", "fleet_status.json", "frame.json", "land_all_ack.json",

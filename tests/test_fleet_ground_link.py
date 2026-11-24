@@ -428,3 +428,16 @@ def test_edge_send_validates_with_the_agreed_version():
         assert await edge.send(nack, proto=2) is False
 
     run(main())
+
+
+def test_a_ground_without_identity_refuses_a_message_that_needs_an_accepted_name(caplog):
+    transport = GroundTransport(host="127.0.0.1", port=0, token=TOKEN, on_control=lambda _: None)
+    assert transport._links is None
+    lanes = [{"direction": "forward", "distance_cm": 200}]
+    zone = {"x_cm": 0, "y_cm": 0, "w_cm": 400, "h_cm": 400}
+    plain = fp.make_assign_lanes("drone-1", 100, lanes, zone)
+    assert transport._payload_for(None, plain) == json.dumps(plain)
+    gated = dict(plain, speed_cm_s=150)
+    with caplog.at_level("WARNING", logger="flightrisk.transport"):
+        assert transport._payload_for(None, gated) is None
+    assert "assign_lanes" in caplog.text

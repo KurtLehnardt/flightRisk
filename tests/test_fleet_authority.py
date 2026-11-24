@@ -680,3 +680,11 @@ def test_model_based_random_walk(legacy, inflight):
     minimum = {ACCEPT: 50, REFUSE: 50, LAND: 50, HANDLED: 50, IGNORE: 50, CLOSE: 20, "adopted": 50, "dropped": 3}
     for name, least in minimum.items():
         assert totals[name] >= least, f"{name}: {totals}"
+
+
+def test_a_straight_line_home_nack_to_an_undescribed_peer_goes_out_as_invalid():
+    auth, _ = make()
+    connect(auth, "a", "mac", epoch=1)
+    conn = auth._conns["a"]
+    replies = auth._nack(conn, {"type": fp.TAKEOFF}, fp.TAKEOFF, "c-1", "straight_line_home")
+    assert len(replies) == 1 and replies[0]["reason"] == "invalid"

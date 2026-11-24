@@ -65,6 +65,13 @@ NACK_REASONS_V2 = NACK_REASONS | frozenset({
     # for 12 s)``. A ground without this reason logs the nack as malformed
     # and ignores it.
     "drone_unreachable",
+    # The straight line home from some point of an assignment's zone and
+    # corridor leaves them while the drone's link-loss action cannot be
+    # ``land`` (MAV-19, B-3). An older ground rejects an unknown reason and
+    # drops the nack, so an edge sends this one only to a ground that has
+    # sent it ``describe_unit`` and otherwise sends ``invalid`` with the same
+    # ``detail`` (``nack_reason_for_peer``).
+    "straight_line_home",
 })
 # Optional numeric fields of a ``geofence`` nack for ``assign_lanes`` (v1 and
 # v2), all in cm and relative to the drone's takeoff point of its current
@@ -88,6 +95,28 @@ EDGE_TO_GROUND_TYPES = frozenset({PONG, TELEMETRY, ACK, NACK})
 # a v1 edge would ignore them silently, so a ``hold`` would not hold.
 V2_ONLY_COMMAND_TYPES = frozenset({HOLD, RESUME, NUDGE, HANDOVER})
 GROUND_TO_EDGE_TYPES_V2 = GROUND_TO_EDGE_TYPES | V2_ONLY_COMMAND_TYPES | {HELLO}
+
+# Ground -> edge return commands, protocol v2 only (design section 18,
+# ``flightrisk/fleet_protocol/returns.py``). Each carries ``drone_id`` and
+# ``cmd_id`` and is answered with an ``ack`` or ``nack``. ``set_no_entry``,
+# ``set_speed``, ``escort_setpoint`` and a ``return_home`` with ``wait`` are
+# fenced and obeyed only from the authority; a ``return_home`` without
+# ``wait`` is obeyed from any authenticated ground, like ``land`` (M-5). A
+# ground sends them only to an edge whose ``describe_unit`` reply lists them
+# in ``accepts``; an older edge refuses the unknown type. They are kept out of
+# ``GROUND_TO_EDGE_TYPES_V2``, ``FENCED_COMMAND_TYPES`` and ``COMMAND_TYPES``
+# so the routing, retry and authority rules of today's commands are
+# unchanged until the edge and ground adopt them.
+RETURN_HOME = "return_home"
+SET_NO_ENTRY = "set_no_entry"
+SET_SPEED = "set_speed"
+ESCORT_SETPOINT = "escort_setpoint"
+RETURN_COMMAND_TYPES = frozenset({RETURN_HOME, SET_NO_ENTRY, SET_SPEED, ESCORT_SETPOINT})
+# Read-only queries, protocol v2 only. ``describe_unit`` is answered with an
+# ``ack`` carrying the unit's description; it never feeds the link watchdog
+# and is not a configuration command.
+DESCRIBE_UNIT = "describe_unit"
+QUERY_TYPES = frozenset({DESCRIBE_UNIT})
 EDGE_TO_GROUND_TYPES_V2 = EDGE_TO_GROUND_TYPES | {HELLO}
 PEER_TYPES = frozenset({NODE_STATE, HANDOVER_OFFER, HANDOVER_ACCEPT, HANDOVER_REJECT, PEER_HEARTBEAT})
 
@@ -157,12 +186,60 @@ V2_FIELDS = frozenset({
     "state",
     "plan_valid",
     "detail",
+    # The edge ``hello``'s hash of its start-time resolution and the
+    # telemetry return object, both optional and ignored by older grounds.
+    "unit_rev",
+    "rth",
 })
 
 GROUND_ROLES = frozenset({"leader", "standby"})
 EDGE_ROLE = "edge"
 HOLD_REASONS = frozenset({"alert", "operator", "handover"})
 ON_COMPLETE_ACTIONS = frozenset({"hover", "land"})
+# Protocol v2 adds ``return_home`` after the last lane, with
+# ``hover_timeout_s`` as the re-task window (at least
+# ``MIN_RETURN_HOVER_TIMEOUT_S``, in ``returns.py``). A v1 link keeps
+# ``hover`` and ``land``.
+ON_COMPLETE_ACTIONS_V2 = ON_COMPLETE_ACTIONS | frozenset({"return_home"})
+# The autopilot's link-loss action, reported in ``describe_unit`` and in the
+# ``rth`` telemetry object (B-3). ``unknown`` counts as ``return``.
+AP_LINK_LOSS_ACTIONS = frozenset({"return", "land", "unknown"})
+# The return states of the ``rth`` telemetry object (design section 10.3).
+RTH_STATES = frozenset({
+    "flying",
+    "holding",
+    "rth_returning",
+    "rth_waiting",
+    "rth_above_home",
+    "rth_landing",
+    "landed",
+    "landed_in_place",
+    "external_control",
+    "cannot_be_recalled",
+})
+# Why a drone lands in place instead of returning: the closed list of design
+# section 10.5.
+RTH_REASONS = frozenset({
+    "critical_battery",
+    "battery_cannot_reach_home",
+    "fault_imu",
+    "fault_motor",
+    "fault_positioning",
+    "fault_unclassified",
+    "way_home_blocked_obstacle",
+    "way_home_blocked_person",
+    "no_known_home",
+    "uncertainty_above_bound",
+    "no_cleared_route",
+    "cannot_be_commanded",
+    "operator_land",
+    "land_all",
+    "on_find_land_all",
+    "ceiling_breach",
+    "no_return_order",
+})
+# Kinds of no-entry area (design section 11.7).
+NO_ENTRY_KINDS = frozenset({"person_cue", "lost_drone", "stranded_drone", "operator"})
 EDGE_STATES = frozenset({"idle", "taking_off", "hovering", "flying_lanes", "holding", "landing"})
 MISSION_STATES = frozenset({"idle", "planned", "running", "holding", "complete"})
 LATCH_PHASES = frozenset({"searching", "awaiting_response", "resolved"})
@@ -298,19 +375,41 @@ MAX_ID_LEN = 64
 MAX_TEXT_LEN = 200
 MAX_LANES = 1024
 MAX_LANE_DISTANCE_CM = 100_000
+# Return-command wire sanity limits (v2). Each bounds what a malformed or hostile peer can send;
+# none is a flight parameter.
+# Shortest re-task window of an assign_lanes with on_complete return_home: wire sanity limit, not a flight parameter.
+MIN_RETURN_HOVER_TIMEOUT_S = 1.0
+# Most points in a return corridor: wire sanity limit, not a flight parameter.
+MAX_CORRIDOR_POINTS = 256
+# Most points in one area polygon: wire sanity limit, not a flight parameter.
+MAX_AREA_POINTS = 64
+# Most no-entry areas in one command: wire sanity limit, not a flight parameter.
+MAX_NO_ENTRY_AREAS = 32
+# Fastest speed a command may carry, in cm/s: wire sanity limit, not a flight parameter.
+MAX_SPEED_CM_S = 2_000
+# Longest ordered wait, in seconds: wire sanity limit, not a flight parameter.
+MAX_RETURN_WAIT_S = 3_600.0
+# Longest landing spacing, in seconds: wire sanity limit, not a flight parameter.
+MAX_LANDING_INTERVAL_S = 300.0
+# Longest validity of one escort setpoint, in seconds: wire sanity limit, not a flight parameter.
+MAX_SETPOINT_VALID_S = 10.0
 # Top-level fields of one message. An edge's telemetry is the executor's own
-# fields (up to 35 with GPS, the drone link and the obstacle fields, the
-# re-look and sidestep group ``obstacle_avoid`` included; a Tello has no GPS
-# but adds its temperature as one grouped field, ``temp_preflight``) plus the
-# ones the edge adds on the way out (``detector_ok``, ``camera_ok`` and the
-# grouped ``detection_profile``), so up to 38 on a real edge and 39 with every
-# optional field present. The limit leaves headroom above that; a new optional
-# field belongs
-# in a group. ``tests/test_telemetry_field_cap.py`` guards it. Raising it only
-# loosens what a ground accepts, so an older edge's messages are unchanged.
+# fields (GPS, the drone link and the obstacle fields, the re-look and
+# sidestep group ``obstacle_avoid`` included; a Tello has no GPS but adds its
+# temperature as one grouped field, ``temp_preflight``) plus the ones the edge
+# adds on the way out (``detector_ok``, ``camera_ok`` and the grouped
+# ``detection_profile``). With every optional group the producers can add the
+# worst case is 40 fields, and 41 with the v2 ``rth`` group. The limit leaves
+# headroom above that; a new optional field belongs in a group.
+# ``tests/test_telemetry_field_cap.py`` and
+# ``tests/test_fleet_protocol_rth_telemetry.py`` compute the count from the
+# producers and guard it. Raising it only loosens what a ground accepts, so an
+# older edge's messages are unchanged.
 MAX_FIELDS = 48
 MAX_DEPTH = 8
 MAX_NODES = 10_000
+# Fleets have at most eight drones, and every SITL scenario uses at most
+# eight vehicles; raising the cap is out of scope (N-9).
 MAX_ROSTER = 8
 MAX_DETECTIONS = 128
 # Compact JSON size of one ``node_state`` (and so of a ``handover_offer``
@@ -394,4 +493,6 @@ _ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}")
 
 # Every fleet type this module checks; anything else is passed through by
 # ``validate_message`` and rejected by the strict directional validators.
-_KNOWN_TYPES = GROUND_TO_EDGE_TYPES_V2 | EDGE_TO_GROUND_TYPES_V2 | PEER_TYPES | CONFIG_COMMAND_TYPES
+_KNOWN_TYPES = (
+    GROUND_TO_EDGE_TYPES_V2 | EDGE_TO_GROUND_TYPES_V2 | PEER_TYPES | CONFIG_COMMAND_TYPES | RETURN_COMMAND_TYPES
+)

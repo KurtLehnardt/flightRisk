@@ -180,6 +180,7 @@ public enum GroundText {
         case .slotBand: return "outside the altitude slot"
         case .staleEpoch: return "stale command epoch"
         case .stalePlan: return "stale plan"
+        case .straightLineHome: return "The straight line home leaves this drone's area."
         case .unsupported: return "not supported by this edge"
         case .noReply: return "no reply from the edge"
         case .unknown(let raw): return raw

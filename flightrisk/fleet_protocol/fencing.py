@@ -15,10 +15,12 @@ from flightrisk.fleet_protocol.checks import (
     _short,
 )
 from flightrisk.fleet_protocol.constants import (
+    ASSIGN_LANES,
     _KNOWN_TYPES,
     _MAX_PROTO_FIELD,
     ACK,
     CONFIG_COMMAND_TYPES,
+    DESCRIBE_UNIT,
     EDGE_ROLE,
     FAILSAFE_TYPES,
     HELLO,
@@ -29,10 +31,19 @@ from flightrisk.fleet_protocol.constants import (
     NACK,
     PEER_TYPES,
     PROTOCOL_VERSION,
+    RETURN_HOME,
     V2_FIELDS,
     V2_ONLY_COMMAND_TYPES,
 )
 from flightrisk.fleet_protocol.manual import MANUAL_COMMAND_TYPES, is_manual_reply
+from flightrisk.fleet_protocol.unit import (
+    NEW_NACK_REASONS,
+    is_describe_unit_reply,
+    may_send,
+    required_accepts,
+    validate_describe_unit,
+    validate_describe_unit_reply,
+)
 from flightrisk.fleet_protocol.validate import (
     _checked,
     _is_ground_hello,
@@ -175,7 +186,11 @@ class GroundHello:
 
 @dataclass(frozen=True)
 class EdgeHello:
-    """An edge's ``hello``: its drone, the highest epoch it obeyed and its plan state."""
+    """An edge's ``hello``: its drone, the highest epoch it obeyed and its plan state.
+
+    ``unit_rev`` (protocol v2, optional) is the hash of the edge's start-time
+    resolution (``flightrisk.params.report``); it is left out when None.
+    """
 
     drone_id: str
     node_id: str
@@ -185,8 +200,10 @@ class EdgeHello:
     is_flying: bool
     battery: float | None
     proto: int = PROTOCOL_VERSION
+    unit_rev: str | None = None
 
     def to_message(self) -> dict[str, Any]:
+        extra = {} if self.unit_rev is None else {"unit_rev": self.unit_rev}
         return _checked({
             "type": HELLO,
             "role": EDGE_ROLE,
@@ -198,6 +215,7 @@ class EdgeHello:
             "lane_index": self.lane_index,
             "is_flying": self.is_flying,
             "battery": self.battery,
+            **extra,
         })
 
 
@@ -217,11 +235,23 @@ def parse_hello(msg: Any) -> GroundHello | EdgeHello:
         is_flying=msg["is_flying"],
         battery=msg["battery"],
         proto=msg["proto"],
+        unit_rev=msg.get("unit_rev"),
     )
 
 
-def shape_for_peer(msg: Mapping[str, Any], peer_proto: int) -> dict[str, Any]:
+def shape_for_peer(
+    msg: Mapping[str, Any], peer_proto: int, *, peer_description: Any = None
+) -> dict[str, Any]:
     """The form of *msg* to send to a peer speaking *peer_proto*.
+
+    An ``assign_lanes`` that carries ``corridor``, ``landing``, ``no_entry``,
+    ``speed_cm_s`` or ``on_complete: "return_home"`` raises
+    ``ProtocolError`` unless *peer_description* (the edge's validated
+    ``describe_unit`` ack) lists every name the message needs in
+    ``accepts`` (``may_send``), and always raises for a v1 peer. An older
+    edge on a v2 link accepts the four optional keys and silently drops them,
+    so the send path enforces the gate itself rather than trusting each
+    sender to call ``may_send`` first.
 
     For a v2 peer the message is checked under v2 rules and returned as a
     copy. For a v1 peer:
@@ -234,7 +264,10 @@ def shape_for_peer(msg: Mapping[str, Any], peer_proto: int) -> dict[str, Any]:
     * every other message loses the v2 fields (``V2_FIELDS``) and must then
       pass the v1 rules, so for example a nack with a v2-only reason raises.
 
-    A v1 edge ignores ``on_complete`` and hovers at the end of its lanes.
+    A v1 edge ignores ``on_complete`` and hovers at the end of its lanes,
+    so ``on_complete: "hover"`` or ``"land"`` is stripped, but an
+    ``on_complete: "return_home"`` raises: stripping it would change what the
+    drone does without any refusal.
     The legacy ``set_target``, ``stream_video`` and ``detections`` messages
     are copied unchanged; a type this protocol does not define raises.
     Configuration commands (``CONFIG_COMMAND_TYPES``) and their acks and
@@ -242,6 +275,9 @@ def shape_for_peer(msg: Mapping[str, Any], peer_proto: int) -> dict[str, Any]:
     version, so their ``cmd_id`` survives on a v1 link.
     ``set_ceiling`` and its acks and nacks are handled the same way, and so
     are the manual commands (``MANUAL_COMMAND_TYPES``) and their replies.
+    The ``describe_unit`` query and its replies are protocol v2 only and
+    raise for a v1 peer. An edge ``hello`` loses its ``unit_rev`` for a v1
+    peer.
     """
     mtype = _message_type(msg)
     if mtype in FAILSAFE_TYPES:
@@ -256,19 +292,43 @@ def shape_for_peer(msg: Mapping[str, Any], peer_proto: int) -> dict[str, Any]:
         mtype in (ACK, NACK) and _is_member(msg.get("for"), CONFIG_COMMAND_TYPES)
     ) or mtype in MANUAL_COMMAND_TYPES or is_manual_reply(msg):
         # Configuration commands and their replies are the same on every
-        # version, so the cmd_id survives a v1 link.
+        # version, so the cmd_id survives a v1 link. A nack reason newer than
+        # the v1 rules (straight_line_home) never goes to a v1 peer.
+        if peer_proto < 2 and mtype == NACK and _is_member(msg.get("reason"), NEW_NACK_REASONS):
+            raise ProtocolError(f"nack reason {msg['reason']!r} cannot be sent to a protocol v1 peer")
         validate_message(msg, proto=peer_proto)
+        return dict(msg)
+    if mtype == DESCRIBE_UNIT or is_describe_unit_reply(msg):
+        # A query and its replies exist only on a v2 link
+        # (flightrisk/fleet_protocol/unit.py); the validators refuse v1.
+        if mtype == DESCRIBE_UNIT:
+            validate_describe_unit(msg, proto=peer_proto)
+        else:
+            validate_describe_unit_reply(msg, proto=peer_proto)
         return dict(msg)
     if mtype not in _KNOWN_TYPES:
         raise ProtocolError(f"{_short(mtype)} is not a fleet protocol message")
+    if mtype == ASSIGN_LANES and required_accepts(msg) and (
+        peer_proto < 2 or not may_send(peer_description, msg)
+    ):
+        needed = sorted(required_accepts(msg))
+        raise ProtocolError(
+            f"'assign_lanes' needs the edge to accept {needed}; the peer has not proved it does"
+        )
     if peer_proto >= 2:
         validate_message(msg, proto=peer_proto)
         return dict(msg)
     if mtype == HELLO:
         validate_message(msg)
-        return dict(msg)
+        # The edge's unit_rev is a v2 key; a v1 peer never sees it.
+        return {key: value for key, value in msg.items() if key != "unit_rev"}
     if mtype in V2_ONLY_COMMAND_TYPES or mtype in PEER_TYPES:
         raise ProtocolError(f"{mtype!r} cannot be sent to a protocol v1 peer")
+    if msg.get("on_complete") == RETURN_HOME:
+        # A v1 edge has no return home. Stripping the order would leave the
+        # drone hovering at the end of its lanes with no refusal, so it is
+        # refused like the corridor, landing, no_entry and speed keys.
+        raise ProtocolError(f"{mtype!r} with on_complete 'return_home' cannot be sent to a protocol v1 peer")
     shaped = {key: value for key, value in msg.items() if key not in V2_FIELDS}
     validate_message(shaped, proto=1)
     return shaped

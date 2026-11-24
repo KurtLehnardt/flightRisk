@@ -10,6 +10,8 @@ licences screen. Show every section in full: the Apache License 2.0 and the
 MIT License both require their text and the copyright notices to accompany
 copies of the work.
 
+The Android app's licence screen lists its third-party libraries, with their licences, from the build.
+
 | Installed model | What it does | Upstream | Weights licence | Code licence |
 |---|---|---|---|---|
 | `yolox_s.onnx` (Android), `YOLOXs.mlpackage` (iOS) | Detects people (and the other COCO classes) in camera frames | YOLOX-S by Megvii Inc., release 0.1.1rc0 | Apache-2.0 | Apache-2.0 |

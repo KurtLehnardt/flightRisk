@@ -43,15 +43,24 @@ venv/bin/python scripts/export_mobile_contract_fixtures.py
 | `command_ack.json` | `command_ack` | `land` |
 | `stream_video_state.json` | `stream_video_state` | `off` |
 | `error.json` | `error` | `land_all_reached_no_drone`, `manual_needs_fleet_mode`, `profiles_need_edge_source`, `no_drones_connected`, `manual_refusal` |
+| `catalogue.json` | built-in drone models (reference; not decoded by the apps yet) | `builtin_models`: every model with its support level, adapter, link, cameras with mount roles, and for each feature whether it is available and why not when it is not. See "Catalogue fixture". |
 | `client_emits.json` | events a phone emits | one case per allowed event; `forbidden_<event>` for each forbidden one |
 | `edge_ground_to_edge.json` | edge link, ground to edge | `ground_hello`, `heartbeat_v1`, `heartbeat_v2`, `clock`, `ping`, `set_target`, `stream_video`, `land`, `emergency_land_all` |
 | `edge_edge_to_ground.json` | edge link, edge to ground | `detections_appearance_only`, `detections_with_face`, `detections_no_video`, and fleet-edge replies for reference (`telemetry_v1`, `telemetry_v2_drone_link_down`, `ack_assign_lanes`, `nack_assign_lanes_geofence`, `nack_v2_drone_unreachable`, `profile_ack_fallback`, `profile_nack_in_flight`, `ceiling_ack`, `ceiling_nack`, `manual_ack`, `manual_nack`, `pong`) |
-| `nack_reasons.json` | reason and mode vocabularies | `assign_lanes_v1`, `fenced_command_v2`, `set_detection_profile`, `profile_fallback`, `set_ceiling`, `manual_command`, `control_modes`, `hold_reasons`, `edge_states` |
+| `nack_reasons.json` | reason and mode vocabularies | `assign_lanes_v1`, `fenced_command_v2`, `set_detection_profile`, `profile_fallback`, `set_ceiling`, `manual_command`, `control_modes`, `hold_reasons`, `edge_states` Both `fenced_command_v2` and `manual_command` include `straight_line_home`: the straight line home from the drone's lanes would leave its area. Show it as plain text, for example "The straight line home leaves this drone's area." |
 | `match_score_vectors.json` | match score rounding | one case per vector (`single_reid_*`, `two_signals_*`, `extra_signal`, `negative_zero_result`, `nan_*`, `inf_*`, `seeded_*` and others): inputs and the Python `MatchScorer.score` result. Every scorer must reproduce `combined_score`, `is_match` and `signals_used`, and `confidence_level` wherever its count of positive signals agrees with Python's (the iOS scorer counts only signals of at least 0.3 for the level, so its test compares the level only when every positive signal is at least 0.3; `docs/mobile-followups.md`). Python's `round(x, 3)` rounds the exact binary value with ties to even and keeps the sign of zero; truncating is wrong. NaN and infinity are spelled `"nan"`, `"inf"` and `"-inf"`. Reasoning is not covered. Checked by `tests/test_match_score_vectors.py` and the iOS `MatchScoreVectorTests`. |
 | `unknown_keys.json` | forward compatibility | one case per event: a real payload with `x_future_field` added to every record object (`reasoning_result` and `alert_upgrade` are added once the iOS app decodes them) |
 | `demo_scenario.json` | demo mode (no ground) | `scenario`: a timed mission a phone replays in demo mode (see "Demo scenario") |
 
 Identifiers, keys and images in the fixtures are fake: drone ids are `drone-1` and `drone-2`, the only key is `test-key`, and every image is the same 8 by 8 grey JPEG.
+
+## Catalogue fixture
+
+`catalogue.json` holds one case, `builtin_models`. Its payload has `models` (by model id: name, maker, support level, scale, adapter, frame path, positioning, link kind, the reason a unit of that model cannot be added to a fleet or null, `cameras` with their mount role, and `features` with `available` and `why`, named so that it is not read as a nack `reason`), `features` (default on and safety switch per feature id) and `support_levels`. A null `why` means the feature is available. Show `why` as plain text. The `why` texts for a camera-source model assume no capture source is chosen yet.
+
+The file holds model facts only. It contains no flight parameter row id, no fact value, no envelope or safety fact and no Tello tuning number, and a test enforces this. The apps do not decode the file yet, and `unknown_keys.json` has no variant of it until they do.
+
+The requirement CAT-7 also asked for a `tello_params.json` with every Tello tuning row, its default and its bounds. It is intentionally not produced. Its only consumer, the Android direct-Tello mode, was dropped, and the standing rule is that Tello tuning thresholds are never surfaced to the user, so they are never shipped to the phones.
 
 ## Endpoints and ports
 
