@@ -163,14 +163,21 @@ class DroneModel:
 
 @dataclass(frozen=True)
 class AdapterSpec:
+    """One drone adapter, with the facts the feature gates read instead of comparing adapter ids."""
+
     id: str
     description: str
     slot: bool = False
+    stepped_sensing: bool = False  # The backend declares STEPPED_SENSING unless the caller says otherwise.
+    declares_avoidance: bool = False  # The backend may declare ONBOARD_AVOIDANCE.
+    short_name: str = ""  # The drone's name in feature reasons; empty means the generic wording.
 
 
 ADAPTER_SPECS = MappingProxyType({
-    "tello_sdk_udp": AdapterSpec("tello_sdk_udp", "SDK text commands on UDP 8889, state on 8890, video on 11111"),
-    "mavlink": AdapterSpec("mavlink", "MAVLink through MAVSDK (--drone mavlink)"),
+    "tello_sdk_udp": AdapterSpec("tello_sdk_udp", "SDK text commands on UDP 8889, state on 8890, video on 11111",
+                                 stepped_sensing=True, declares_avoidance=False, short_name="Tello"),
+    "mavlink": AdapterSpec("mavlink", "MAVLink through MAVSDK (--drone mavlink)",
+                           stepped_sensing=False, declares_avoidance=True, short_name=""),
     "dji_msdk": AdapterSpec("dji_msdk", "DJI Mobile SDK; declared slot, no implementation", slot=True),
 })
 
