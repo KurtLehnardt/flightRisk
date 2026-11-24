@@ -2,7 +2,7 @@
 
 **Effective Date:** September 4, 2026
 **Last Updated:** November 22, 2026
-**Contact:** krlehnardt@gmail.com
+**Contact:** open an issue at https://github.com/KurtLehnardt/flightRisk/issues
 
 ---
 
@@ -182,4 +182,4 @@ We may update this privacy policy from time to time. Changes will be posted with
 
 For questions or concerns about this privacy policy or the app's data practices:
 
-**Email:** krlehnardt@gmail.com
+**Contact:** open an issue at https://github.com/KurtLehnardt/flightRisk/issues
