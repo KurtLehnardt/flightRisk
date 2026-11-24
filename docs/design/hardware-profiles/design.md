@@ -1242,12 +1242,21 @@ every "from <PR>" tag in `parameters.md` matches an item below naming that PR an
   field ceiling range, the field altitude slot range and the `FENCE_ALT_MAX` check (ArduPilot) and PX4's
   `GF_MAX_VER_DIST`. `flightrisk/drone/coverage.py` `MAX_ALT_M` and the 12000 cm airspace rows stay at 120 m
   for now, and environment and flag ceiling and slot values stay at or below 12000 cm (SEAM-10's today
-  ranges). Indoor bounds and every other bound are unchanged. The autopilot fence (B3) still applies, and
+  ranges). Whenever the airframe maximum is known, the field ceiling and slot upper bound is
+  `altitude_limit_cm`: the lower of the cap and that maximum with the cap on, and that maximum with the cap
+  off. The resolver raises it only after the acknowledgement validates, and the edge's flying envelope
+  takes the same bound (`edge_resolution.envelope_limits`), so a ground ceiling or lane slot above it is
+  refused and one up to it is accepted. Indoor bounds and every other bound are unchanged; on a unit the
+  cap bounds nothing, such as the Tello, an acknowledgement is logged at info as not applying and changes
+  nothing. The autopilot fence (B3) still applies, and
   the FlightRisk geofence is horizontal and does not bound height. A unit with no known airframe maximum
   cannot turn the cap off. `regulatory.altitude_cap_on` is read-only to every generic path: the edge refuses
   an off value from a parameter file, the environment, a flag, `--confirm-less-safe` or a ground message,
   and takes it only from the launcher layer's confirmation with a complete acknowledgement. It refuses an
-  incomplete acknowledgement. The resolver's `check_resolved` validates the record
+  incomplete acknowledgement, and one whose `at` is not `YYYY-MM-DDTHH:MM:SS[.fraction]` with `Z` or
+  `+00:00`, is more than 5 minutes ahead or is more than 24 hours old (`ACK_MAX_FUTURE`, `ACK_MAX_AGE`),
+  so A5's launcher must ask again after 24 hours. The edge's structured start log records the
+  acknowledgement's `id`, `text_version`, `at` and `by`. The resolver's `check_resolved` validates the record
   (`flightrisk/params/altitude.py` `acknowledgement_problem`) and refuses `--confirm-less-safe` for the
   switch; no wire message carries a parameter value to the edge. Only the inventory may set
   `envelope.max_altitude_cm` (the resolver's `INVENTORY_ONLY`): a params file or launcher value is refused. Owners: A3 for the rows listed in tasks.md, the catalogue value, the stale
