@@ -26,6 +26,8 @@ import time
 
 import pytest
 
+from tests.integration import sitl_support
+
 pytestmark = [pytest.mark.sitl, pytest.mark.integration]
 
 ADDRESS = os.environ.get("FLIGHTRISK_SITL_ADDRESS", "").strip()
@@ -58,6 +60,17 @@ def _need(address: str) -> None:
     pytest.importorskip("mavsdk")
 
 
+def _need_arducopter(address: str) -> None:
+    """Skip an ArduCopter-only test before any connect, from the declared or probed autopilot."""
+    _need(address)
+    try:
+        actual = sitl_support.resolve_autopilot()
+    except sitl_support.SitlNotReady as exc:
+        pytest.fail(f"could not tell which autopilot the SITL runs: {exc}")
+    if actual != sitl_support.ARDUPILOT:
+        pytest.skip(f"ArduCopter-specific; the SITL runs {actual or 'an unknown autopilot'}")
+
+
 def wait_for(predicate, timeout, interval=0.2):
     deadline = time.monotonic() + timeout
     while True:
@@ -67,27 +80,32 @@ def wait_for(predicate, timeout, interval=0.2):
         time.sleep(interval)
 
 
-def _connect(address: str, drone_id: str, slot_cm: float, envelope=None):
+def _connect(address: str, drone_id: str, slot_cm: float, sysid: int, envelope=None):
     from flightrisk.drone.autopilot import ARDUPILOT
     from flightrisk.drone.mavlink_fleet import MavlinkFleetDrone, MavlinkFleetOptions
     from flightrisk.drone.mavsdk_link import MavsdkAutopilotLink
 
     link = MavsdkAutopilotLink(address, connect_timeout_s=120.0)
-    drone = MavlinkFleetDrone(drone_id, link, MavlinkFleetOptions(frame_heading_deg=0.0, speed_mps=3.0))
+    drone = MavlinkFleetDrone(drone_id, link, MavlinkFleetOptions(frame_heading_deg=0.0, speed_mps=3.0, sysid=sysid))
     drone.bind_slot_source(lambda: slot_cm)
     if envelope is not None:
         drone.bind_envelope(envelope)
-    assert drone.connect(), f"cannot connect to SITL at {address}"
-    setup = ARDUPILOT_SETUP if link.state().autopilot == ARDUPILOT else PX4_SETUP
-    for name, value in setup.items():
-        link.set_param(name, value)
-    if link.state().autopilot == ARDUPILOT:
-        rtl = next(((n, v) for n, v in ARDUPILOT_RTL_ALT if link.get_param(n) is not None), None)
-        assert rtl is not None, "SITL has neither RTL_ALT_M nor RTL_ALT"
-        link.set_param(*rtl)
-    drone.refresh_params()
-    ready = wait_for(lambda: drone.link_status().ok, READY_TIMEOUT_S, 1.0)
-    assert ready, f"SITL never became ready: {drone.link_status()}"
+    try:
+        assert drone.connect(), f"cannot connect to SITL at {address}"
+        setup = ARDUPILOT_SETUP if link.state().autopilot == ARDUPILOT else PX4_SETUP
+        for name, value in setup.items():
+            link.set_param(name, value)
+        if link.state().autopilot == ARDUPILOT:
+            rtl = next(((n, v) for n, v in ARDUPILOT_RTL_ALT if link.get_param(n) is not None), None)
+            assert rtl is not None, "SITL has neither RTL_ALT_M nor RTL_ALT"
+            link.set_param(*rtl)
+        drone.refresh_params()
+        ready = wait_for(lambda: drone.link_status().ok, READY_TIMEOUT_S, 1.0)
+        assert ready, f"SITL never became ready: {drone.link_status()}"
+    except BaseException:
+        # Release the link so a failed connect cannot keep the vehicle's port for the rest of the module.
+        drone.disconnect()
+        raise
     return drone
 
 
@@ -106,10 +124,14 @@ class SitlEdge:
         self.replies: list[dict] = []
         self.envelope = SafetyEnvelope.for_field(alt_slot_cm=slot_cm, geofence_cm=geofence_cm,
                                                  link_loss_land_s=link_loss_land_s, link_loss_hold_s=LINK_LOSS_HOLD_S)
-        self.drone = _connect(address, drone_id, slot_cm, self.envelope)
-        self.executor = LaneExecutor(self.drone, self.envelope, drone_id, send=self._reply,
-                                     logger=StructuredLogger(component=f"sitl-{drone_id}"))
-        self.executor.start()
+        self.drone = _connect(address, drone_id, slot_cm, sitl_support.sysid_for(address), self.envelope)
+        try:
+            self.executor = LaneExecutor(self.drone, self.envelope, drone_id, send=self._reply,
+                                         logger=StructuredLogger(component=f"sitl-{drone_id}"))
+            self.executor.start()
+        except BaseException:
+            self.drone.disconnect()
+            raise
         # A real ground sends a heartbeat every second; clearing this event
         # stops them, as a lost ground link would.
         self.ground_alive = threading.Event()
@@ -230,7 +252,7 @@ def test_ground_link_loss_returns_to_launch_in_sitl():
 
 def test_rotate_on_arducopter_turns_the_plan_not_the_vehicle_in_sitl():
     """N9: ArduCopter ignores a reposition's yaw; the rotation must not wait for it (and then land)."""
-    _need(ADDRESS)
+    _need_arducopter(ADDRESS)
     edge = SitlEdge("sitl-1", ADDRESS, 1000.0, 3000.0)
     try:
         edge.send({"type": "takeoff"})
@@ -254,7 +276,7 @@ def test_rotate_on_arducopter_turns_the_plan_not_the_vehicle_in_sitl():
 
 def test_pilot_takeover_after_land_all_is_not_fought_in_sitl():
     """B1(a): after LAND ALL a pilot switch to LOITER (MAVSDK hold) latches external control; no LAND is re-sent."""
-    _need(ADDRESS)
+    _need_arducopter(ADDRESS)
     edge = SitlEdge("sitl-1", ADDRESS, 1000.0, 3000.0)
     try:
         edge.send({"type": "takeoff"})
