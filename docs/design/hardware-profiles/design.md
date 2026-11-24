@@ -1052,8 +1052,8 @@ scope adds `flightrisk/mission/`, `flightrisk/drone/rth/` and `flightrisk/drone/
 they exist. Measured on `82ec697` with the 160 ids of `parameters.md`: 524 findings with 514 distinct keys
 in 57 of the 76 files in scope (`guard_main.txt`, regenerated with this revision).
 
-The Tello coupling test (`tests/test_tello_coupling.py`, XCP) is the SEAM-6 extension: no code under `flightrisk/` or `scripts/` outside
-`flightrisk/drone/tello*.py`, `registry.py` and `backends.py` imports a Tello module, compares against a
+The Tello coupling test (`tests/test_tello_coupling.py`, XCP) is the SEAM-6 extension: no code under
+`flightrisk/` or `scripts/` outside `flightrisk/drone/tello*.py`, `registry.py` and `backends.py` imports a Tello module, compares against a
 Tello adapter or model name, or uses a Tello-only constant, except the permanent exemptions
 `flightrisk/main.py`, `flightrisk/drone/mavlink.py`, `scripts/demo_edge.sh`, `scripts/demo_edge.ps1`,
 `scripts/demo_edge_pair.ps1` and `tests/test_demo_smoke.py` (owner decision). Today's other violations are a
@@ -1193,12 +1193,17 @@ every "from <PR>" tag in `parameters.md` matches an item below naming that PR an
   line naming each variable (N-10, FACT-3). Environment and flag ranges stay today's (SEAM-10). Assertions:
   any existing test that starts an edge, a ground or a launcher with one of the pinned combinations, named in
   the description. For A5 the assertions are `tests/test_launcher_commands.py:67` and `:119-121`.
-- **A3:** 53. A MAVLink `generic_multirotor` no longer declares an airframe maximum altitude: `MavlinkFleetDrone`
-  drops its 120 m declaration (`int(FIELD_LIMITS.max_alt_slot_cm / 100)` in `flightrisk/drone/mavlink_fleet.py`), and
-  row 8 (`envelope.max_altitude_cm`) of `generic_multirotor` records no airframe limit, changed in the same PR with a
-  `safety-value-changes.md` entry. Height stays bounded, unchanged, by the operator's mission ceiling (row 2, at most
-  12000 cm), the altitude slot range (row 4, at most 12000 cm), the `FENCE_ALT_MAX` check of section 13 and, from B3
-  on, the uploaded autopilot fence; the FlightRisk geofence is horizontal and does not bound height. Phase: A3d.
+- **A3:** 53. A MAVLink `generic_multirotor` no longer declares an airframe maximum altitude:
+  `MavlinkFleetDrone` drops its 120 m declaration (`int(FIELD_LIMITS.max_alt_slot_cm / 100)` in
+  `flightrisk/drone/mavlink_fleet.py`), and row 8 (`envelope.max_altitude_cm`) of `generic_multirotor` records
+  no airframe limit, changed in the same PR with a `safety-value-changes.md` entry. Height stays bounded,
+  unchanged, by the operator's mission ceiling (row 2, at most 12000 cm), the altitude slot range (row 4, at
+  most 12000 cm), the `FENCE_ALT_MAX` check of section 13 and, from B3 on, the uploaded autopilot fence; the
+  FlightRisk geofence is horizontal and does not bound height.
+  Every consumer of the declared maximum altitude must handle 'no limit' without crashing and without falling back to a lower or default cap.
+  `MavlinkFleetDrone` explicitly declares no limit (None), and the `DroneCapabilities` default of 120 m
+  (`flightrisk/drone/controller.py`) does not apply to it. A3d also corrects the stale "5 m" note at
+  `scripts/make_param_golden.py:178`. Phase: A3d.
   Assertions: the tests that pin that declaration or row 8's 12000 cm for `generic_multirotor`, named in its
   description.
 - **A4:** 1. A fleet mixing indoor and field units is refused at Plan (nitpick 12).

@@ -21,19 +21,21 @@ A1 ─> A2 ─┬─> A3 ─┬─> B1 ─┐
                   └─> A5  │      (A5 after A3 and A4)
                           v
                 B2 ─> B3 ─> B4 ─> D1 ─> D2 ─> D3 ─> C1 ─> C2 ─> C3 ─> C4 ─> C5 ─> C6 ─┬─> C7
-                                                                                       └─> F1 ─┬─> F2
-                                                                                               └─> F3
-                                    D4 (fast path: after B4, before F1; see Fast path) ─> D5 ─> E1 ─> E2 ─> E3 ─> E4
+                                                                                       └─> F1 ─┬─> F2 ─┐
+                                                                                               └─> F3 ─┤
+                                    D4 (fast path: after B4; see Fast path) ───────────────────┴─> D5 ─> E1 ─> E2 ─> E3 ─> E4
 ```
 
-- Phases in merge order: A (core; A1 and A2 change no behaviour, A3 carries items 47 and 53, A4 items 1, 47, 48 and 49, A5 item 47 of section 27), B (MAVLink production adapter), D1 to D3 (field
-  airspace, lost drones and field planning, behind today's defaults), C (return machinery, roles, then the
-  switch in four steps), F (mobile), D4 and D5 (tasks and search speed), E (on-find flows).
+- Phases in merge order: A (core; A1 and A2 change no behaviour, A3 carries items 47 and 53, A4 items 1, 47,
+  48 and 49, A5 item 47 of section 27), B (MAVLink production adapter), D4 (tasks and the matcher, on the fast
+  path), D1 to D3 (field airspace, lost drones and field planning, behind today's defaults), C (return
+  machinery, roles, then the switch in four steps), F (mobile), D5 (search speed, after D4, F2 and F3), E
+  (on-find flows).
 - **Development may overlap where files do not:** C1 (edge files) can be developed from B4 on while D1 to
   D3 (ground files) are under review, and merges after D3; C7 (indoor defaults, gated by the ZBook runs)
-  and F1 can proceed side by side after C6 (C7 changes defaults only); F2 and F3 run in parallel. D4 edits fixtures the apps read (N-7): on the fast path it merges before F1 and
-  edits them additively only, and F1 later builds on it; in the follow-up order D4 comes after F2 and F3. D5
-  and E1 are sequential.
+  and F1 can proceed side by side after C6 (C7 changes defaults only); F2 and F3 run in parallel. D4 edits
+  fixtures the apps read (N-7): it merges before F1 and edits them additively only, and F1 later builds on it.
+  D5 depends on D4, F2 and F3, so D5 and E1 to E4 merge after F. D5 and E1 are sequential.
 - SITL scenarios before D3 use `scripts/field_fleet_ground.py` as the ground (D1 may edit it for its
   scenarios); from D3 on they use the dashboard. Every scenario uses at most eight vehicles (`MAX_ROSTER`).
 
@@ -65,8 +67,8 @@ order guarantees. Shared, sectioned files: `tests/param_literal_allowlist.py` (o
 
 | File or area | First owner | Later editors |
 | --- | --- | --- |
-| `flightrisk/params/*`, `flightrisk/hardware/catalogue.py`, `scripts/make_param_golden.py`, `tests/golden/flight_params.json`, `.github/CODEOWNERS`, `docs/flight-parameters.md`, `docs/hardware-catalogue.md`, `safety-value-changes.md` | A1 | resolver: C4 (warnings), C5 (bounds, precedence, confirmations); table and golden file: B4, A3d (item 53 only: row 8, `envelope.max_altitude_cm` of generic_multirotor), D1, D2, C2, C5, C6, C7, D5, E1 to E4, each with a log entry (N-7); XCa (`catalogue.py`, `AdapterSpec` fields only); XCb (`params/docs.py`, `params/today.py`, `params/today_ranges.py`, `scripts/make_param_golden.py`, the `--today-module` output) |
-| `flightrisk/hardware/{inventory,features,frames}.py`, `flightrisk/params/report.py`, `flightrisk/mission/model.py` (types), `flightrisk/drone/rth/__init__.py` (protocols), `flightrisk/fleet_protocol/*` (every wire shape), `flightrisk/obs_comm.py`, `flightrisk/drone/controller.py` (`CameraSource`), `flightrisk/drone/registry.py`, `flightrisk/drone/backends.py`, `flightrisk/vision/profiles.py` (fields), `tests/fixtures/mobile_contract/catalogue.json` | A2 | `fleet_protocol/*`: A3 adds `describe_unit` to the edge's `validate_ground_to_edge`, and C1 adds the return commands there; no later PR changes a wire shape; XCa: `controller.py` (new `Capability` members and their inference only), `registry.py` (the `edge_factory` hook, `for_model`, `edge_kinds`) and `features.py` |
+| `flightrisk/params/*`, `flightrisk/hardware/catalogue.py`, `scripts/make_param_golden.py`, `tests/golden/flight_params.json`, `.github/CODEOWNERS`, `docs/flight-parameters.md`, `docs/hardware-catalogue.md`, `safety-value-changes.md` | A1 | `flightrisk/params/legacy.py`: XL; every editor of the table regenerates `flightrisk/params/today_ranges.py` (the SEAM-10 test forces it), and the first phase that adds a profile updates `flightrisk/params/docs.py`; resolver: C4 (warnings), C5 (bounds, precedence, confirmations); table and golden file: B4, A3d (item 53 only: row 8, `envelope.max_altitude_cm` of generic_multirotor), D1, D2, C2, C5, C6, C7, D5, E1 to E4, each with a log entry (N-7); XCa (`catalogue.py`, `AdapterSpec` fields only); XCb (`params/docs.py`, `params/today.py`, `params/today_ranges.py`, `scripts/make_param_golden.py`, the `--today-module` output) |
+| `flightrisk/hardware/{inventory,features,frames}.py`, `flightrisk/params/report.py`, `flightrisk/mission/model.py` (types), `flightrisk/drone/rth/__init__.py` (protocols), `flightrisk/fleet_protocol/*` (every wire shape), `flightrisk/obs_comm.py`, `flightrisk/drone/controller.py` (`CameraSource`), `flightrisk/drone/registry.py`, `flightrisk/drone/backends.py`, `flightrisk/vision/profiles.py` (fields), `tests/fixtures/mobile_contract/catalogue.json` | A2 | `fleet_protocol/*`: A3 adds `describe_unit` to the edge's `validate_ground_to_edge`, and C1 adds the return commands there; no later PR changes a wire shape; A3d: `controller.py` (the `max_altitude_m` annotation and default handling for item 53 only); XCa: `controller.py` (new `Capability` members and their inference only), `registry.py` (the `edge_factory` hook, `for_model`, `edge_kinds`) and `features.py` |
 | `flightrisk/edge_device.py`, `flightrisk/edge.py`, `flightrisk/edge_profiles.py`, `flightrisk/edge_uplink.py`, `flightrisk/fleet_authority.py`, `flightrisk/fleet_authority_types.py`, `flightrisk/drone/{safety,obstacle_sensor,obstacle,flight_guards,temp_preflight,tello,tello_bound,fake,lane_flight,lane_executor,lane_monitor,lane_avoid}.py`, `tests/test_telemetry_field_cap.py` | A3 | C1, D5 (`det_hz`, `set_speed`), E4 (escort setpoints) |
 | `flightrisk/drone/{mavlink_fleet,autopilot,mavsdk_link}.py`, new `flightrisk/drone/autopilot_fence.py` | A3 (options from params) | B2, B3, B4, C1 |
 | `flightrisk/drone/rth/home.py`, `flightrisk/drone/rth/uncertainty.py` | B2 | C1 |
@@ -85,7 +87,7 @@ order guarantees. Shared, sectioned files: `tests/param_literal_allowlist.py` (o
 | `flightrisk/vision/*` target embeddings; `flightrisk/mission/{targets,sightings,onfind}.py` | E1 | |
 | `flightrisk/mission/viewpoints.py`; `local_search.py`; `escort.py` | E2; E3; E4 | |
 | other `tests/fixtures/mobile_contract/*` | D4 (fast path, additive only) | F1, E1 (new events) |
-| `docs/mobile-contract.md` | F1 | D4, E1 (new events) |
+| `docs/mobile-contract.md` | D4 (fast path, additive only) | F1, E1 (new events) |
 | `docs/design/hardware-profiles/*` for the fast-path record | X0 | as today |
 | `tests/test_tello_coupling.py`; `tests/tello_coupling_baseline.py` (one section per owning phase); `tests/param_adopters.py` (one section per phase) | XCP | every phase deletes its own baseline entries and adds its own adopters (shared, sectioned files) |
 | `flightrisk/drone/{lane_reflight,lane_manual,lane_steps,lane_plan}.py` | XCb | C5 (XR-02, manual floor and band rows) |
@@ -104,7 +106,7 @@ order guarantees. Shared, sectioned files: `tests/param_literal_allowlist.py` (o
 | `mobile/` | F2 | |
 | `ios/` | F3 | |
 
-## Phase A: core profiles, catalogue and inventory (A1 and A2 change no behaviour; A3 carries items 47 and 53, A4 items 1, 47, 48 and 49, A5 item 47)
+## Phase A: core profiles, catalogue and inventory (A1, A2 no behaviour change; A3: items 47, 53; A4: 1, 47-49; A5: 47)
 
 ### A1: catalogue, registry, golden file, resolver, guard, parity and tag tests
 - **Tier:** opus, high. **Depends on:** the in-flight work.
@@ -270,12 +272,13 @@ order guarantees. Shared, sectioned files: `tests/param_literal_allowlist.py` (o
 ## Phase D, second part: tasks and search speed
 
 ### D4: missions, tasks and the matcher
-- **Tier:** opus, high. **Depends on:** B4 on the fast path, where it edits fixtures the apps read additively before F1 (N-7); F2 and F3 in the follow-up order.
+- **Tier:** opus, high. **Depends on:** B4. It merges on the fast path, before F1, and edits the fixtures the
+  apps read additively only (N-7).
 - **Behaviour changes:** item 36. **Test plan:** unit, replay from snapshots, fake; SITL mixed fleet.
 - **Acceptance:** TASK-1 to TASK-8, TASK-12, FEA-9, FEA-11 (Plan), INV-8, GND-3.
 
 ### D5: search-speed rule
-- **Tier:** opus, high. **Depends on:** D4.
+- **Tier:** opus, high. **Depends on:** D4, F2 and F3.
 - **Behaviour changes:** item 37. **Test plan:** unit; SITL with a throttled test detector.
 - **Acceptance:** TASK-9, TASK-11.
 
