@@ -228,6 +228,130 @@ def test_adopted_set_equals_the_a3_ownership_list():
         assert (ROOT / rel).is_file(), rel
 
 
+#: Ledger sections that a phase other than A3 owns, mapped to that phase's first-owner name in tasks.md.
+PHASE_ROW_NAMES = {"X-legacy": "XL", "A4": "A4"}
+#: Per-phase scope: the only modules a phase section of ``tests/param_adopters.py`` may name. Each set is exactly
+#: the ``flightrisk/*.py`` paths of that phase's tasks.md ownership rows, without the params and hardware modules,
+#: which never need an allowance. A set grows only with a reviewed tasks.md edit, and none may overlap A3_ADOPTED.
+PHASE_ADOPTED: dict[str, frozenset[str]] = {
+    "X-legacy": frozenset({
+        "flightrisk/drone/fleet.py",
+        "flightrisk/drone/mavlink.py",
+    }),
+    "A4": frozenset({
+        "flightrisk/drone/coordinator.py",
+        "flightrisk/config.py",
+        "flightrisk/observability.py",
+        "flightrisk/drone/fleet_plan_check.py",
+        "flightrisk/drone/fleet_plan_model.py",
+        "flightrisk/drone/fleet_patterns.py",
+        "flightrisk/drone/fleet_scale.py",
+        "flightrisk/drone/plan_edit.py",
+        "flightrisk/drone/plan_paths.py",
+        "flightrisk/drone/coverage.py",
+        "flightrisk/drone/coverage_sim.py",
+        "flightrisk/drone/geolocate.py",
+        "flightrisk/drone/search.py",
+        "flightrisk/ground_params.py",
+        "flightrisk/dashboard/unit_descriptions.py",
+        "flightrisk/dashboard/unit_cards.py",
+        "flightrisk/recorder.py",
+        "flightrisk/fleet_ground_link.py",
+    }),
+}
+#: New files a phase creates; they need not exist before the PR that adds them.
+PHASE_NEW_FILES = frozenset({
+    "flightrisk/ground_params.py",
+    "flightrisk/dashboard/unit_descriptions.py",
+    "flightrisk/dashboard/unit_cards.py",
+})
+
+
+def _phase_ownership_list(row_name: str) -> set[str]:
+    """The ``flightrisk/*.py`` paths of the tasks.md ownership rows whose first owner is ``row_name``, braces
+    expanded, without the params and hardware modules."""
+    paths = set()
+    for line in TASKS.read_text(encoding="utf-8").splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if not line.startswith("|") or len(cells) < 2 or not re.match(rf"{re.escape(row_name)}\b", cells[1]):
+            continue
+        for item in re.findall(r"`([^`]+)`", cells[0]):
+            brace = re.fullmatch(r"(.*)\{([^}]*)\}(.*)", item)
+            names = [brace.group(1) + n + brace.group(3) for n in brace.group(2).split(",")] if brace else [item]
+            paths.update(
+                n for n in names
+                if n.startswith("flightrisk/") and n.endswith(".py")
+                and not n.startswith(("flightrisk/params/", "flightrisk/hardware/"))
+            )
+    return paths
+
+
+def phase_cap_problems(
+    ledger: dict[str, frozenset[str]], caps: dict[str, frozenset[str]], a3_adopted: frozenset[str]
+) -> list[str]:
+    """One message per path that a phase section of ``ledger`` names outside that phase's cap in ``caps``, and
+    one per path that sits in a phase cap and in ``a3_adopted``."""
+    problems = []
+    for section, cap in caps.items():
+        for rel in sorted(ledger.get(section, frozenset()) - cap):
+            problems.append(f"{section}: {rel} is outside the phase allowance")
+        for rel in sorted(cap & a3_adopted):
+            problems.append(f"{section}: {rel} sits in the phase allowance and in A3_ADOPTED")
+    return problems
+
+
+def _non_phase_ledger_paths() -> frozenset[str]:
+    """Every path that ``tests/param_adopters.py`` names in a section that ``PHASE_ADOPTED`` does not cap."""
+    from tests.param_adopters import PARAM_ADOPTERS
+
+    return frozenset().union(*(paths for section, paths in PARAM_ADOPTERS.items() if section not in PHASE_ADOPTED))
+
+
+def test_phase_allowances_equal_their_tasks_md_rows():
+    """A phase allowance cannot quietly grow: it is exactly its phase's tasks.md rows, and it never overlaps A3's."""
+    from tests.param_adopters import PARAM_ADOPTERS
+
+    for section, cap in PHASE_ADOPTED.items():
+        assert section in PARAM_ADOPTERS, section
+        assert cap == _phase_ownership_list(PHASE_ROW_NAMES[section]), section
+        assert not cap & A3_ADOPTED, sorted(cap & A3_ADOPTED)
+        for rel in cap - PHASE_NEW_FILES:
+            assert (ROOT / rel).is_file(), rel
+    assert len(PHASE_ADOPTED["A4"]) == 18
+    assert len(PHASE_ADOPTED["X-legacy"]) == 2
+
+
+def test_phase_sections_stay_inside_their_allowance():
+    """Each phase section of the ledger names only modules that its own allowance holds."""
+    from tests.param_adopters import PARAM_ADOPTERS
+
+    assert phase_cap_problems(PARAM_ADOPTERS, PHASE_ADOPTED, A3_ADOPTED) == []
+
+
+def test_phase_cap_rule_catches_each_violation():
+    """The cap rule on synthetic ledgers: a phase section outside its allowance fails, and so does a cap that
+    overlaps A3_ADOPTED. Sections the caps do not name are left to the A3_ADOPTED check."""
+    clean = {
+        "X-core": frozenset(),
+        "X-legacy": frozenset({"flightrisk/drone/fleet.py"}),
+        "A3": frozenset({"flightrisk/edge_device.py"}),
+        "A4": frozenset({"flightrisk/config.py", "flightrisk/ground_params.py"}),
+    }
+    assert phase_cap_problems(clean, PHASE_ADOPTED, A3_ADOPTED) == []
+    dashboard = {**clean, "A4": clean["A4"] | {"flightrisk/dashboard/app.py"}}
+    assert phase_cap_problems(dashboard, PHASE_ADOPTED, A3_ADOPTED) == [
+        "A4: flightrisk/dashboard/app.py is outside the phase allowance",
+    ]
+    edge = {**clean, "A4": clean["A4"] | {"flightrisk/edge_device.py"}}
+    assert phase_cap_problems(edge, PHASE_ADOPTED, A3_ADOPTED) == [
+        "A4: flightrisk/edge_device.py is outside the phase allowance",
+    ]
+    overlapping = {**PHASE_ADOPTED, "X-legacy": PHASE_ADOPTED["X-legacy"] | {"flightrisk/drone/tello.py"}}
+    assert phase_cap_problems(clean, overlapping, A3_ADOPTED) == [
+        "X-legacy: flightrisk/drone/tello.py sits in the phase allowance and in A3_ADOPTED",
+    ]
+
+
 def _runtime_param_imports(tree):
     """The names a parsed module imports from params or hardware at run time.
 
@@ -296,8 +420,9 @@ def test_only_adopted_modules_import_params_or_hardware():
     The guard above lets a module import params or hardware only when the ledger names it, so keeping every
     ledger path inside ``A3_ADOPTED`` keeps every runtime importer inside it too. A path in any section of the
     ledger that ``A3_ADOPTED`` does not hold fails here, until the phase that adopts it widens the allowance.
+    The A4 and X-legacy sections are capped by ``PHASE_ADOPTED`` instead, which pins each to its tasks.md rows.
     """
-    outside = sorted(_ledger_paths() - A3_ADOPTED)
+    outside = sorted(_non_phase_ledger_paths() - A3_ADOPTED)
     assert not outside, f"named in tests/param_adopters.py but outside A3_ADOPTED: {outside}"
 
 
