@@ -1,11 +1,12 @@
-"""The three operator message forms render the design examples byte for byte."""
+"""The operator message forms render the design examples byte for byte."""
 
 from __future__ import annotations
 
 import pytest
 
 from flightrisk.params.messages import (
-    FACT_IDS, render_fallback_landing, render_refused_input, render_unavailable_capability,
+    FACT_IDS, render_fallback_landing, render_launcher_for_other_unit, render_refused_input,
+    render_unavailable_capability, render_unconfirmed_switch_off,
 )
 from flightrisk.params.spec import Edit
 from flightrisk.params.table import TABLE
@@ -58,3 +59,19 @@ def test_other_rows_render_without_tuning_words(edit):
     text = render_refused_input("a.b_cm", 1.0, "cm", "FLIGHTRISK_A", "Tello", 2, 3, edit=edit)
     assert text == "`a.b_cm` 1 cm from FLIGHTRISK_A is refused: the Tello allows 2 to 3 cm."
     assert not {"calibrate", "tune", "uncalibrated"} & set(text.lower().split())
+
+
+def test_launcher_for_other_unit_example():
+    assert render_launcher_for_other_unit("FLIGHTRISK_LAUNCHER_PARAMS", "drone-9", "drone-1") == (
+        "FLIGHTRISK_LAUNCHER_PARAMS is for unit drone-9, but this edge is --drone-id drone-1. "
+        "Start the edge from the launcher again for drone-1, or unset FLIGHTRISK_LAUNCHER_PARAMS."
+    )
+
+
+def test_unconfirmed_switch_off_example():
+    assert render_unconfirmed_switch_off(
+        "drone-1", "switching forward_obstacle_sensing off needs the operator's confirmation", "the launcher"
+    ) == (
+        "drone-1: switching forward_obstacle_sensing off needs the operator's confirmation, "
+        "which a feature switch from the launcher cannot give."
+    )
