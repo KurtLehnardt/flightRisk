@@ -20,19 +20,20 @@ A1 ─> A2 ─┬─> A3 ─┬─> B1 ─┐
           └─> A4 ─┤       │
                   └─> A5  │      (A5 after A3 and A4)
                           v
-                B2 ─> B3 ─> B4 ─> D1 ─> D2 ─> D3 ─> C1 ─> C2 ─> C3 ─> C4 ─> C5 ─> C6 ─┬─> C7
-                                                                                       └─> F1 ─┬─> F2 ─┐
+                B2 ─> B3 ─> B4 ─> C1 ─> C2 ─> D4 ─> D1 ─> D2 ─> D3 ─> C3 ─> C4 ─> C5 ─> C6 ─┬─> C7
+                     (fast path: B1 to B4, C1, C2, D4)                                 └─> F1 ─┬─> F2 ─┐
                                                                                                └─> F3 ─┤
-                                    D4 (fast path: after B4; see Fast path) ───────────────────┴─> D5 ─> E1 ─> E2 ─> E3 ─> E4
+                     D5 (after D4, F2 and F3) ─────────────────────────────────────────────────────────┴─> D5 ─> E1 ─> E2 ─> E3 ─> E4
 ```
 
 - Phases in merge order: A (core; A1 and A2 change no behaviour, A3 carries items 47 and 53, A4 items 1, 47,
   48, 49 and 53, A5 items 47 and 53). B4 adds item 53 of section 27. The order then continues with B
-  (MAVLink production adapter), D4 (tasks and the matcher, on the fast path), D1 to D3 (field airspace, lost
-  drones and field planning, behind today's defaults), C (return machinery, roles, then the switch in four
+  (MAVLink production adapter), C1 and C2 (edge return state machine and ground returns, on the fast path),
+  D4 (tasks and the matcher, on the fast path), D1 to D3 (field airspace, lost
+  drones and field planning, behind today's defaults), C3 to C7 (roles, then the switch in four
   steps), F (mobile), D5 (search speed, after D4, F2 and F3), E (on-find flows).
-- **Development may overlap where files do not:** C1 (edge files) can be developed from B4 on while D1 to
-  D3 (ground files) are under review, and merges after D3; C7 (indoor defaults, gated by the edge laptop runs)
+- **Development may overlap where files do not:** C1 (edge files) merges right after B4 on the fast path, and
+  C2 right after C1; C7 (indoor defaults, gated by the edge laptop runs)
   and F1 can proceed side by side after C6 (C7 changes defaults only); F2 and F3 run in parallel. D4 edits
   fixtures the apps read (N-7): it merges before F1 and edits them additively only, and F1 later builds on it.
   D5 depends on D4, F2 and F3, so D5 and E1 to E4 merge after F. D5 and E1 are sequential.
@@ -43,7 +44,10 @@ A1 ─> A2 ─┬─> A3 ─┬─> B1 ─┐
 
 The fast path to a drone-agnostic, MAVLink-first FlightRisk is: X0, XCP, XCa and XCb, then A3 in parallel with
 A4 (A4a to A4f) and XL, then A5 (A5a to A5c) in parallel with B1 (B1a, B1b), then B2, B3 and B4 (B4a to B4f),
-then D4 (D4a to D4c), pulled ahead of D1 to D3, C and F. A3 is delivered as the A3.x pull requests that began
+then C1 and C2, then D4 (D4a to D4c), all pulled ahead of D1 to D3, C3 to C7 and F. C1 is built by the session
+that builds A3 and C2 by the session that builds the ground side. Without D1 to D3 there are no zones, so C1's
+item 43 applies only when zones exist; without zones the edge does no straight-line-home check and logs one
+line saying the check was skipped. A3 is delivered as the A3.x pull requests that began
 with #230. Every other phase in this file is a follow-up after the fast path's acceptance and keeps its order.
 D4's edits to `tests/fixtures/mobile_contract/*` are additive only, so the current Android and iOS contract
 tests pass unchanged; an edit that cannot be additive moves to F1. Without D1 to D3, D4 plans field fleets
@@ -201,7 +205,7 @@ order guarantees. Shared, sectioned files: `tests/param_literal_allowlist.py` (o
 ## Phase C: return machinery, roles, then the switch in four steps
 
 ### C1: edge return state machine (today's defaults) with terminal landing
-- **Tier:** opus, xhigh. **Depends on:** D3 to merge (development from B4).
+- **Tier:** opus, xhigh. **Depends on:** B4. It merges on the fast path, right after B4, built by the session that builds A3.
 - **Behaviour changes:** items 19, 20 and 43.
 - **Test plan:** unit (every row), property test, fake (each command after LAND ALL; a pilot mode change
   during `rth_landing`), SITL (edge-guided return, progress monitor on horizontal legs only, a place-1
@@ -212,7 +216,7 @@ order guarantees. Shared, sectioned files: `tests/param_literal_allowlist.py` (o
   (start and takeoff).
 
 ### C2: ground returns, RETURN ALL, LAND ALL cancellation, landing clearance
-- **Tier:** opus, xhigh. **Depends on:** C1.
+- **Tier:** opus, xhigh. **Depends on:** C1. It merges on the fast path, right after C1, before D4.
 - **Behaviour changes:** items 21 to 23 (and `task.end_action`, `stranded.action` read with today's
   defaults, no change).
 - **Test plan:** unit (a blocking cancellation does not delay LAND ALL), fake; SITL (RETURN ALL with four
@@ -272,7 +276,7 @@ order guarantees. Shared, sectioned files: `tests/param_literal_allowlist.py` (o
 ## Phase D, second part: tasks and search speed
 
 ### D4: missions, tasks and the matcher
-- **Tier:** opus, high. **Depends on:** B4. It merges on the fast path, before F1, and edits the fixtures the
+- **Tier:** opus, high. **Depends on:** C2 (and B4). It merges on the fast path, before F1, and edits the fixtures the
   apps read additively only (N-7).
 - **Behaviour changes:** item 36. **Test plan:** unit, replay from snapshots, fake; SITL mixed fleet.
 - **Acceptance:** TASK-1 to TASK-8, TASK-12, FEA-9, FEA-11 (Plan), INV-8, GND-3.

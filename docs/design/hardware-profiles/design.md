@@ -1315,7 +1315,7 @@ every "from <PR>" tag in `parameters.md` matches an item below naming that PR an
   into a return. 43. The edge refuses a takeoff or nacks an assignment with `straight_line_home` when
   the straight line home of its autopilot's return leaves the assignment's zone and corridor and the
   action cannot be set to land; it consumes the landing order of `assign_lanes.landing` for the
-  autopilot's landing delay; it refuses legs into known no-entry areas (moved from D1, N-7).
+  autopilot's landing delay; it refuses legs into known no-entry areas (moved from D1, N-7). Item 43 applies only when zones exist (D1 is not on the fast path): without zones the edge does no straight-line-home check and logs one line saying the check was skipped.
 - **C2:** 21. RETURN ALL and per-drone Return exist; LAND ALL moves apart from RETURN ALL. 22. LAND ALL
   marks every drone landing, sends the land, then cancels every other ground sender asynchronously. 23. A returning drone holds above home until the
   ground clears its landing. C2 also reads `task.end_action` and `stranded.action` with today's defaults
