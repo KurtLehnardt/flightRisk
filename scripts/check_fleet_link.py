@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check the wired laptop-to-laptop link used by the AP-mode fleet path.
 
-Run the server role on the Mac (10.42.0.1) and the client role on the Windows
+Run the server role on the ground-station laptop (10.42.0.1) and the client role on the Windows
 laptop (10.42.0.2). Both sides ping the peer and then exchange eight JSON ping
 frames over a WebSocket on port 9000. Each side prints PASS or FAIL for the
 ping and for the WebSocket, plus the median round-trip time on the client.

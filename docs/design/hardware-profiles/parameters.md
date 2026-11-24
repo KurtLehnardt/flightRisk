@@ -251,3 +251,8 @@ Each entry is allowlisted in the guard test with its category.
 | test doubles | `fake.py:61-64,143-145`, `template_backend.py:67-69,102,135-136`, `edge_device.py:267` `_FAKE_SPEED_CM_S`, `FLIGHTRISK_FAKE_OBSTACLE_Y_CM` (`obstacle_sensor.py:111`) | 1 group | Simulation only. The fake drone takes its move range from the `tello` profile in A3. |
 
 Totals: 65 constant entries, of which 19 are protocol, MAVLink or regulatory facts. The 24 Tello SDK and driver facts of the first draft are now rows 87 to 110.
+
+Rows 73 and 74 are unchanged. The wire caps of `flightrisk/fleet_protocol/manual.py:123-133` are the effective
+limit: a manual step is 20 to 100 cm (`MANUAL_STEP_MIN_CM`, `MANUAL_STEP_MAX_CM`) and a rotation is 5 to 45
+degrees (`MANUAL_ROTATE_MIN_DEG`, `MANUAL_ROTATE_MAX_DEG`), so the wider row bounds (20 to 1000 cm for
+`generic_multirotor` step, 5 to 90 degrees for rotation) cannot be reached while the wire stays frozen (XC-05).

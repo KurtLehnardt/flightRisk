@@ -31,7 +31,7 @@ from tests.support.installer_repo import make_fixture_repo
 ROOT = Path(__file__).resolve().parent.parent
 MACOS = ROOT / "installer" / "macos"
 INSTALL = MACOS / "install.sh"
-BUNDLE_ID = "io.github.kurtlehnardt.flightrisk.launcher"
+BUNDLE_ID = "org.flightrisk.launcher"
 BASE_PYTHON = getattr(sys, "_base_executable", sys.executable)
 
 pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="the macOS installer runs on macOS only")
@@ -577,6 +577,36 @@ def test_an_unrelated_app_of_the_same_name_is_left_alone(box: Box):
     assert result.returncode == 0
     assert "is not FlightRisk's launcher app" in result.stderr
     assert plistlib.loads((foreign / "Info.plist").read_bytes())["CFBundleIdentifier"] == "com.example.other"
+
+
+def _plant_app(folder: Path, bundle_id: str) -> Path:
+    contents = folder / "FlightRisk.app" / "Contents"
+    contents.mkdir(parents=True)
+    (contents / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": bundle_id}))
+    return contents / "Info.plist"
+
+
+def test_a_launcher_app_with_the_earlier_bundle_id_is_replaced(box: Box):
+    plist = _plant_app(box.applications, "io.github.example.flightrisk.launcher")
+    result = box.install()
+    assert result.returncode == 0, result.stderr
+    assert "is not FlightRisk's launcher app" not in result.stderr
+    assert plistlib.loads(plist.read_bytes())["CFBundleIdentifier"] == BUNDLE_ID
+
+
+def test_an_app_with_a_lookalike_bundle_id_is_left_alone(box: Box):
+    plist = _plant_app(box.applications, "io.github.example.other.launcher")
+    result = box.install()
+    assert result.returncode == 0
+    assert "is not FlightRisk's launcher app" in result.stderr
+    assert plistlib.loads(plist.read_bytes())["CFBundleIdentifier"] == "io.github.example.other.launcher"
+
+
+def test_uninstall_lists_a_launcher_app_with_the_earlier_bundle_id(installed: Box):
+    shutil.rmtree(installed.bundle)
+    _plant_app(installed.applications, "io.github.example.flightrisk.launcher")
+    check = json.loads(installed.run(MACOS / "uninstall.sh", "--check").stdout)
+    assert check["apps"] == [str(installed.bundle)]
 
 
 def test_installs_main_when_no_release_exists(tmp_path):

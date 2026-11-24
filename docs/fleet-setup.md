@@ -2,7 +2,7 @@
 
 This guide gets two Tello EDU drones flying under one FlightRisk ground station. There are three network paths: station mode, AP mode with an Ethernet link, and AP mode with a Thunderbolt link (Path 3, which has the same addresses as Path 2). All use the same protocol and the same coordinator code. A single variable, `FLIGHTRISK_FLEET_NET`, selects the path, and `scripts/fleet_env.sh` (Mac) or `scripts/fleet_env.ps1` (Windows) turns it into the host and URL settings the launchers need.
 
-Layout in both paths: the ground station and edge-1 run on the Mac, and edge-2 runs on the Windows laptop. Drone 1 is controlled from the Mac and drone 2 from the Windows laptop.
+Layout in both paths: the ground station and edge-1 run on the ground-station laptop, and edge-2 runs on the Windows laptop. Drone 1 is controlled from the ground-station laptop and drone 2 from the Windows laptop.
 
 Once the network is set up, the launcher window ([launcher.md](launcher.md)) can start the ground station and the edges on each computer instead of the scripts below.
 
@@ -47,7 +47,7 @@ When a drone refuses lanes for its geofence, the refusal names where the path wo
 
 ## Video port verdict
 
-Each Tello streams video to UDP port 11111 on whichever host sent `streamon`, and djitellopy binds one video capture per port, so two drones streaming to one host would collide. The SDK command `port <state> <video>` could move the video port, but whether Tello EDU firmware accepts it is unverified, because the SDK 2.0 and 3.0 documents could not be text-extracted when this was designed. The design therefore does not depend on `port`: run one edge process per host. Drone 1 gets `streamon` from the Mac and drone 2 gets it from the Windows laptop, so each drone's video goes to a different IP. This holds in both paths. The hardware check probes `port 8890 11112` on drone 2 and reports `ok` or `unknown command`. If it reports `ok`, a one-host two-edge layout becomes an option, still with one edge process per drone, but nothing here requires it. Two standard Tellos can also be flown from one Windows laptop with two Wi-Fi adapters, one edge per adapter, using `--tello-local-ip`; see [Two standard Tellos from one Windows laptop](two-tellos-one-pc.md).
+Each Tello streams video to UDP port 11111 on whichever host sent `streamon`, and djitellopy binds one video capture per port, so two drones streaming to one host would collide. The SDK command `port <state> <video>` could move the video port, but whether Tello EDU firmware accepts it is unverified, because the SDK 2.0 and 3.0 documents could not be text-extracted when this was designed. The design therefore does not depend on `port`: run one edge process per host. Drone 1 gets `streamon` from the ground-station laptop and drone 2 gets it from the Windows laptop, so each drone's video goes to a different IP. This holds in both paths. The hardware check probes `port 8890 11112` on drone 2 and reports `ok` or `unknown command`. If it reports `ok`, a one-host two-edge layout becomes an option, still with one edge process per drone, but nothing here requires it. Two standard Tellos can also be flown from one Windows laptop with two Wi-Fi adapters, one edge per adapter, using `--tello-local-ip`; see [Two standard Tellos from one Windows laptop](two-tellos-one-pc.md).
 
 ## Common setup (both paths)
 
@@ -65,7 +65,7 @@ Windows (PowerShell):
 $env:FLIGHTRISK_EDGE_TOKEN = "choose-a-long-random-string"
 ```
 
-Use the same value on both machines. Run the hardware check before anything else, from the repository root on the Mac:
+Use the same value on both machines. Run the hardware check before anything else, from the repository root on the ground-station laptop:
 
 ```
 venv/bin/python scripts/tello_hw_check.py --drones 192.168.10.1 --json
@@ -117,9 +117,9 @@ venv/bin/python scripts/tello_hw_check.py --drones 192.168.1.50 --video-check
 
 The state stream arrives on UDP port 8890 and video on UDP port 11111. The video check counts frames for 5 seconds. If everything passes, continue. If the `ap` step or the round-trips fail, switch to Path 2.
 
-### 3. Find the Mac's LAN IP
+### 3. Find the ground-station laptop's LAN IP
 
-On the Mac:
+On the ground-station laptop:
 
 ```
 ipconfig getifaddr en0
@@ -129,7 +129,7 @@ Use `en1` if `en0` prints nothing.
 
 ### 4. Export the settings
 
-On the Mac (drone 1 is 192.168.1.50, Mac LAN IP is 192.168.1.20 in this example):
+On the ground-station laptop (drone 1 is 192.168.1.50, ground-station laptop LAN IP is 192.168.1.20 in this example):
 
 ```
 export FLIGHTRISK_FLEET_NET=station
@@ -147,7 +147,7 @@ $env:FLIGHTRISK_TELLO_HOST = "192.168.1.51"
 . .\scripts\fleet_env.ps1
 ```
 
-The script sets `FLIGHTRISK_EDGE_HOST` to the Mac LAN IP (the ground station binds it) and `FLIGHTRISK_EDGE_WS` to `ws://<mac lan ip>:9000` (the edge connects to it). Allow the macOS firewall prompt for Python on first run, or see the firewall note in Path 2.
+The script sets `FLIGHTRISK_EDGE_HOST` to the ground-station laptop LAN IP (the ground station binds it) and `FLIGHTRISK_EDGE_WS` to `ws://<ground-station LAN IP>:9000` (the edge connects to it). Allow the macOS firewall prompt for Python on first run, or see the firewall note in Path 2.
 
 Continue at "Launch" below.
 
@@ -157,7 +157,7 @@ Each laptop joins one Tello's own Wi-Fi, so that Wi-Fi radio is busy and cannot 
 
 ### Hardware list
 
-- One USB-C Gigabit Ethernet adapter for the Mac.
+- One USB-C Gigabit Ethernet adapter for the ground-station laptop.
 - One USB-C or USB-A Gigabit Ethernet adapter for the Windows laptop, only if it has no RJ45 port.
 - One Cat5e or Cat6 Ethernet patch cable. A crossover cable is not needed because gigabit adapters auto-negotiate the pair swap (auto-MDIX).
 - Two Tello EDUs in factory AP mode (hold the power button for about 5 seconds if unsure, see the reset section above).
@@ -167,9 +167,9 @@ Each laptop joins one Tello's own Wi-Fi, so that Wi-Fi radio is busy and cannot 
 | Item | Value |
 |---|---|
 | Subnet | 10.42.0.0/24, static, no gateway, no DNS |
-| Mac (ground station, edge-1) | 10.42.0.1 |
+| Ground-station laptop, macOS (ground station, edge-1) | 10.42.0.1 |
 | Windows (edge-2) | 10.42.0.2 |
-| Ground WebSocket | binds `127.0.0.1` and `10.42.0.1`; edge-1 on the Mac uses `ws://127.0.0.1:9000`, edge-2 on Windows uses `ws://10.42.0.1:9000` |
+| Ground WebSocket | binds `127.0.0.1` and `10.42.0.1`; edge-1 on the ground-station laptop uses `ws://127.0.0.1:9000`, edge-2 on Windows uses `ws://10.42.0.1:9000` |
 | Tello address on both laptops | 192.168.10.1 (each laptop sees only its own drone) |
 
 Leave the gateway blank. The laptops keep their Wi-Fi for the drones, and a gateway on the cable would pull the default route off the drone network.
@@ -178,7 +178,7 @@ Leave the gateway blank. The laptops keep their Wi-Fi for the drones, and a gate
 
 Plug the adapters and the cable in so the two laptops are connected directly.
 
-### 2. Configure the Mac
+### 2. Configure the ground-station laptop
 
 List the hardware ports and note the adapter's service name (typically "USB 10/100/1000 LAN") and its device (for example `en4`):
 
@@ -222,11 +222,11 @@ New-NetFirewallRule -DisplayName "FlightRisk ICMPv4 echo" -Direction Inbound -Pr
 New-NetFirewallRule -DisplayName "FlightRisk ground 9000" -Direction Inbound -Protocol TCP -LocalPort 9000 -Action Allow
 ```
 
-The ICMP rule lets the Mac ping the Windows laptop during the link check. The TCP 9000 rule is only used if you move the ground station to the Windows laptop. In the default layout the Windows laptop only makes an outbound connection to 10.42.0.1:9000, which Windows Defender Firewall allows by default.
+The ICMP rule lets the ground-station laptop ping the Windows laptop during the link check. The TCP 9000 rule is only used if you move the ground station to the Windows laptop. In the default layout the Windows laptop only makes an outbound connection to 10.42.0.1:9000, which Windows Defender Firewall allows by default.
 
 ### 4. Check the cable link
 
-On the Mac, start the server side (it pings 10.42.0.2 and listens on 10.42.0.1:9000):
+On the ground-station laptop, start the server side (it pings 10.42.0.2 and listens on 10.42.0.1:9000):
 
 ```
 venv/bin/python scripts/check_fleet_link.py --role server
@@ -238,13 +238,13 @@ On Windows, run the client side (it pings 10.42.0.1, opens `ws://10.42.0.1:9000`
 venv\Scripts\python.exe scripts\check_fleet_link.py --role client --peer 10.42.0.1
 ```
 
-Both sides print `PASS` or `FAIL` for the ping and for the WebSocket. Stop the server with Ctrl-C when done. If you only have the hardware check script, the same test is available as `scripts/tello_hw_check.py --fleet-net ap --link-role server` on the Mac and `--fleet-net ap --link-role client --peer 10.42.0.1` on Windows.
+Both sides print `PASS` or `FAIL` for the ping and for the WebSocket. Stop the server with Ctrl-C when done. If you only have the hardware check script, the same test is available as `scripts/tello_hw_check.py --fleet-net ap --link-role server` on the ground-station laptop and `--fleet-net ap --link-role client --peer 10.42.0.1` on Windows.
 
 If the ping fails, recheck the addresses with `ifconfig` (Mac) or `Get-NetIPAddress` (Windows) and confirm the firewall rules. If only the WebSocket fails, the server side is not running yet.
 
 ### 5. Join the drones and check them
 
-Join the Mac's Wi-Fi to drone 1's `TELLO-XXXXXX` network and the Windows laptop's Wi-Fi to drone 2's. Then verify plain AP mode on each laptop:
+Join the ground-station laptop's Wi-Fi to drone 1's `TELLO-XXXXXX` network and the Windows laptop's Wi-Fi to drone 2's. Then verify plain AP mode on each laptop:
 
 ```
 venv/bin/python scripts/tello_hw_check.py --ap-mode-check
@@ -254,7 +254,7 @@ On Windows use `venv\Scripts\python.exe scripts\tello_hw_check.py --ap-mode-chec
 
 ### 6. Export the settings
 
-On the Mac:
+On the ground-station laptop:
 
 ```
 export FLIGHTRISK_FLEET_NET=ap
@@ -270,11 +270,11 @@ $env:FLIGHTRISK_FLEET_NET = "ap"
 
 In AP mode the script fixes `FLIGHTRISK_TELLO_HOST` to 192.168.10.1 on both hosts and `FLIGHTRISK_EDGE_HOST` to the bind list `127.0.0.1,10.42.0.1` (loopback first, then the cable address; never a wildcard). The ground station needs `FLIGHTRISK_EDGE_TOKEN` because one of those addresses is not loopback. If the cable address is missing at start, the ground station listens on loopback only and retries.
 
-`FLIGHTRISK_EDGE_WS` depends on where the edge runs, and you say so explicitly with `FLIGHTRISK_GROUND_LOCAL`. On the Mac, which runs the ground station and edge-1, run `export FLIGHTRISK_GROUND_LOCAL=1` before sourcing the script and `FLIGHTRISK_EDGE_WS` becomes `ws://127.0.0.1:9000`. The variable must be exported, not just set: `scripts/demo_edge.sh` runs as a child process and sources `fleet_env.sh` again, so an unexported variable is lost and the edge would dial the cable address even though the earlier output said loopback. Only the exact value `1` counts; any other non-empty value other than `0` prints a warning and uses the cable address. On the Windows edge-only laptop, never set it. On Windows leave it unset and `FLIGHTRISK_EDGE_WS` is `ws://10.42.0.1:9000`. Nothing guesses: without the variable every edge dials `ws://10.42.0.1:9000`, as before. Station mode ignores the variable.
+`FLIGHTRISK_EDGE_WS` depends on where the edge runs, and you say so explicitly with `FLIGHTRISK_GROUND_LOCAL`. On the ground-station laptop, which runs the ground station and edge-1, run `export FLIGHTRISK_GROUND_LOCAL=1` before sourcing the script and `FLIGHTRISK_EDGE_WS` becomes `ws://127.0.0.1:9000`. The variable must be exported, not just set: `scripts/demo_edge.sh` runs as a child process and sources `fleet_env.sh` again, so an unexported variable is lost and the edge would dial the cable address even though the earlier output said loopback. Only the exact value `1` counts; any other non-empty value other than `0` prints a warning and uses the cable address. On the Windows edge-only laptop, never set it. On Windows leave it unset and `FLIGHTRISK_EDGE_WS` is `ws://10.42.0.1:9000`. Nothing guesses: without the variable every edge dials `ws://10.42.0.1:9000`, as before. Station mode ignores the variable.
 
 With this setup, pulling the cable is expected to leave edge-1 on loopback, so it should keep flying or holding, and edge-2 should lose its link, hit its watchdog and land. UNVERIFIED on hardware; step 8 measures it. If 10.42.0.1 goes away (step 6 shows whether it does), the ground station logs `ground_bind_address_lost`, and `ground_bind_address_restored` when it returns.
 
-Precondition: port 9000 on the Mac's 127.0.0.1 must be free, because a loopback bind failure stops the ground station (loudly, before flight). Homebrew's php-fpm is one default that uses it. Check with `lsof -nP -iTCP:9000 -sTCP:LISTEN`; no output means it is free.
+Precondition: port 9000 on the ground-station laptop's 127.0.0.1 must be free, because a loopback bind failure stops the ground station (loudly, before flight). Homebrew's php-fpm is one default that uses it. Check with `lsof -nP -iTCP:9000 -sTCP:LISTEN`; no output means it is free.
 
 ## Path 3: Thunderbolt link
 
@@ -298,16 +298,16 @@ Status: this path is UNVERIFIED on our hardware. Mac to Windows IP over Thunderb
 | Item | Value |
 |---|---|
 | Subnet | 10.42.0.0/24, static, no gateway, no DNS |
-| Mac (ground station, edge-1) | 10.42.0.1 |
+| Ground-station laptop, macOS (ground station, edge-1) | 10.42.0.1 |
 | Windows (edge-2) | 10.42.0.2 |
-| Ground WebSocket | binds `127.0.0.1` and `10.42.0.1`; edge-1 on the Mac uses `ws://127.0.0.1:9000`, edge-2 on Windows uses `ws://10.42.0.1:9000` |
+| Ground WebSocket | binds `127.0.0.1` and `10.42.0.1`; edge-1 on the ground-station laptop uses `ws://127.0.0.1:9000`, edge-2 on Windows uses `ws://10.42.0.1:9000` |
 | Tello address on both laptops | 192.168.10.1 over Wi-Fi |
 
 Do not use the self-assigned 169.254.x.x addresses for the demo. They change whenever the Windows adapter is recreated, which happens on every replug. They are still useful to prove the physical link: if a static address does not work, ping the peer's 169.254 address shown by `ipconfig` or `ifconfig`.
 
 Never turn on macOS Internet Sharing or Windows Internet Connection Sharing. Either one would bridge one Tello's 192.168.10.0/24 network onto the cable.
 
-### Mac steps
+### Ground-station laptop steps (macOS)
 
 1. List the network services and find the Thunderbolt one:
 
@@ -330,10 +330,10 @@ Never turn on macOS Internet Sharing or Windows Internet Connection Sharing. Eit
    netstat -rn -f inet | grep -E "default|10.42|192.168.10"
    ```
 
-   `route -n get 10.42.0.2` must show the Thunderbolt interface. `route -n get 192.168.10.1` must show Wi-Fi once the Mac has joined its drone. No default route may point at the Thunderbolt interface.
+   `route -n get 10.42.0.2` must show the Thunderbolt interface. `route -n get 192.168.10.1` must show Wi-Fi once the ground-station laptop has joined its drone. No default route may point at the Thunderbolt interface.
 
 4. If the macOS application firewall is on, allow Python as in Path 2, step 2.
-5. Keep the Mac awake for the whole session, and never close the lid. Record before you change: run `pmset -g custom` and write down the current `sleep` value for AC Power. Then:
+5. Keep the ground-station laptop awake for the whole session, and never close the lid. Record before you change: run `pmset -g custom` and write down the current `sleep` value for AC Power. Then:
 
    ```
    caffeinate -dimsu
@@ -344,7 +344,7 @@ Never turn on macOS Internet Sharing or Windows Internet Connection Sharing. Eit
 
 ### Windows steps
 
-The Windows steps are in `docs/windows-edge-setup.md`, section "Thunderbolt link to the Mac".
+The Windows steps are in `docs/windows-edge-setup.md`, section "Thunderbolt link to the ground-station laptop".
 
 ### Teardown / undo
 
@@ -378,7 +378,7 @@ Run these steps in order when the cable arrives, using a checkout of this reposi
 
 - Mac: `system_profiler SPThunderboltDataType`
 - Windows: run `winver`, then in PowerShell `Get-PnpDevice | ? FriendlyName -match "USB4|Thunderbolt"`, and check the laptop's specification sheet for USB4 or Thunderbolt 4 versus Thunderbolt 3.
-- Pass: the Mac lists a Thunderbolt bus, and Windows 11 shows a USB4 or Thunderbolt controller.
+- Pass: the ground-station laptop lists a Thunderbolt bus, and Windows 11 shows a USB4 or Thunderbolt controller.
 - Fail: Windows has no Thunderbolt or USB4 port, or runs Windows 10. Go to rung 2 of the fallback ladder.
 
 **Step 2. Plug in directly (2 min).** Connect a Thunderbolt or USB4 cable straight from one laptop to the other. No dock, no hub.
@@ -387,28 +387,28 @@ Run these steps in order when the cable arrives, using a checkout of this reposi
 
 - Mac: `networksetup -listallhardwareports` and `ifconfig bridge0`
 - Windows: `Get-NetAdapter | ft Name,InterfaceDescription,Status,LinkSpeed`
-- Pass: both sides show an interface that is up. On Windows it is a new adapter with status Up at several Gbps. On the Mac `ifconfig bridge0` shows `status: active`.
+- Pass: both sides show an interface that is up. On Windows it is a new adapter with status Up at several Gbps. On the ground-station laptop `ifconfig bridge0` shows `status: active`.
 - Fail: reseat the cable, try the other Thunderbolt port, reboot Windows, and ask whether Group Policy disables USB4 networking. If it still fails, go to rung 2.
 
-**Step 4. Addressing (5 min).** Apply the Mac steps and the Windows steps above.
+**Step 4. Addressing (5 min).** Apply the ground-station laptop steps and the Windows steps above.
 
-- Pass: `route -n get 10.42.0.2` on the Mac shows the Thunderbolt interface, the Mac has no default route through it, and the Windows MTU on the cable adapter is 1500.
+- Pass: `route -n get 10.42.0.2` on the ground-station laptop shows the Thunderbolt interface, the ground-station laptop has no default route through it, and the Windows MTU on the cable adapter is 1500.
 - Fail: fix the addresses before going on. If the static address does not stick on Windows, prove the link with the 169.254 addresses first.
 
 **Step 5. Link quality (15 min).**
 
 - Mac: `ping -c 600 10.42.0.2` (10 minutes). Windows: `ping -n 600 10.42.0.1`.
 - Then run the repository check. Mac: `venv/bin/python scripts/check_fleet_link.py --role server`. Windows: `venv\Scripts\python.exe scripts\check_fleet_link.py --role client --peer 10.42.0.1 --bind 10.42.0.2 --soak 120`.
-- Optional: `iperf3 -s -B 10.42.0.1` on the Mac, then `iperf3 -c 10.42.0.1 -t 10` and again with `-R` on Windows. Over 100 Mbit/s is plenty. Skip it if iperf3 is not installed.
+- Optional: `iperf3 -s -B 10.42.0.1` on the ground-station laptop, then `iperf3 -c 10.42.0.1 -t 10` and again with `-R` on Windows. Over 100 Mbit/s is plenty. Skip it if iperf3 is not installed.
 - Pass: the pings show 0 percent loss, an average under 1 ms and a maximum under 10 ms. Both sides of `check_fleet_link.py` print PASS. The median WebSocket round trip is under 5 ms. The soak line says PASS, which means no lost frame and no gap between replies above 500 ms. These thresholds are our own targets. The real requirement is the 3 second fleet watchdog.
 - Fail: any loss, or any gap above 500 ms. Go to rung 2.
 
 **Step 6. Robustness (15 min).**
 
-1. Unplug the cable for 10 seconds, then plug it back in. Note when the ping fails, how many seconds until the first good ping after replugging, whether Windows kept 10.42.0.2 (`Get-NetIPAddress -InterfaceAlias "<name>"`), and whether the Mac still lists 10.42.0.1 in `ifconfig` while the cable is out.
+1. Unplug the cable for 10 seconds, then plug it back in. Note when the ping fails, how many seconds until the first good ping after replugging, whether Windows kept 10.42.0.2 (`Get-NetIPAddress -InterfaceAlias "<name>"`), and whether the ground-station laptop still lists 10.42.0.1 in `ifconfig` while the cable is out.
 2. Repeat the unplug three times, and once while `check_fleet_link.py` is running.
-3. Let the Windows screen turn off and lock the Mac screen. Confirm the ping continues.
-4. Confirm the power settings from the Mac steps and the Windows steps are applied.
+3. Let the Windows screen turn off and lock the ground-station laptop screen. Confirm the ping continues.
+4. Confirm the power settings from the ground-station laptop steps and the Windows steps are applied.
 
 - Pass: the link recovers by itself after every replug within 30 seconds and the Windows address is kept.
 - Fail: the Windows address is lost on replug. Re-apply it with the `New-NetIPAddress` command each time, and note this in the results. If the link does not come back at all, go to rung 2.
@@ -417,7 +417,7 @@ Run these steps in order when the cable arrives, using a checkout of this reposi
 
 1. Join each laptop's Wi-Fi to its own Tello.
 2. Repeat the route checks from step 4.
-3. On each laptop run `scripts/tello_hw_check.py --drones 192.168.10.1 --video-check --json`. At the same time run a ping soak over the cable. On the Mac use `ping -i 0.2 10.42.0.2` (`sudo` is needed only for intervals under 0.002 s, per `man ping`).
+3. On each laptop run `scripts/tello_hw_check.py --drones 192.168.10.1 --video-check --json`. At the same time run a ping soak over the cable. On the ground-station laptop use `ping -i 0.2 10.42.0.2` (`sudo` is needed only for intervals under 0.002 s, per `man ping`).
 4. Pass: both checks pass, the cable shows no packet loss during the video, and on Windows the state and video packets arrive. That proves the firewall rules for UDP 8890 and 11111.
 5. Fail: Windows does not receive state or video. Check the firewall rules, then retry.
 
@@ -449,15 +449,15 @@ The protocol and addresses are the same on every rung. Only the cabling changes.
 
 ## Layout B with Claude reasoning
 
-Layout B runs the ground station, the dashboard and both edges on one Windows laptop (the ZBook), one Tello per Wi-Fi adapter (see [two-tellos-one-pc.md](two-tellos-one-pc.md) and the launcher's "Layout B (everything here)" preset). By default the demo needs no internet. This section adds Claude as the reasoning backend, which does need the internet, and the laptop has no spare uplink unless you plan one: both Tello Wi-Fi adapters are joined to Tello access points, and a Tello access point has no internet. (The "cable" of Path 2 is a laptop-to-laptop link with no gateway; it is not an uplink either.)
+Layout B runs the ground station, the dashboard and both edges on one Windows laptop (the edge laptop of Layout A), one Tello per Wi-Fi adapter (see [two-tellos-one-pc.md](two-tellos-one-pc.md) and the launcher's "Layout B (everything here)" preset). By default the demo needs no internet. This section adds Claude as the reasoning backend, which does need the internet, and the laptop has no spare uplink unless you plan one: both Tello Wi-Fi adapters are joined to Tello access points, and a Tello access point has no internet. (The "cable" of Path 2 is a laptop-to-laptop link with no gateway; it is not an uplink either.)
 
 **Claude reasoning in Layout B needs `feature/edge-claude-reasoning`.** The call that sends an edge-sourced alert to Claude is in that branch, not on this tree; until it is merged, steps 2 to 5 prepare the machine but no reasoning request is made for edge alerts.
 
-This was written from code and from the ZBook's adapter layout; the PowerShell steps and the installer option have not yet been run end to end on the ZBook.
+This was written from code and from the edge laptop's adapter layout; the PowerShell steps and the installer option have not yet been run end to end on the edge laptop.
 
 ### Which adapter is which
 
-On the ZBook at the time of writing, the built-in Intel AX201 Wi-Fi ("Wi-Fi", ifIndex 21) is on the home LAN and is the internet uplink. The two TP-Link USB Wi-Fi adapters each join one Tello access point: "Wi-Fi 2" (ifIndex 10, static 192.168.10.50/24) and "Wi-Fi 5" (ifIndex 26). **Windows renames and re-indexes the USB adapters across replugs** ("Wi-Fi 5" was "Wi-Fi 3" on Oct 28). Never copy names or indexes from this page or an old note: before every session run
+On the Windows laptop at the time of writing, the built-in Wi-Fi adapter ("Wi-Fi") is on the home LAN and is the internet uplink. The two USB Wi-Fi adapters each join one Tello access point: "Wi-Fi 2" (static 192.168.10.50/24) and "Wi-Fi 5". **Windows renames and re-indexes the USB adapters across replugs** ("Wi-Fi 5" was "Wi-Fi 3" on Oct 28). Never copy names or indexes from this page or an old note: before every session run
 
 ```powershell
 Get-NetAdapter | Sort-Object ifIndex | Format-Table Name, InterfaceDescription, ifIndex, Status
@@ -485,7 +485,7 @@ venv\Scripts\python.exe -c "import open_clip; open_clip.create_model_and_transfo
 
 Without the weights and without internet the ground starts with ReID off: setting a target photo then answers 503 ("Person re-identification is not loaded") and no alert can fire. The same weights are needed by each edge process, and they share the cache.
 
-**CPU.** Every edge runs a ViT-B/16 over every person crop, so two edges and the ground on the ZBook's 4 cores (no GPU) compete for the CPU. If the dashboard stalls, use the every-Nth-frame setting under "Cutting edge CPU load" below.
+**CPU.** Every edge runs a ViT-B/16 over every person crop, so two edges and the ground on the Windows laptop's 4 cores (no GPU) compete for the CPU. If the dashboard stalls, use the every-Nth-frame setting under "Cutting edge CPU load" below.
 
 The ground and the edges need `yolo11n.pt`, and a clean clone has none. The installer downloads it into the app folder and checks its SHA-256; if it printed "could not download yolo11n.pt now", run the installer again with internet before launching. Check with `Test-Path "$env:LOCALAPPDATA\FlightRisk\app\yolo11n.pt"`. In a development checkout use `venv\Scripts\python.exe -m pip install -r requirements-ground.txt` and `scripts\install_windows.ps1` for the weights.
 
@@ -545,7 +545,7 @@ If the uplink is down, the flight still works: detection, matching and the alert
 
 Run the launchers after exporting the settings and `FLIGHTRISK_EDGE_TOKEN`. Start the ground station first.
 
-On the Mac, in one terminal for the ground station and another for edge-1:
+On the ground-station laptop, in one terminal for the ground station and another for edge-1:
 
 ```
 scripts/demo_ground.sh
@@ -560,7 +560,7 @@ On Windows, for edge-2:
 $env:DRONE_ID = "2"; $env:ALT_CM = "130"; .\scripts\demo_edge.ps1
 ```
 
-A Tello edge needs the IP of the Wi-Fi adapter joined to its drone, `FLIGHTRISK_TELLO_LOCAL_IP` (or `--tello-local-ip`; `export FLIGHTRISK_TELLO_LOCAL_IP=192.168.10.2` on the Mac, `$env:FLIGHTRISK_TELLO_LOCAL_IP = "192.168.10.2"` on Windows, with the address `ipconfig` or `ifconfig` shows for that adapter), whenever obstacle sensing is required, which is the default. Only that bound decoder stamps each frame with its capture time, and without the stamps the obstacle sensor could judge a view from before the last move, so the edge refuses to start and names the setting. One drone on one adapter works the same way (`docs/two-tellos-one-pc.md`). Under `FLIGHTRISK_OBSTACLE_SENSING=off` the edge starts without it and logs `edge_obstacle_no_capture_stamps`.
+A Tello edge needs the IP of the Wi-Fi adapter joined to its drone, `FLIGHTRISK_TELLO_LOCAL_IP` (or `--tello-local-ip`; `export FLIGHTRISK_TELLO_LOCAL_IP=192.168.10.2` on the ground-station laptop, `$env:FLIGHTRISK_TELLO_LOCAL_IP = "192.168.10.2"` on Windows, with the address `ipconfig` or `ifconfig` shows for that adapter), whenever obstacle sensing is required, which is the default. Only that bound decoder stamps each frame with its capture time, and without the stamps the obstacle sensor could judge a view from before the last move, so the edge refuses to start and names the setting. One drone on one adapter works the same way (`docs/two-tellos-one-pc.md`). Under `FLIGHTRISK_OBSTACLE_SENSING=off` the edge starts without it and logs `edge_obstacle_no_capture_stamps`.
 
 An edge refuses to start when `ALT_CM` is above its ceiling limit (`FLIGHTRISK_CEILING_CM` minus `FLIGHTRISK_CEILING_MARGIN_CM`, 140 cm by default); see [Ceiling height and altitude slots](ceiling-and-altitude.md). On a dashboard flight the slot comes from the dashboard's settings, not from `ALT_CM`.
 
@@ -572,19 +572,19 @@ Confirming a match on a fleet lands every drone in place with LAND ALL. The Tell
 
 ## Cutting edge CPU load: torch threads, and detection on every Nth frame (sensing off only)
 
-Two edges on one laptop without a GPU can use all of its CPU. On a ZBook (Intel i7-10610U, 4 cores and 8 threads, no GPU) running two edges with the HERIDAL `yolo11s` detector, each edge managed 2.5 to 3.2 detections per second and the CPU sat at 100 percent, which starved the dashboard server. Each edge also runs MiDaS for the obstacle sensor, and an overloaded laptop lets the video decoder fall behind the drone's video.
+Two edges on one laptop without a GPU can use all of its CPU. On a Windows laptop (4 cores and 8 threads, no GPU) running two edges with the HERIDAL `yolo11s` detector, each edge managed 2.5 to 3.2 detections per second and the CPU sat at 100 percent, which starved the dashboard server. Each edge also runs MiDaS for the obstacle sensor, and an overloaded laptop lets the video decoder fall behind the drone's video.
 
-**Torch threads.** Each edge limits torch to 2 threads and one inter-op thread by default (`FLIGHTRISK_EDGE_TORCH_THREADS`, 0 to 64; 0 leaves torch's own default of one thread per core). With torch's default every edge process would use all 4 cores for YOLO and MiDaS at once, so two edges and the ground oversubscribe the ZBook. 2 per edge fits two edges and the ground on its 4 cores; one edge alone on the ZBook may use 4. The edge logs `edge_torch_threads` with the numbers in force.
+**Torch threads.** Each edge limits torch to 2 threads and one inter-op thread by default (`FLIGHTRISK_EDGE_TORCH_THREADS`, 0 to 64; 0 leaves torch's own default of one thread per core). With torch's default every edge process would use all 4 cores for YOLO and MiDaS at once, so two edges and the ground oversubscribe the Windows laptop. 2 per edge fits two edges and the ground on its 4 cores; one edge alone on the Windows laptop may use 4. The edge logs `edge_torch_threads` with the numbers in force.
 
 **The frame stride.** `--frame-stride N` on `python -m flightrisk.edge_device` (environment variable `FLIGHTRISK_EDGE_FRAME_STRIDE`) runs detection, ReID and crop encoding on only every Nth frame. The default, 1, processes every frame. The flag wins over the environment variable, which wins over the default. N must be a whole number from 1 to 30, written with plain digits (`1_0` and non-ASCII digits are refused); 0, negative, non-integer and larger values stop the edge at startup with an error.
 
-- **A stride above 1 is refused while obstacle sensing is required** (`FLIGHTRISK_OBSTACLE_SENSING=required`, the default), on a Tello edge and a fake edge alike. The obstacle sensor's person cue needs a detection of a view taken after each stop, and a stride starves it: the review of PR #170 measured one 5 s frame at stride 10 leaving about 50 s with no detection. The edge stops at startup with a message that names the stride and the remedy. Use stride 1 whenever obstacle sensing is required. Only `FLIGHTRISK_OBSTACLE_SENSING=off`, which flies with no obstacle sensing at all (`docs/obstacle-sensing.md`), allows a stride, and then a stride of at most 2 is the recommendation for the ZBook-only layout.
+- **A stride above 1 is refused while obstacle sensing is required** (`FLIGHTRISK_OBSTACLE_SENSING=required`, the default), on a Tello edge and a fake edge alike. The obstacle sensor's person cue needs a detection of a view taken after each stop, and a stride starves it: the review of PR #170 measured one 5 s frame at stride 10 leaving about 50 s with no detection. The edge stops at startup with a message that names the stride and the remedy. Use stride 1 whenever obstacle sensing is required. Only `FLIGHTRISK_OBSTACLE_SENSING=off`, which flies with no obstacle sensing at all (`docs/obstacle-sensing.md`), allows a stride, and then a stride of at most 2 is the recommendation for Layout B (everything on the Windows laptop).
 - It applies to `--source tello` and `--source fake`. Giving a stride above 1 with any other source is refused rather than ignored. When the stride came from the environment variable, the error says `FLIGHTRISK_EDGE_FRAME_STRIDE=<n> is set`.
-- The stride is applied by time, not by counting frames. After the edge takes a frame, it drops frames until N times the longer of one frame time (1/30 s) and the time the edge spent on that frame has passed, then takes the newest one. So the detection interval is N times the processing time, not N frames: on the ZBook, with 330 ms per detection, stride 2 gives a detection about every 0.66 s, and stride 30 would give one about every 10 s without the cap below, not one a second (one a second is what stride 30 gives a detector faster than the video).
-- **The skip is capped.** Frames are dropped for at most `FLIGHTRISK_EDGE_STRIDE_MAX_SKIP_S` seconds (default 1.0, 0 to 5) after the edge comes back from a frame, however slow that frame was. Without the cap the blind time after a frame is (N - 1) times its processing time, so a 5 s frame at stride 10 left 45 s with no detection; with it, at most 1 s. On the ZBook the cap does not bind for stride 2 or 3 (0.33 s and 0.66 s of skip).
+- The stride is applied by time, not by counting frames. After the edge takes a frame, it drops frames until N times the longer of one frame time (1/30 s) and the time the edge spent on that frame has passed, then takes the newest one. So the detection interval is N times the processing time, not N frames: on the edge laptop, with 330 ms per detection, stride 2 gives a detection about every 0.66 s, and stride 30 would give one about every 10 s without the cap below, not one a second (one a second is what stride 30 gives a detector faster than the video).
+- **The skip is capped.** Frames are dropped for at most `FLIGHTRISK_EDGE_STRIDE_MAX_SKIP_S` seconds (default 1.0, 0 to 5) after the edge comes back from a frame, however slow that frame was. Without the cap the blind time after a frame is (N - 1) times its processing time, so a 5 s frame at stride 10 left 45 s with no detection; with it, at most 1 s. On the edge laptop the cap does not bind for stride 2 or 3 (0.33 s and 0.66 s of skip).
 - Dropped frames are still polled at the full rate. That keeps the newest frame available and keeps the frozen-stream recovery working, which counts identical polls. The video is decoded on its own thread, so polling does not hold the decoder up, and the polling costs almost no CPU.
 - With `--stream-video`, the thumbnails are produced together with the detections, so they are sent only for the processed frames, at the stride rate. They are not sent at the full frame rate.
-- Measured with a simulated 30 fps drone and a detector that takes 330 ms (the ZBook's speed), over 20 seconds, before the skip cap: detections per second were 3.00 at stride 1, 1.50 at stride 2 (0.50 of stride 1), 1.03 at stride 3 (0.34), 0.60 at stride 5 (0.20) and 0.30 at stride 10 (0.10). With the 1 s cap, stride 5 and above give about 0.75 a second at 330 ms. A person is therefore seen about N times less often.
+- Measured with a simulated 30 fps drone and a detector that takes 330 ms (the edge laptop's speed), over 20 seconds, before the skip cap: detections per second were 3.00 at stride 1, 1.50 at stride 2 (0.50 of stride 1), 1.03 at stride 3 (0.34), 0.60 at stride 5 (0.20) and 0.30 at stride 10 (0.10). With the 1 s cap, stride 5 and above give about 0.75 a second at 330 ms. A person is therefore seen about N times less often.
 - **Nothing with this stride code has flown.** The stride 2 flown on 28 October was an earlier version that counted frames (commit `acf72d2`), which was never merged; the merged, time-based stride has not flown.
 - The stride does not affect the obstacle sensor's camera frames. The sensor keeps the newest frame, fed by the drone's frame callback and by a small thread that reads the newest frame of the video decoder 30 times a second (`edge_obstacle_frame_poller` is logged when it starts). Each frame the decoder produces is taken once, judged by its capture time, and refused when the decoder marks it stale (see "How old a frame is" in `docs/obstacle-sensing.md`).
 - The launcher window has no field for it. The launcher passes its environment through to the edges, so set the variables before starting it, or use the flag when starting an edge by hand.
@@ -631,11 +631,11 @@ Why these defaults. No Ryze or DJI document gives a shutdown or no-takeoff tempe
 
 ## Observability (optional)
 
-To watch both laptops in Grafana, start the stack on the Mac and export these before running the launchers (details, and the cable bind for the Windows laptop, in `observability/README.md`, "Two laptops on the Thunderbolt cable"):
+To watch both laptops in Grafana, start the stack on the ground-station laptop and export these before running the launchers (details, and the cable bind for the Windows laptop, in `observability/README.md`, "Two laptops on the Thunderbolt cable"):
 
 ```
 export FLIGHTRISK_OTEL_ENABLED=true OTEL_EXPORTER=otlp-grpc OTEL_ENDPOINT=http://127.0.0.1:4317
-export OTEL_RESOURCE_ATTRIBUTES=service.instance.id=mac-ground FLIGHTRISK_TELEMETRY_CONTENT=1
+export OTEL_RESOURCE_ATTRIBUTES=service.instance.id=ground FLIGHTRISK_TELEMETRY_CONTENT=1
 ```
 
 On Windows set the same variables with `OTEL_ENDPOINT=http://10.42.0.1:4317` and `service.instance.id=edge-2`. `FLIGHTRISK_TELEMETRY_CONTENT=1` records what the operator typed (redacted, capped) and keeps a private copy of the target photo for the Grafana preview; it is off unless set. Secrets, embeddings, bystander crops, video frames and reasoning text are never recorded.
@@ -646,9 +646,9 @@ On Windows set the same variables with `OTEL_ENDPOINT=http://10.42.0.1:4317` and
 |---|---|---|
 | `FLIGHTRISK_FLEET_NET` | `station` | `ap` |
 | `FLIGHTRISK_TELLO_HOST` | discovered drone IP, set by you | 192.168.10.1 |
-| `FLIGHTRISK_EDGE_HOST` | Mac LAN IP | `127.0.0.1,10.42.0.1` |
-| `FLIGHTRISK_EDGE_WS` | `ws://<mac lan ip>:9000` | `ws://10.42.0.1:9000`, or `ws://127.0.0.1:9000` when `FLIGHTRISK_GROUND_LOCAL=1` (Mac) |
-| `FLIGHTRISK_GROUND_LOCAL` | ignored | exported as `1` on the Mac (ground station and edge-1), unset on Windows |
+| `FLIGHTRISK_EDGE_HOST` | ground-station laptop LAN IP | `127.0.0.1,10.42.0.1` |
+| `FLIGHTRISK_EDGE_WS` | `ws://<ground-station LAN IP>:9000` | `ws://10.42.0.1:9000`, or `ws://127.0.0.1:9000` when `FLIGHTRISK_GROUND_LOCAL=1` (ground-station laptop) |
+| `FLIGHTRISK_GROUND_LOCAL` | ignored | exported as `1` on the ground-station laptop (ground station and edge-1), unset on Windows |
 | `FLIGHTRISK_EDGE_TOKEN` | required, same on both | required, same on both |
 | Tello ports | UDP 8889 commands, 8890 state, 11111 video | same |
 

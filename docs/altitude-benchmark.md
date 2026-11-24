@@ -28,7 +28,7 @@ Measured on 2026-10-27 with `scripts/run_altitude_benchmark.sh`. Raw numbers are
 
 **Split used: the HERIDAL test split, 101 images (4000x3000), 337 person boxes.** The train split was not run. The full 8.3 GB zip downloaded at roughly 0.5 MB/s from Zenodo, which would have taken several hours, so the script fetched only the 101 test images and their VOC XML from inside the zip with HTTP range requests (about 0.5 GB). The data is the same HERIDAL record 5662351; LADD was not needed. Dataset files are in the gitignored `datasets/` directory and are not committed.
 
-**Setup.** Detector: `yolo11n.pt` (COCO pretrained, not fine-tuned on aerial imagery), confidence 0.4, device `mps` (Apple M1 Max). Single mode runs one full-frame pass, which ultralytics downscales to 640 px. Tiled mode uses 640 px tiles with 0.2 overlap. Matching uses IoU 0.3.
+**Setup.** Detector: `yolo11n.pt` (COCO pretrained, not fine-tuned on aerial imagery), confidence 0.4, device `mps` (Apple silicon). Single mode runs one full-frame pass, which ultralytics downscales to 640 px. Tiled mode uses 640 px tiles with 0.2 overlap. Matching uses IoU 0.3.
 
 | bin_px | n_gt | recall_single | precision_single | recall_tiled | precision_tiled |
 |---|---|---|---|---|---|
@@ -75,7 +75,7 @@ min_person_px (tiled): none, recall never reached 0.5 in any bin
 
 Hours are for one square mile. Ground team figures come from the ASRC sweep-width source and an assumed 1.5 km/h; drone speed and endurance for the open quad are assumptions, as the planner output notes.
 
-**Reproduce.** `DATASETS_DIR=/path/to/datasets PYTHON=venv/bin/python scripts/run_altitude_benchmark.sh` fetches the test split if absent, runs both modes (several minutes on an M1 Max), and redraws the plot.
+**Reproduce.** `DATASETS_DIR=/path/to/datasets PYTHON=venv/bin/python scripts/run_altitude_benchmark.sh` fetches the test split if absent, runs both modes (several minutes on a 10-core Apple silicon laptop), and redraws the plot.
 <!-- build:t11 end -->
 
 <!-- build:t22 start -->
@@ -83,7 +83,7 @@ Hours are for one square mile. Ground team figures come from the ASRC sweep-widt
 
 Measured on 2026-10-27 with `scripts/sweep_altitude.py` and `scripts/finetune_heridal.py`. Raw numbers are in `results/altitude_sweep.json` and `results/altitude_finetuned.json`.
 
-Every row below uses t11's HERIDAL test split (101 images, 4000x3000, 337 persons), t11's tiling (640 px tiles, 0.2 overlap), IoU 0.3 matching and the same bins, on `mps` (Apple M1 Max). A cell is recall, with true positives over ground truth persons in that bin. No test person is shorter than 24 px, so the empty bins below 24 px are left out.
+Every row below uses t11's HERIDAL test split (101 images, 4000x3000, 337 persons), t11's tiling (640 px tiles, 0.2 overlap), IoU 0.3 matching and the same bins, on `mps` (Apple silicon). A cell is recall, with true positives over ground truth persons in that bin. No test person is shorter than 24 px, so the empty bins below 24 px are left out.
 
 **Before and after.**
 
@@ -128,7 +128,7 @@ The sweep's rule picks the lowest `min_person_px`, then the highest overall F1. 
 - Validation data: 50 images drawn at random (seed 0) from the official val list of 155, including 22 with no person, 73 persons in all. They were never trained on. Ultralytics used their tiles to keep the best checkpoint, and the evaluate step used the full images to pick the confidence threshold.
 - Test data: the 101-image test split. The fetch excludes every test name from the train and val subsets. No test image was trained on or used to pick a checkpoint or threshold, and the fine-tuned model was scored on the test split once.
 - Tiles: the same windows as `PersonDetector.compute_tiles` at inference (640 px, 0.2 overlap). A box is labelled in a tile when at least half its area lies inside, clipped to the tile edge. Every tile with a person is kept: 1,343 train tiles with 1,763 labels. Tiles clear of every box are subsampled to one per person tile (1,343 of 17,636). Tiles that cut through a person without labelling it are dropped.
-- Training: `yolo11s.pt` (COCO) fine-tuned for 20 epochs, imgsz 640, batch 16, on `mps`, with Ultralytics 8.4.101 defaults otherwise (AdamW chosen automatically, mosaic off for the last 10 epochs). It took 51 minutes on the M1 Max. At the last epoch, Ultralytics reported mAP50 0.824 and mAP50-95 0.506 on the val tiles. The weights are `models/heridal_yolo11s.pt`, which is gitignored and not committed.
+- Training: `yolo11s.pt` (COCO) fine-tuned for 20 epochs, imgsz 640, batch 16, on `mps`, with Ultralytics 8.4.101 defaults otherwise (AdamW chosen automatically, mosaic off for the last 10 epochs). It took 51 minutes on a 10-core Apple silicon laptop. At the last epoch, Ultralytics reported mAP50 0.824 and mAP50-95 0.506 on the val tiles. The weights are `models/heridal_yolo11s.pt`, which is gitignored and not committed.
 - Confidence: the evaluate step ran the 50 validation images tiled at 0.1, 0.25, 0.4 and 0.5, a list fixed before any test run, and kept the highest overall F1. It chose 0.5 (validation recall 0.740, precision 0.701, F1 0.720). F1 was still rising at 0.5, the top of the list. Higher thresholds were not tried, so the test split was scored once.
 
 **Coverage at the measured values.** Both tables are the real output of `python -m flightrisk.drone.coverage`, run at the two values from the evidence above.
@@ -176,7 +176,7 @@ Hours are for one square mile. Tello rows are marked INFEASIBLE instead of given
     D=datasets/heridal
     # Test split (101 images), fetched the way t11 did.
     DATASETS_DIR=datasets PYTHON=python scripts/run_altitude_benchmark.sh
-    # Stock sweep on the test split (about 8 minutes on an M1 Max).
+    # Stock sweep on the test split (about 8 minutes on a 10-core Apple silicon laptop).
     python scripts/sweep_altitude.py --dataset $D/test --models yolo11n.pt models/yolo11s.pt models/yolo11m.pt \
         --conf 0.1 0.25 0.4 --output results/altitude_sweep.json
     # Validation and train subsets, fetched from the Zenodo zip with range requests.

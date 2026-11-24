@@ -1,8 +1,8 @@
 # FlightRisk Mobile -- Privacy Policy
 
 **Effective Date:** September 4, 2026
-**Last Updated:** November 22, 2026
-**Contact:** krlehnardt@gmail.com
+**Last Updated:** November 24, 2026
+**Contact:** open an issue at https://github.com/KurtLehnardt/flightRisk/issues. Issues are public, so do not put personal information, photos or details about a child in an issue.
 
 ---
 
@@ -182,4 +182,4 @@ We may update this privacy policy from time to time. Changes will be posted with
 
 For questions or concerns about this privacy policy or the app's data practices:
 
-**Email:** krlehnardt@gmail.com
+**Contact:** open an issue at https://github.com/KurtLehnardt/flightRisk/issues. Issues are public, so do not put personal information, photos or details about a child in an issue.
