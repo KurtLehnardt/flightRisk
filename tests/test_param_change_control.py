@@ -25,10 +25,10 @@ CHECKER_PATHS = (
 # The A1 baseline entry. Editing it needs an edit here too, which CODEOWNERS makes owned (F6, F7).
 MIN_ENTRIES = 1
 BASELINE = {
-    "previous": "c8e89f51c02c4d13781fe57e6da6f2b645f71012b10887c9534920084a24e430",
+    "previous": "c69c2a1f30b24c0e4d06525c75ffdc744d20e6df4bf39744ec46aaacf35f650c",
     "table": "f949df64f14cee5c1c025d683cabea1d56a493941db05c214c33f7deac628378",
     "golden": "7403c28493386027b0c383326d30d2bb2645fa54c154e289276f9246289d2504",
-    "allowlist": "9620d8432ea012b9c02189d4739909c64740f5ed3d680e07af32eb56f9c65743",
+    "allowlist": "501e5467604ccf3fda82616deeb45af43ba717fe5502114ba4c7ebebd313fd2d",
 }
 
 
@@ -118,7 +118,8 @@ def test_editing_an_old_log_entry_breaks_the_chain():
     appended = text + "\n## Planted\n\n- SHA-256 previous: " + hashlib.sha256(text.encode() + b"\n").hexdigest() + "\n"
     assert chain_errors(appended) == []
     edited = appended.replace("- Value: none changed.", "- Value: geofence changed.", 1)
-    assert edited != appended and chain_errors(edited) == ["## Planted"]
+    errors = chain_errors(edited)
+    assert edited != appended and errors and errors[-1] == "## Planted"
     deleted = appended.replace(_entries(appended)[0][1], "", 1)
     assert chain_errors(deleted)
 

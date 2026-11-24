@@ -8,7 +8,8 @@ latest entry, which is the last entry in this file.
 
 Each entry also records `SHA-256 previous`: the SHA-256 of this file's UTF-8 text before the entry's
 `## ` heading. The test checks every link of that chain, so editing or deleting an older entry
-fails. The test also pins the hashes of the A1 baseline entry.
+fails. The test also pins the hashes of the A1 baseline entry. The chain catches an edit to an old entry
+unless every later hash is also recomputed; CODEOWNERS review of this file is the control for that case.
 
 ## A1 baseline
 
@@ -16,7 +17,7 @@ fails. The test also pins the hashes of the A1 baseline entry.
 - Old and new: not applicable.
 - Reason: the registry, the golden file and the literal allowlist are added with today's values.
 - Section 27 item: none.
-- SHA-256 previous: c8e89f51c02c4d13781fe57e6da6f2b645f71012b10887c9534920084a24e430
+- SHA-256 previous: c69c2a1f30b24c0e4d06525c75ffdc744d20e6df4bf39744ec46aaacf35f650c
 - SHA-256 table: f949df64f14cee5c1c025d683cabea1d56a493941db05c214c33f7deac628378
 - SHA-256 golden: 7403c28493386027b0c383326d30d2bb2645fa54c154e289276f9246289d2504
-- SHA-256 allowlist: 9620d8432ea012b9c02189d4739909c64740f5ed3d680e07af32eb56f9c65743
+- SHA-256 allowlist: 501e5467604ccf3fda82616deeb45af43ba717fe5502114ba4c7ebebd313fd2d

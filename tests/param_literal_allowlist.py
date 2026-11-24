@@ -1198,8 +1198,8 @@ ALLOWLIST: dict[str, dict[tuple, dict]] = {
     "flightrisk/launcher/preflight.py": {
         ('flightrisk/launcher/preflight.py', '<module>', 'assign', 'PROBE_TIMEOUT_S', 'PROBE_TIMEOUT_S', 2.5): {"count": 1, "category": "process",
             "reason": 'Process, subprocess or network probe timing.'},
-        ('flightrisk/launcher/preflight.py', '<module>', 'assign', 'TELLO_CMD_PORT', 'TELLO_CMD_PORT', 8889): {"count": 1, "category": "sdk",
-            "reason": 'Tello SDK UDP port, fixed by the vendor.'},
+        ('flightrisk/launcher/preflight.py', '<module>', 'assign', 'TELLO_CMD_PORT', 'TELLO_CMD_PORT', 8889): {"count": 1, "category": "deferred",
+            "reason": 'Tello SDK fact, row 87 (`tello_sdk.command_port`); A5 makes it a read of the read-only row.'},
         ('flightrisk/launcher/preflight.py', '<module>', 'default', '_tcp_reachable', 'timeout', 2.0): {"count": 1, "category": "process",
             "reason": 'Process, subprocess or network probe timing.'},
         ('flightrisk/launcher/preflight.py', '<module>._no_local_ip_check', 'compare', '<compare>', 'tello_count', 1): {"count": 1, "category": "process",

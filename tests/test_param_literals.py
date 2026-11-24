@@ -241,13 +241,42 @@ def _ref_names(ref: str):
         yield path, inner.group(1) if inner else attr.split("(")[0].split(".")[-1]
 
 
+def _abbreviates(short: str, word: str) -> bool:
+    if not short or short[0] != word[:1]:
+        return False
+    rest = iter(word)
+    return all(c in rest for c in short)
+
+
+def _name_value_match(row, name, value) -> bool:
+    """Rule 4: ``value`` is a default of ``row`` and ``name`` names the row.
+
+    Names the row by its env or alias name, or by tokens: the last token of the name equals the last
+    token of the row's leaf, and every other token of the name equals, or abbreviates (its letters in order, first letter equal),
+    a token of the row id. Bool values and None never match; they are too common.
+    """
+    if value is None or isinstance(value, bool) or not isinstance(name, str):
+        return False
+    if not any(type(v) is type(value) and v == value for v in row.defaults.values()):
+        return False
+    lowered = name.lower().strip("_")
+    if lowered in {n.lower() for n in (row.env, *(a.name for a in row.env_aliases)) if n}:
+        return True
+    tokens = lowered.split("_")
+    row_tokens = re.split(r"[._]", row.id)
+    if len(tokens) < 2 or tokens[-1] != row_tokens[-1]:
+        return False
+    return all(any(_abbreviates(t, rt) for rt in row_tokens) for t in tokens[:-1])
+
+
 def registry_matches(allowlist) -> list[tuple[tuple, frozenset, str]]:
     """Allowlist keys that duplicate a registry row, with the categories each may carry.
 
     A key matches when (1) it defines a name that the golden file's ``today_ref`` (row value) or
     ``lo_ref``/``hi_ref`` (today's accepted range) points at, (2) it is the default of an
     environment name or flag that a row reads, or (3) its name is a row id's last segment and its
-    value is that row's default. A value match must be ``deferred``; a range match may be ``bound``.
+    value is that row's default, or (4) its name and value match a row's env or alias name or id tokens
+    and a default (``_name_value_match``). A value match must be ``deferred``; a range match may be ``bound``.
     """
     import json
 
@@ -288,6 +317,9 @@ def registry_matches(allowlist) -> list[tuple[tuple, frozenset, str]]:
             for row in by_leaf.get(str(name).lower(), ()):
                 if value in row.defaults.values():
                     why.add(f"{row.id} default")
+            for row in TABLE:
+                if _name_value_match(row, name, value):
+                    why.add(f"{row.id} name and default")
             if why:
                 if all(w.endswith(" range") for w in why):
                     allowed.add("bound")
@@ -304,6 +336,20 @@ REGISTRY_MATCH_EXCEPTIONS = {
     ('flightrisk/dashboard/detection_profiles.py', '<module>', 'assign', 'REPLY_TIMEOUT_S', 'REPLY_TIMEOUT_S', 20.0):
         "The wait for an edge's reply to a detection-profile change, not the takeoff reply timeout of "
         "row takeoff.reply_timeout_s; the equal value is a coincidence.",
+    ('flightrisk/drone/fake.py', '<module>.FakeDrone.__init__', 'kwarg', 'DroneCapabilities', 'max_move_cm', 500):
+        "The capability a test double declares for itself, not a read of row move.max_cm; the double is not flight code.",
+    ('flightrisk/drone/fake.py', '<module>.FakeDrone.__init__', 'kwarg', 'DroneCapabilities', 'min_move_cm', 20):
+        "The capability a test double declares for itself, not a read of row move.min_cm; the double is not flight code.",
+    ('flightrisk/drone/search.py', '<module>', 'default', 'generate_spiral', 'radius_cm', 50):
+        "A spiral-search generator radius default, not the stationary radius of row move.stationary_radius_cm; the equal value is a coincidence.",
+    ('flightrisk/drone/tello.py', '<module>.FakeTelloController.__init__', 'kwarg', 'DroneCapabilities', 'max_move_cm', 500):
+        "The capability a test double declares for itself, not a read of row move.max_cm; the double is not flight code.",
+    ('flightrisk/drone/tello.py', '<module>.FakeTelloController.__init__', 'kwarg', 'DroneCapabilities', 'min_move_cm', 20):
+        "The capability a test double declares for itself, not a read of row move.min_cm; the double is not flight code.",
+    ('flightrisk/drone/template_backend.py', '<module>.TemplateDrone.__init__', 'kwarg', 'DroneCapabilities', 'max_move_cm', 500):
+        "The capability a test double declares for itself, not a read of row move.max_cm; the double is not flight code.",
+    ('flightrisk/drone/template_backend.py', '<module>.TemplateDrone.__init__', 'kwarg', 'DroneCapabilities', 'min_move_cm', 20):
+        "The capability a test double declares for itself, not a read of row move.min_cm; the double is not flight code.",
 }
 
 
