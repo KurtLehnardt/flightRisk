@@ -190,6 +190,24 @@ def _teardown_controller(ctrl: MavlinkController) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _bind_fake_mavsdk(monkeypatch):
+    """Bind the fake mavsdk names into the module under test.
+
+    The sys.modules stubs above only take effect if this file is the first
+    to import flightrisk.drone.mavlink. In a full run another test module
+    (e.g. test_capabilities_max_altitude.py) imports it first, so it binds
+    the real mavsdk's OffboardError, and ``except OffboardError`` in the
+    product no longer catches the _FakeOffboardError these tests raise.
+    """
+    import flightrisk.drone.mavlink as mav
+
+    monkeypatch.setattr(mav, "HAS_MAVSDK", True)
+    monkeypatch.setattr(mav, "System", _FakeSystem, raising=False)
+    monkeypatch.setattr(mav, "OffboardError", _FakeOffboardError, raising=False)
+    monkeypatch.setattr(mav, "VelocityBodyYawspeed", _FakeVelocityBodyYawspeed, raising=False)
+
+
 @pytest.fixture(autouse=False)
 def fast_offboard(monkeypatch):
     """Patch asyncio.sleep to be instant so streaming-loop tests don't
