@@ -244,6 +244,22 @@ def resolve_ground_unit(
     )
 
 
+# The map plan's largest area side is twice the unit's published range, in whole centimetres.
+_AREA_SIDE_PER_RANGE = 2
+_CM_PER_M = 100
+
+
+def area_cap_cm(units: Iterable[GroundUnit]) -> int | None:
+    """The largest map-plan area side the fleet allows, in whole centimetres, or None for no cap.
+
+    Each range-limited unit allows twice its ``max_range_m``; the fleet's cap is the smallest of those.
+    ``None`` when no unit is range limited, including when there are no units.
+    """
+    caps = [round(unit.max_range_m * _CM_PER_M * _AREA_SIDE_PER_RANGE)
+            for unit in units if unit.max_range_m is not None]
+    return min(caps) if caps else None
+
+
 def units_for(
     unit_ids: Iterable[str],
     reported_models: Mapping[str, str] | None,
