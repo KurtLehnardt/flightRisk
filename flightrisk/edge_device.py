@@ -296,7 +296,7 @@ _STRIDE_MAX_SKIP_ENV_VAR = "FLIGHTRISK_EDGE_STRIDE_MAX_SKIP_S"
 DEFAULT_STRIDE_MAX_SKIP_S = 1.0
 STRIDE_MAX_SKIP_RANGE_S = (0.0, 5.0)
 # Torch threads per edge process (intra-op; inter-op is set to 1). Each edge runs YOLO and MiDaS,
-# so on the 4-core edge laptop two edges with torch's default of one thread per core each, plus the
+# so on the 4-core Windows laptop (Layout B) two edges with torch's default of one thread per core each, plus the
 # ground, oversubscribe the CPU and the video decoder falls behind. 2 per edge fits two edges and
 # the ground on 4 cores. 0 leaves torch's own default.
 _TORCH_THREADS_ENV_VAR = "FLIGHTRISK_EDGE_TORCH_THREADS"

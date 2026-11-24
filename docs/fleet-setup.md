@@ -307,7 +307,7 @@ Do not use the self-assigned 169.254.x.x addresses for the demo. They change whe
 
 Never turn on macOS Internet Sharing or Windows Internet Connection Sharing. Either one would bridge one Tello's 192.168.10.0/24 network onto the cable.
 
-### Mac steps
+### Ground-station laptop steps (macOS)
 
 1. List the network services and find the Thunderbolt one:
 
@@ -385,7 +385,7 @@ Run these steps in order when the cable arrives, using a checkout of this reposi
 
 **Step 3. Is there a link? (5 min).**
 
-- Mac: `networksetup -listallhardwareports` and `ifconfig bridge0`
+- Ground-station laptop (macOS): `networksetup -listallhardwareports` and `ifconfig bridge0`
 - Windows: `Get-NetAdapter | ft Name,InterfaceDescription,Status,LinkSpeed`
 - Pass: both sides show an interface that is up. On Windows it is a new adapter with status Up at several Gbps. On the ground-station laptop `ifconfig bridge0` shows `status: active`.
 - Fail: reseat the cable, try the other Thunderbolt port, reboot Windows, and ask whether Group Policy disables USB4 networking. If it still fails, go to rung 2.
@@ -449,7 +449,7 @@ The protocol and addresses are the same on every rung. Only the cabling changes.
 
 ## Layout B with Claude reasoning
 
-Layout B runs the ground station, the dashboard and both edges on one Windows laptop (the edge laptop), one Tello per Wi-Fi adapter (see [two-tellos-one-pc.md](two-tellos-one-pc.md) and the launcher's "Layout B (everything here)" preset). By default the demo needs no internet. This section adds Claude as the reasoning backend, which does need the internet, and the laptop has no spare uplink unless you plan one: both Tello Wi-Fi adapters are joined to Tello access points, and a Tello access point has no internet. (The "cable" of Path 2 is a laptop-to-laptop link with no gateway; it is not an uplink either.)
+Layout B runs the ground station, the dashboard and both edges on one Windows laptop (the edge laptop of Layout A; in Layout B it also runs the ground station), one Tello per Wi-Fi adapter (see [two-tellos-one-pc.md](two-tellos-one-pc.md) and the launcher's "Layout B (everything here)" preset). By default the demo needs no internet. This section adds Claude as the reasoning backend, which does need the internet, and the laptop has no spare uplink unless you plan one: both Tello Wi-Fi adapters are joined to Tello access points, and a Tello access point has no internet. (The "cable" of Path 2 is a laptop-to-laptop link with no gateway; it is not an uplink either.)
 
 **Claude reasoning in Layout B needs `feature/edge-claude-reasoning`.** The call that sends an edge-sourced alert to Claude is in that branch, not on this tree; until it is merged, steps 2 to 5 prepare the machine but no reasoning request is made for edge alerts.
 
@@ -457,7 +457,7 @@ This was written from code and from the edge laptop's adapter layout; the PowerS
 
 ### Which adapter is which
 
-On the edge laptop at the time of writing, the built-in Wi-Fi adapter ("Wi-Fi") is on the home LAN and is the internet uplink. The two USB Wi-Fi adapters each join one Tello access point: "Wi-Fi 2" (ifIndex 10, static 192.168.10.50/24) and "Wi-Fi 5" (ifIndex 26). **Windows renames and re-indexes the USB adapters across replugs** ("Wi-Fi 5" was "Wi-Fi 3" on Oct 28). Never copy names or indexes from this page or an old note: before every session run
+On the Windows laptop at the time of writing, the built-in Wi-Fi adapter ("Wi-Fi") is on the home LAN and is the internet uplink. The two USB Wi-Fi adapters each join one Tello access point: "Wi-Fi 2" (static 192.168.10.50/24) and "Wi-Fi 5". **Windows renames and re-indexes the USB adapters across replugs** ("Wi-Fi 5" was "Wi-Fi 3" on Oct 28). Never copy names or indexes from this page or an old note: before every session run
 
 ```powershell
 Get-NetAdapter | Sort-Object ifIndex | Format-Table Name, InterfaceDescription, ifIndex, Status
@@ -485,7 +485,7 @@ venv\Scripts\python.exe -c "import open_clip; open_clip.create_model_and_transfo
 
 Without the weights and without internet the ground starts with ReID off: setting a target photo then answers 503 ("Person re-identification is not loaded") and no alert can fire. The same weights are needed by each edge process, and they share the cache.
 
-**CPU.** Every edge runs a ViT-B/16 over every person crop, so two edges and the ground on the edge laptop's 4 cores (no GPU) compete for the CPU. If the dashboard stalls, use the every-Nth-frame setting under "Cutting edge CPU load" below.
+**CPU.** Every edge runs a ViT-B/16 over every person crop, so two edges and the ground on the Windows laptop's 4 cores (no GPU) compete for the CPU. If the dashboard stalls, use the every-Nth-frame setting under "Cutting edge CPU load" below.
 
 The ground and the edges need `yolo11n.pt`, and a clean clone has none. The installer downloads it into the app folder and checks its SHA-256; if it printed "could not download yolo11n.pt now", run the installer again with internet before launching. Check with `Test-Path "$env:LOCALAPPDATA\FlightRisk\app\yolo11n.pt"`. In a development checkout use `venv\Scripts\python.exe -m pip install -r requirements-ground.txt` and `scripts\install_windows.ps1` for the weights.
 
@@ -574,11 +574,11 @@ Confirming a match on a fleet lands every drone in place with LAND ALL. The Tell
 
 Two edges on one laptop without a GPU can use all of its CPU. On a Windows laptop (4 cores and 8 threads, no GPU) running two edges with the HERIDAL `yolo11s` detector, each edge managed 2.5 to 3.2 detections per second and the CPU sat at 100 percent, which starved the dashboard server. Each edge also runs MiDaS for the obstacle sensor, and an overloaded laptop lets the video decoder fall behind the drone's video.
 
-**Torch threads.** Each edge limits torch to 2 threads and one inter-op thread by default (`FLIGHTRISK_EDGE_TORCH_THREADS`, 0 to 64; 0 leaves torch's own default of one thread per core). With torch's default every edge process would use all 4 cores for YOLO and MiDaS at once, so two edges and the ground oversubscribe the edge laptop. 2 per edge fits two edges and the ground on its 4 cores; one edge alone on the edge laptop may use 4. The edge logs `edge_torch_threads` with the numbers in force.
+**Torch threads.** Each edge limits torch to 2 threads and one inter-op thread by default (`FLIGHTRISK_EDGE_TORCH_THREADS`, 0 to 64; 0 leaves torch's own default of one thread per core). With torch's default every edge process would use all 4 cores for YOLO and MiDaS at once, so two edges and the ground oversubscribe the Windows laptop. 2 per edge fits two edges and the ground on its 4 cores; one edge alone on the Windows laptop may use 4. The edge logs `edge_torch_threads` with the numbers in force.
 
 **The frame stride.** `--frame-stride N` on `python -m flightrisk.edge_device` (environment variable `FLIGHTRISK_EDGE_FRAME_STRIDE`) runs detection, ReID and crop encoding on only every Nth frame. The default, 1, processes every frame. The flag wins over the environment variable, which wins over the default. N must be a whole number from 1 to 30, written with plain digits (`1_0` and non-ASCII digits are refused); 0, negative, non-integer and larger values stop the edge at startup with an error.
 
-- **A stride above 1 is refused while obstacle sensing is required** (`FLIGHTRISK_OBSTACLE_SENSING=required`, the default), on a Tello edge and a fake edge alike. The obstacle sensor's person cue needs a detection of a view taken after each stop, and a stride starves it: the review of PR #170 measured one 5 s frame at stride 10 leaving about 50 s with no detection. The edge stops at startup with a message that names the stride and the remedy. Use stride 1 whenever obstacle sensing is required. Only `FLIGHTRISK_OBSTACLE_SENSING=off`, which flies with no obstacle sensing at all (`docs/obstacle-sensing.md`), allows a stride, and then a stride of at most 2 is the recommendation for the edge-laptop-only layout.
+- **A stride above 1 is refused while obstacle sensing is required** (`FLIGHTRISK_OBSTACLE_SENSING=required`, the default), on a Tello edge and a fake edge alike. The obstacle sensor's person cue needs a detection of a view taken after each stop, and a stride starves it: the review of PR #170 measured one 5 s frame at stride 10 leaving about 50 s with no detection. The edge stops at startup with a message that names the stride and the remedy. Use stride 1 whenever obstacle sensing is required. Only `FLIGHTRISK_OBSTACLE_SENSING=off`, which flies with no obstacle sensing at all (`docs/obstacle-sensing.md`), allows a stride, and then a stride of at most 2 is the recommendation for Layout B (everything on the Windows laptop).
 - It applies to `--source tello` and `--source fake`. Giving a stride above 1 with any other source is refused rather than ignored. When the stride came from the environment variable, the error says `FLIGHTRISK_EDGE_FRAME_STRIDE=<n> is set`.
 - The stride is applied by time, not by counting frames. After the edge takes a frame, it drops frames until N times the longer of one frame time (1/30 s) and the time the edge spent on that frame has passed, then takes the newest one. So the detection interval is N times the processing time, not N frames: on the edge laptop, with 330 ms per detection, stride 2 gives a detection about every 0.66 s, and stride 30 would give one about every 10 s without the cap below, not one a second (one a second is what stride 30 gives a detector faster than the video).
 - **The skip is capped.** Frames are dropped for at most `FLIGHTRISK_EDGE_STRIDE_MAX_SKIP_S` seconds (default 1.0, 0 to 5) after the edge comes back from a frame, however slow that frame was. Without the cap the blind time after a frame is (N - 1) times its processing time, so a 5 s frame at stride 10 left 45 s with no detection; with it, at most 1 s. On the edge laptop the cap does not bind for stride 2 or 3 (0.33 s and 0.66 s of skip).
