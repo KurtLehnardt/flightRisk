@@ -78,6 +78,25 @@ unless every later hash is also recomputed; CODEOWNERS review of this file is th
 - SHA-256 golden: 7403c28493386027b0c383326d30d2bb2645fa54c154e289276f9246289d2504
 - SHA-256 allowlist: dd1af99c5e3615ed79b51d9efbed782d2f3abf41cd3855f08831cdde67c68621
 
+## A3 item 53 part 1: the regulatory altitude cap rows and an unknown airframe maximum
+
+- Value: row 8 `envelope.max_altitude_cm` for `generic_multirotor`; new rows 163
+  `regulatory.altitude_cap_cm` and 164 `regulatory.altitude_cap_on`.
+- Old and new: row 8 generic default 12000 cm becomes unset (unknown), its bound 12000-12000 becomes
+  1000-60000 cm (a new safety value: the range an inventory may state for the airframe maximum), and its
+  edit read_only becomes file_env. Row 163 is 12000 cm, read-only. Row 164 is a safety switch, default
+  true; its off value is refused from a file or the inventory, has no environment name or flag, and from
+  the launcher counts only when the launcher's `confirmed` object names it. Tello values are unchanged.
+- Reason: the 120 m came from the FAA rules (14 CFR 107.51), which may not apply to a search-and-rescue
+  mission. The cap becomes a separate regulatory row that is on by default, and the 120 m stops counting
+  as a known airframe maximum. With the cap off the limit is the known airframe maximum, and a unit with
+  no known maximum cannot turn the cap off (`flightrisk/params/altitude.py`).
+- Section 27 item: 53 (A3).
+- SHA-256 previous: 232c2d910939388ccb34883b2e83f3605c60aedafed6a69da687e85872a5bab6
+- SHA-256 table: 368dff8eb8f05ff05ba5ad8b850e07ed9e731a6d9a2419556cef8e80ed3f20f8
+- SHA-256 golden: 1e201af91affbe8345b11b4fca93c128541f119b1a138e23800ffbb09788f3f2
+- SHA-256 allowlist: dd1af99c5e3615ed79b51d9efbed782d2f3abf41cd3855f08831cdde67c68621
+
 ## PR-A3.5: Tello adapter and fake constants from the registry
 
 - Value: none changed.
@@ -94,7 +113,7 @@ unless every later hash is also recomputed; CODEOWNERS review of this file is th
   The five module copies of the registry lookup are replaced by `model_default` in
   `flightrisk/params/defaults.py`.
 - Section 27 item: none.
-- SHA-256 previous: 232c2d910939388ccb34883b2e83f3605c60aedafed6a69da687e85872a5bab6
-- SHA-256 table: f949df64f14cee5c1c025d683cabea1d56a493941db05c214c33f7deac628378
-- SHA-256 golden: 7403c28493386027b0c383326d30d2bb2645fa54c154e289276f9246289d2504
+- SHA-256 previous: bc54b498c0348beb1e6391edbfad011c4fd54373ea69935773d8d262e61dc523
+- SHA-256 table: 368dff8eb8f05ff05ba5ad8b850e07ed9e731a6d9a2419556cef8e80ed3f20f8
+- SHA-256 golden: 1e201af91affbe8345b11b4fca93c128541f119b1a138e23800ffbb09788f3f2
 - SHA-256 allowlist: 2d1f684e22577a885abe706fbcada993b9609871ac50cec3a5ff1ff329becaf4

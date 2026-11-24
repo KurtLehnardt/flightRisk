@@ -76,6 +76,9 @@ def test_a_unit_with_no_setting_resolves_to_the_golden_default_of_its_model(defa
     default = entry["default"]
     if isinstance(default, dict) and "placeholder" in default:
         assert effective.value == "placeholder"
+    elif isinstance(default, dict) and "unset" in default:
+        # Design section 27 item 53: the generic airframe maximum is unknown until the inventory states it.
+        assert effective.value == "unset"
     elif isinstance(default, dict):
         assert str(effective.value).startswith("derived")
     else:
@@ -86,7 +89,8 @@ def test_a_unit_with_no_setting_resolves_to_the_golden_default_of_its_model(defa
 
 def test_the_golden_table_has_a_drone_row_for_every_registry_drone_row():
     assert {row["id"] for row in DRONE_ROWS} == {spec.id for spec in TABLE if spec.scope is Scope.DRONE}
-    assert len(DRONE_ROWS) == 101
+    # 101 before item 53 added regulatory.altitude_cap_cm and regulatory.altitude_cap_on.
+    assert len(DRONE_ROWS) == 103
 
 
 # --- EDGE-7: every name of a drone-scope row, set to a valid non-default value -------------------------

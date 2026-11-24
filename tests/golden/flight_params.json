@@ -710,21 +710,23 @@
           "today_ref_reason": "instance attribute: TelloController.__init__ builds DroneCapabilities(max_altitude_m=10) (drone/tello.py:646)"
         },
         "generic_multirotor": {
-          "default": 12000,
-          "lo": 12000,
-          "hi": 12000,
-          "bound_text": "fixed",
+          "default": {
+            "unset": true
+          },
+          "lo": 1000,
+          "hi": 60000,
+          "bound_text": "1000-60000 (new)",
           "safer": "none",
           "confirm": "none",
-          "edit": "read_only",
+          "edit": "file_env",
           "off_value": null,
           "safety_switch": false,
           "marks": [],
           "pending": [],
           "origin": "today",
-          "bounds_origin": "today",
+          "bounds_origin": "new",
           "today_ref": null,
-          "today_ref_reason": "contested: DroneCapabilities.max_altitude_m = 120 (drone/controller.py:108) gives 12000 cm, but the field fleet controller declares int(MAX_ALT_SLOT_CM / 100) = 5 m (drone/mavlink_fleet.py:383)"
+          "today_ref_reason": "unknown since A3 (design section 27 item 53): the 120 m that stood in for it was the FAA cap, not an airframe value; MavlinkFleetDrone declares max_altitude_m=None (drone/mavlink_fleet.py:384)"
         }
       }
     },
@@ -7486,6 +7488,104 @@
         },
         "generic_multirotor": null
       }
+    },
+    {
+      "row": 163,
+      "id": "regulatory.altitude_cap_cm",
+      "ids": [
+        "regulatory.altitude_cap_cm"
+      ],
+      "unit": "cm",
+      "today_text": "120 m (autopilot.py:228 MAX_FENCE_ALT_M)",
+      "applies": "next_start",
+      "env_aliases": {},
+      "profiles": {
+        "tello": {
+          "default": 12000,
+          "lo": 12000,
+          "hi": 12000,
+          "bound_text": "fixed",
+          "safer": "none",
+          "confirm": "none",
+          "edit": "read_only",
+          "off_value": null,
+          "safety_switch": false,
+          "marks": [],
+          "pending": [],
+          "origin": "new",
+          "bounds_origin": "today",
+          "today_ref": null
+        },
+        "generic_multirotor": {
+          "default": 12000,
+          "lo": 12000,
+          "hi": 12000,
+          "bound_text": "fixed",
+          "safer": "none",
+          "confirm": "none",
+          "edit": "read_only",
+          "off_value": null,
+          "safety_switch": false,
+          "marks": [],
+          "pending": [],
+          "origin": "new",
+          "bounds_origin": "today",
+          "today_ref": null
+        }
+      }
+    },
+    {
+      "row": 164,
+      "id": "regulatory.altitude_cap_on",
+      "ids": [
+        "regulatory.altitude_cap_on"
+      ],
+      "unit": "bool",
+      "today_text": "none",
+      "applies": "next_start",
+      "env_aliases": {},
+      "profiles": {
+        "tello": {
+          "default": true,
+          "lo": null,
+          "hi": null,
+          "bound_text": "{true, false}",
+          "safer": "true",
+          "confirm": "less_safe",
+          "edit": "ui",
+          "off_value": null,
+          "safety_switch": true,
+          "marks": [],
+          "pending": [],
+          "origin": "new",
+          "bounds_origin": "today",
+          "today_ref": null,
+          "choices": [
+            "true",
+            "false"
+          ]
+        },
+        "generic_multirotor": {
+          "default": true,
+          "lo": null,
+          "hi": null,
+          "bound_text": "{true, false}",
+          "safer": "true",
+          "confirm": "less_safe",
+          "edit": "ui",
+          "off_value": null,
+          "safety_switch": true,
+          "marks": [],
+          "pending": [],
+          "origin": "new",
+          "bounds_origin": "today",
+          "today_ref": null,
+          "choices": [
+            "true",
+            "false"
+          ]
+        }
+      }
     }
   ],
   "constraints": [
@@ -7591,7 +7691,7 @@
       "row": 8,
       "id": "envelope.max_altitude_cm",
       "profile": "generic_multirotor",
-      "reason": "contested: DroneCapabilities.max_altitude_m = 120 (drone/controller.py:108) gives 12000 cm, but the field fleet controller declares int(MAX_ALT_SLOT_CM / 100) = 5 m (drone/mavlink_fleet.py:383)"
+      "reason": "unknown since A3 (design section 27 item 53): the 120 m that stood in for it was the FAA cap, not an airframe value; MavlinkFleetDrone declares max_altitude_m=None (drone/mavlink_fleet.py:384)"
     },
     {
       "row": 17,

@@ -8,6 +8,7 @@ URL, a repository path or the word ASSUMPTION.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Mapping, Optional, Tuple
@@ -27,6 +28,9 @@ _TELLO_SPECS = "https://www.ryzerobotics.com/tello/specs"
 _TELLO_MANUAL = "https://www.adorama.com/col/productManuals/RYTELO.pdf"
 _TELLO_EDU = "https://core-electronics.com.au/dji-tello-edu.html.md"
 _PI_CAM = "flightrisk/fleet_scale.py:58-75 (Raspberry Pi Camera Module 3 preset)"
+#: The generic models' 120 m was the FAA cap (flightrisk/drone/autopilot.py MAX_FENCE_ALT_M), not an airframe
+#: value; the airframe maximum is unknown unless the inventory states it (design section 27 item 53).
+_UNKNOWN_MAX_HEIGHT = "ASSUMPTION: unknown unless the inventory states the airframe maximum (design section 27 item 53)"
 
 # The most conservative value of each fact, used when a model does not state it (CAP-2).
 # None has no safe direction, so it never means "no limit": a consumer that needs a None fact (a sensor
@@ -156,7 +160,8 @@ class DroneModel:
             max_speed_mps=float(env["max_speed_mps"].value),
             flight_time_s=float(env["endurance_s"].value),
             source=self.coverage_source,
-            max_alt_m=float(env["max_height_m"].value),
+            # An unknown airframe maximum is no bound here; plan_coverage still applies its own cap.
+            max_alt_m=math.inf if env["max_height_m"].value is None else float(env["max_height_m"].value),
             max_range_m=env["max_range_m"].value,
         )
 
@@ -234,7 +239,7 @@ def _generic_facts() -> dict:
         "failsafes_checkable_before_takeoff": CapabilityFact(True, "flightrisk/drone/autopilot.py", "repository"),
         "moves": CapabilityFact(None, "ASSUMPTION: autopilot", "unverified"),
         "top_speed_mps": CapabilityFact(12.0, "ASSUMPTION: 12 m/s", "unverified"),
-        "max_height_m": CapabilityFact(120.0, "flightrisk/drone/autopilot.py:222", "repository"),
+        "max_height_m": CapabilityFact(None, _UNKNOWN_MAX_HEIGHT, "unverified"),
         "endurance_s": CapabilityFact(1500, "ASSUMPTION: 25 min", "unverified"),
         "max_range_m": CapabilityFact(None, "ASSUMPTION: not range-limited", "unverified"),
         "commands_without_ground": CapabilityFact(True, "ASSUMPTION: position hold", "unverified"),
@@ -304,7 +309,7 @@ BUILTIN_MODELS: Mapping[str, DroneModel] = MappingProxyType({
         positioning="gps",
         envelope={
             "max_speed_mps": CapabilityFact(12.0, "ASSUMPTION: 12 m/s", "unverified"),
-            "max_height_m": CapabilityFact(120.0, "flightrisk/drone/autopilot.py:222", "repository"),
+            "max_height_m": CapabilityFact(None, _UNKNOWN_MAX_HEIGHT, "unverified"),
             "max_range_m": CapabilityFact(None, "ASSUMPTION: not range-limited", "unverified"),
             "endurance_s": CapabilityFact(1500, "ASSUMPTION: 25 min", "unverified"),
         },
