@@ -61,3 +61,36 @@ def test_edge_kinds_lists_spec_with_edge_factory(temp_name):
     assert registry.edge_kinds() == (temp_name,)
     registry.unregister(temp_name)
     assert registry.edge_kinds() == ()
+
+
+def test_for_model_returns_first_when_multiple_backends_claim_same_model():
+    """When two backends declare the same model_id, for_model returns the first registered."""
+    name1 = "xca_first"
+    name2 = "xca_second"
+    shared_model = "shared_test_model_xyz"
+
+    try:
+        # Register first backend with the shared model
+        spec1 = registry.register(
+            name1,
+            _factory,
+            default_host=_host,
+            models=(shared_model,),
+        )
+
+        # Register second backend with the same model
+        spec2 = registry.register(
+            name2,
+            _factory,
+            default_host=_host,
+            models=(shared_model,),
+        )
+
+        # for_model should return the first registered backend
+        result = registry.for_model(shared_model)
+        assert result is spec1
+        assert result.name == name1
+    finally:
+        # Clean up global registry state
+        registry.unregister(name1)
+        registry.unregister(name2)
