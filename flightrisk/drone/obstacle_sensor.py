@@ -37,37 +37,70 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+from flightrisk.params import table as _registry
+from flightrisk.params.spec import Bound, ParamSpec
+
 # ---------------------------------------------------------------------------
 # Knobs (design section 3.2 and section 4)
 # ---------------------------------------------------------------------------
+#
+# Each knob that duplicates a parameter registry row reads that row
+# (``flightrisk.params.table``), so the module keeps no copy that only happens
+# to match. Today's indoor values are the indoor reference profile column; the
+# field step is the generic multirotor column. The allowed ranges stay here
+# until C5 replaces them with the registry bounds.
+
+
+def _registry_row(param_id: str) -> ParamSpec:
+    """The registry row ``param_id``."""
+    for spec in _registry.TABLE:
+        if spec.id == param_id:
+            return spec
+    raise KeyError(f"no registry row {param_id!r}")
+
+
+def _registry_default(param_id: str, profile: str | None = None) -> Any:
+    """The registry default of ``param_id`` in ``profile``, the indoor reference column when none is given."""
+    return _registry_row(param_id).defaults[_registry.T if profile is None else profile]
+
+
+def _registry_bound(param_id: str, profile: str | None = None) -> Bound:
+    """The registry bound of ``param_id`` in ``profile``, the indoor reference column when none is given."""
+    column = _registry.T if profile is None else profile
+    bound = _registry_row(param_id).bounds[column]
+    if bound is None:
+        raise LookupError(f"registry row {param_id!r} has no bound in {column!r}")
+    return bound
+
 
 #: Length of one sensed step in centimetres (the room profile default).
-OBSTACLE_STEP_CM = 50
+OBSTACLE_STEP_CM = _registry_default("sensing.step_cm")
 #: Allowed step range for the room profile (the Tello).
-OBSTACLE_STEP_MIN_CM = 20
-OBSTACLE_STEP_MAX_CM = 100
-#: The field profile (MAVLink) steps as far as its reposition granularity.
-OBSTACLE_STEP_FIELD_CM = 500
+OBSTACLE_STEP_MIN_CM = _registry_bound("sensing.step_cm").lo
+OBSTACLE_STEP_MAX_CM = _registry_bound("sensing.step_cm").hi
+#: The field profile (MAVLink) steps as far as its reposition granularity
+#: (the generic multirotor column of the row).
+OBSTACLE_STEP_FIELD_CM = _registry_default("sensing.step_cm", _registry.G)
 #: Seconds after a move's reply before a frame counts as settled: a view must have
 #: been captured at least this long after the end of the last move or turn. The
 #: default; ``FLIGHTRISK_OBSTACLE_SETTLE_S`` changes it. It must cover the camera's
 #: own latency (capture to arrival at the edge), so it must not be below the p95
 #: video latency that hardware item H5 measures (``docs/obstacle-sensing.md``).
-OBSTACLE_SETTLE_S = 0.3
+OBSTACLE_SETTLE_S = _registry_default("sensing.settle_s")
 #: Allowed ``FLIGHTRISK_OBSTACLE_SETTLE_S``.
 OBSTACLE_SETTLE_RANGE_S = (0.1, 3.0)
 #: How long ``LatestFrame.wait_for`` waits for a frame newer than ``after + settle``,
 #: counted from ``after + settle`` (or from the call, when that is later).
-OBSTACLE_FRAME_WAIT_S = 0.7
+OBSTACLE_FRAME_WAIT_S = _registry_default("sensing.view_wait_s")
 #: Longest a single ``sense`` call may take in all (frame wait, inference and
 #: person wait together) before it counts as a timeout.
-OBSTACLE_SENSE_TIMEOUT_S = 2.0
+OBSTACLE_SENSE_TIMEOUT_S = _registry_default("sensing.sense_timeout_s")
 #: Attempts at the gate before a stale or failing sensor cuts the lane.
-OBSTACLE_SENSE_RETRIES = 3
+OBSTACLE_SENSE_RETRIES = _registry_default("sensing.sense_retries")
 #: A sensor unusable for this long with lanes remaining ends the lanes early.
-OBSTACLE_SENSOR_DOWN_S = 10.0
+OBSTACLE_SENSOR_DOWN_S = _registry_default("sensing.sensor_down_s")
 #: A person box taller than this fraction of the frame height is a close person.
-OBSTACLE_PERSON_FRACTION = 0.55
+OBSTACLE_PERSON_FRACTION = _registry_default("sensing.person_fraction")
 #: Allowed ``FLIGHTRISK_OBSTACLE_PERSON_FRACTION``. A box can never be taller
 #: than the frame, so a fraction near 1.0 would switch the cue off without a
 #: word; at 0.9 a standing adult still fires at about 1.8 m and a crouching one
@@ -76,21 +109,21 @@ OBSTACLE_PERSON_FRACTION_RANGE = (0.2, 0.9)
 #: The person box must be centred inside the middle fraction of the frame width.
 OBSTACLE_PERSON_CENTRAL_FRACTION = 1.0 / 3.0
 #: The depth guard's threshold for "the centre is close" (``ObstacleGuard``).
-OBSTACLE_MIN_SAFE_DEPTH = 0.35
+OBSTACLE_MIN_SAFE_DEPTH = _registry_default("sensing.min_safe_depth")
 #: Allowed ``FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH``. The guard divides the map by
 #: its 95th percentile, so the closest thing in view scores about 1.0: a
 #: threshold at or above that would never block, and one at 0 divides by zero
 #: in the guard's confidence.
 OBSTACLE_MIN_SAFE_DEPTH_RANGE = (0.05, 0.9)
 #: How long the person cue waits for a detection result newer than ``after + settle``.
-OBSTACLE_DETECTION_WAIT_S = 1.0
+OBSTACLE_DETECTION_WAIT_S = _registry_default("sensing.person_wait_s")
 #: This many ``unknown`` person cues in a row log ``EVENT_PERSON_CUE_DOWN`` once.
 OBSTACLE_PERSON_CUE_DOWN_AFTER = 5
 #: A frame that the bound Tello decoder (``tello_bound.BoundFrameRead``) decodes more
 #: than this many seconds after the first datagram of its video data arrived is
 #: stale (``STALE_DECODER_BACKLOG``): the decoder is behind the video. The default;
 #: ``FLIGHTRISK_MAX_DECODE_LAG_S`` changes it.
-MAX_DECODE_LAG_S = 0.3
+MAX_DECODE_LAG_S = _registry_default("sensing.max_decode_lag_s")
 #: Allowed ``FLIGHTRISK_MAX_DECODE_LAG_S``.
 MAX_DECODE_LAG_RANGE_S = (0.1, 2.0)
 
@@ -103,13 +136,13 @@ MAX_DECODE_LAG_RANGE_S = (0.1, 2.0)
 #: on its own frame captured after the previous view. The edge's default;
 #: ``FLIGHTRISK_OBSTACLE_CLEAR_VOTES`` changes it, and 1 is the behaviour
 #: before votes existed (one clear view clears a step).
-OBSTACLE_CLEAR_VOTES = 2
+OBSTACLE_CLEAR_VOTES = _registry_default("avoid.clear_votes")
 #: Allowed ``FLIGHTRISK_OBSTACLE_CLEAR_VOTES``.
 OBSTACLE_CLEAR_VOTES_RANGE = (1, 5)
 #: Extra gates after a gate that saw an obstacle, each after a short hover;
 #: the step is flown only if every one of them is clear. The edge's default;
 #: ``FLIGHTRISK_OBSTACLE_RELOOK`` changes it, and 0 switches the re-look off.
-OBSTACLE_RELOOK = 2
+OBSTACLE_RELOOK = _registry_default("avoid.relook")
 #: Allowed ``FLIGHTRISK_OBSTACLE_RELOOK``.
 OBSTACLE_RELOOK_RANGE = (0, 5)
 #: Sideways distance in centimetres of a sidestep around an obstacle on the
@@ -117,29 +150,31 @@ OBSTACLE_RELOOK_RANGE = (0, 5)
 #: tuning is tabled, and with an uncalibrated depth threshold every gate reads
 #: blocked). ``FLIGHTRISK_OBSTACLE_SIDESTEP_CM`` switches it on: any other
 #: value must be a move the drone can fly (at least ``OBSTACLE_STEP_MIN_CM``).
-OBSTACLE_SIDESTEP_CM = 0
+OBSTACLE_SIDESTEP_CM = _registry_default("avoid.sidestep_cm")
 #: Allowed ``FLIGHTRISK_OBSTACLE_SIDESTEP_CM`` besides 0.
 OBSTACLE_SIDESTEP_RANGE_CM = (OBSTACLE_STEP_MIN_CM, OBSTACLE_STEP_MAX_CM)
 #: Sidestep attempts allowed on one lane. The edge's default;
 #: ``FLIGHTRISK_OBSTACLE_SIDESTEPS`` changes it, and 0 switches the sidestep off.
-OBSTACLE_SIDESTEPS = 2
+OBSTACLE_SIDESTEPS = _registry_default("avoid.sidesteps")
 #: Allowed ``FLIGHTRISK_OBSTACLE_SIDESTEPS``.
 OBSTACLE_SIDESTEPS_RANGE = (0, 4)
 #: How far along the lane a sidestep flies on the offset line before it goes
 #: back to the lane: the range within which the depth cue is expected to see
 #: an obstacle (the calibration target of hardware item H1).
-OBSTACLE_SIDESTEP_PASS_CM = 150
+OBSTACLE_SIDESTEP_PASS_CM = _registry_default("avoid.sidestep_pass_cm")
 #: Wall-clock seconds the re-look and the sidestep may spend on one blocked
 #: gate. Once they are spent, no further re-look round, sidestep attempt or
 #: step beside the lane is started, and the lane is cut as it would be without
 #: them (a drone beside the lane flies back to it first). The edge's default;
 #: ``FLIGHTRISK_OBSTACLE_AVOID_BUDGET_S`` changes it.
+#: It has no registry row yet, so it stays here; C1, which owns avoidance, decides its row.
 OBSTACLE_AVOID_BUDGET_S = 45.0
 #: Allowed ``FLIGHTRISK_OBSTACLE_AVOID_BUDGET_S``.
 OBSTACLE_AVOID_BUDGET_RANGE_S = (10.0, 300.0)
 #: Re-look rounds allowed on one lane. A lane that keeps reading blocked is
 #: not looked at again for ever: once its rounds are used, a blocked gate on it
 #: goes straight to the sidestep (if one is allowed) or is cut.
+#: It has no registry row yet, so it stays here; C1, which owns avoidance, decides its row.
 OBSTACLE_RELOOKS_PER_LANE = 3
 #: The executor reports at most this many of the latest offset segments
 #: (steps flown beside the lane) in ``TELEMETRY_AVOID`` (12 numbers).

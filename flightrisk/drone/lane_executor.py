@@ -106,6 +106,7 @@ from flightrisk.drone.lane_flight import (
     OBSTACLE_RETRY_PAUSE_S,
     FlightSequenceMixin,
     MoveNotExecutedError,
+    _registry_default,
 )
 from flightrisk.drone.lane_manual import (
     MANUAL_CONTROL_TYPES,
@@ -276,7 +277,7 @@ class LaneExecutor(
         manual_deadman_s: float = MANUAL_DEADMAN_S,
         obstacle_sensor: ObstacleSensor | None = None,
         obstacle_step_cm: int = OBSTACLE_STEP_CM,
-        obstacle_turn: bool = True,
+        obstacle_turn: bool = _registry_default("sensing.turn"),
         obstacle_sensor_error: str | None = None,
         obstacle_sense_timeout_s: float = OBSTACLE_SENSE_TIMEOUT_S,
         obstacle_retry_pause_s: float = OBSTACLE_RETRY_PAUSE_S,
@@ -303,7 +304,8 @@ class LaneExecutor(
           longest move caps it).
         * *obstacle_turn*: False is ``FLIGHTRISK_OBSTACLE_TURN=0``: the drone
           does not turn to face its moves, only ``forward`` steps are sensed
-          and telemetry says ``forward_only``.
+          and telemetry says ``forward_only``. The default is the registry
+          row ``sensing.turn``.
         * *obstacle_sensor_error*: sensing is required but no sensor could
           be built (the text says why). Telemetry reports the sensor not ok,
           ``start_at`` and ``takeoff`` are refused with ``drone_unreachable``
@@ -334,6 +336,8 @@ class LaneExecutor(
           before a frame counts (``FLIGHTRISK_OBSTACLE_SETTLE_S``, which the
           edge passes). A gate's ``after`` is the gate's start less this, so
           the sensor never judges a frame older than the gate.
+        * The camera the sensor looks through is given afterwards, with
+          ``set_obstacle_camera``; until then every gate is as before.
 
         *temp_limits* are the warn and refusal levels of the temperature
         check before every takeoff (``temp_preflight``; the defaults when
@@ -493,6 +497,10 @@ class LaneExecutor(
         self.obstacle_step_cm = int(obstacle_step_cm)
         self._obstacle_takeoff_probe = bool(obstacle_takeoff_probe)
         self._obstacle_turn = bool(obstacle_turn)
+        # The level gate (ROLE-4): off until ``set_obstacle_camera`` names a gimbal mount.
+        self._obstacle_camera: Any = None
+        self._obstacle_pitch_reader: Callable[[str], tuple[float | None, float | None]] | None = None
+        self._obstacle_level_tolerance_deg: float | None = None
         self.obstacle_sense_timeout_s = float(obstacle_sense_timeout_s)
         self.obstacle_retry_pause_s = max(0.0, float(obstacle_retry_pause_s))
         settle_lo, settle_hi = OBSTACLE_SETTLE_RANGE_S
@@ -554,6 +562,37 @@ class LaneExecutor(
         # every takeoff. The lane distance they may have flown shrinks the
         # geofence in the envelope (``SafetyEnvelope.fence_margin_cm``).
         self._flight_refusals = 0
+
+    def set_obstacle_camera(
+        self,
+        camera: Any,
+        pitch_reader: Callable[[str], tuple[float | None, float | None]] | None = None,
+        *,
+        level_tolerance_deg: float | None = None,
+    ) -> None:
+        """Name the camera the obstacle sensor looks through, for the level gate (ROLE-4).
+
+        *camera* is the ``CameraSpec`` of that camera (None removes it). On a
+        ``gimbal`` mount every sense gate first reads the camera's pitch from
+        *pitch_reader*, called with the camera id. It returns
+        ``(pitch_deg, stamp_s)``, the time the pitch was measured on the
+        executor's clock. A missing pitch (no reader, a reader that raises
+        or returns None, or a camera whose ``pitch_measured`` is False), a
+        pitch measured before the look started, or one whose absolute value
+        exceeds *level_tolerance_deg* makes the gate ``unavailable`` with the
+        cause ``camera not level``, which cuts the lane
+        (``lane_flight._level_off``). *level_tolerance_deg* None is the
+        registry row ``sensing.level_pitch_tolerance_deg``. A fixed mount is
+        gated exactly as before. Call it before the flight starts.
+        """
+        if level_tolerance_deg is not None and (
+            not is_finite_number(level_tolerance_deg) or level_tolerance_deg < 0
+        ):
+            raise ValueError("level_tolerance_deg must be a finite number of degrees, 0 or more")
+        with self._lock:
+            self._obstacle_camera = camera
+            self._obstacle_pitch_reader = pitch_reader
+            self._obstacle_level_tolerance_deg = None if level_tolerance_deg is None else float(level_tolerance_deg)
 
     # ------------------------------------------------------------------
     # Introspection

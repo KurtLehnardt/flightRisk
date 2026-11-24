@@ -117,3 +117,31 @@ unless every later hash is also recomputed; CODEOWNERS review of this file is th
 - SHA-256 table: 368dff8eb8f05ff05ba5ad8b850e07ed9e731a6d9a2419556cef8e80ed3f20f8
 - SHA-256 golden: 1e201af91affbe8345b11b4fca93c128541f119b1a138e23800ffbb09788f3f2
 - SHA-256 allowlist: 2d1f684e22577a885abe706fbcada993b9609871ac50cec3a5ff1ff329becaf4
+
+## PR-A3.4: obstacle sensing, avoidance and lane constants from the registry
+
+- Value: no registry value changed. One input is handled differently: a launcher `sensing.mode` of off
+  (`FLIGHTRISK_LAUNCHER_PARAMS`) now refuses the start unless the launcher's `confirmed` object names it, and
+  is applied with a warning when it does (design item 47).
+- Old and new: launcher `sensing.mode` off without confirmation: old, the start was accepted and the launcher
+  value ignored, so the drone sensed as usual; new, the start is refused. The environment variable
+  `FLIGHTRISK_OBSTACLE_SENSING` keeps today's reader. No registry value has an old and a new value.
+- Reason: PR-A3.4 moves 18 + 4 deferred allowlist entries to registry lookups with no value change: 18 in
+  `flightrisk/drone/obstacle_sensor.py` and `flightrisk/drone/obstacle.py` (S13), and 4 in
+  `flightrisk/drone/lane_flight.py` and `flightrisk/drone/lane_executor.py` (S15). Each constant now reads its
+  registry row and keeps its value and type. Two entries are reclassified: `BlockedZone.heading_tol_deg` is
+  internal (the zone geometry of the fake sensor, with no registry row), and the `LaneExecutor` default
+  `obstacle_clear_votes=1` is a test double (the edge always passes its own clear votes). Three deferred
+  entries stay, with their reasons re-tagged to C1: `OBSTACLE_AVOID_BUDGET_S`, `OBSTACLE_RELOOKS_PER_LANE`
+  and `obstacle_takeoff_probe`, which have no registry row.
+- Section 27 item: 47 (A3). A production MAVLink unit leaves the nine `FLIGHTRISK_OBSTACLE_*` fact overrides
+  out of the resolution, with one log line naming each variable. The line says the edge reads it itself,
+  because the edge's obstacle settings still honour these overrides (plan risk R6 leaves that to B1), and
+  that they apply only when the unit senses obstacles with a camera. Switching obstacle sensing off is less
+  safe, so a launcher off needs the launcher's confirmation, as a less-safe value from a file does (RES-11).
+  A custom MAVLink model whose camera does not look level now gets no camera sensor (SEAM-4), so its takeoff
+  needs the autopilot's own avoidance; this is the safe direction.
+- SHA-256 previous: d50e8fdce6df26b154797d20568ad6e10c1b1aea6702f596227e44fc0a561153
+- SHA-256 table: 368dff8eb8f05ff05ba5ad8b850e07ed9e731a6d9a2419556cef8e80ed3f20f8
+- SHA-256 golden: 1e201af91affbe8345b11b4fca93c128541f119b1a138e23800ffbb09788f3f2
+- SHA-256 allowlist: e9e1ca37715dda8b95da03ddefaeaccbddd481d3a56d74fcbd21c42ebe060887

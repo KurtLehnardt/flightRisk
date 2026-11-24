@@ -17,6 +17,8 @@ PARAM_ADOPTERS: dict[str, frozenset[str]] = {
         "flightrisk/drone/safety.py",
         "flightrisk/drone/flight_guards.py",
         "flightrisk/drone/temp_preflight.py",
+        "flightrisk/drone/obstacle_sensor.py",
+        "flightrisk/drone/lane_flight.py",
         "flightrisk/drone/tello.py",
         "flightrisk/drone/tello_bound.py",
         "flightrisk/drone/fake.py",
