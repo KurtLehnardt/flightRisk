@@ -1113,7 +1113,12 @@ def test_land_during_takeoff_spinup_confirmed_only_after_lift_guard(
     returned_at = time.monotonic()
     taker.join(WAIT_S)
     assert not taker.is_alive()
-    assert returned_at - takeoff_sent[0] >= (guard_s if with_state else reply_window_s)
+    # The code stamps the takeoff with time.monotonic() just before it sends
+    # the packet; takeoff_sent is stamped when the fake wire receives it, a
+    # little later (more so under load). The guard therefore ends that much
+    # earlier than guard_s after takeoff_sent, so allow for the delivery lag.
+    lag_s = 0.1
+    assert returned_at - takeoff_sent[0] >= (guard_s if with_state else reply_window_s) - lag_s
     assert ctrl.state.is_flying is False
     assert ctrl._land_unconfirmed is False
     assert ctrl._keepalive_once() is True
