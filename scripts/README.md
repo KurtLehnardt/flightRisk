@@ -209,5 +209,5 @@ Prints latency percentiles (p50, p95) and summary statistics to stderr:
 - P50 and P95 percentiles for typical and worst-case inference times.
 
 Use this to verify that MiDaS inference stays below the design budget (design
-section 2.3: 150 to 300 ms under two-drone YOLO load on the ZBook) and to
+section 2.3: 150 to 300 ms under two-drone YOLO load on the edge laptop) and to
 measure actual performance on your hardware before flight.

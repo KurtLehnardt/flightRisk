@@ -20,7 +20,7 @@ UI-6, ROLES-1 to ROLES-12, MOB-9; AC-10 → PAR, RES, CONF, FACT and C5 items.
 - [ ] CAP-2 [A1] A missing fact takes its most conservative value marked `unverified`; an unknown model
   gets the intersection of its environment's built-in bounds with the safer default of each. Test: unit.
 - [ ] CAP-3 [C1] A runtime capability missing at takeoff refuses the takeoff, naming it; one lost in flight
-  raises its spec 6.2 event (moved from A3, which changes no behaviour; nitpick 7). Test: fake.
+  raises its spec 6.2 event (moved from A3; nitpick 7). Test: fake.
 - [ ] CAP-4 [A3] Changing a fake drone's declared capabilities changes its return method and separation with
   no rule change (AC-4.3). Test: fake.
 - [ ] CAP-5 [A2] A custom model can never set `environment` or `indoor_profile_measured` (M-11). Test:
@@ -140,13 +140,13 @@ UI-6, ROLES-1 to ROLES-12, MOB-9; AC-10 → PAR, RES, CONF, FACT and C5 items.
   map (AC-7.2). Test: payload tests; browser check.
 - [ ] RTH-18 [C1] An edge restart in flight lands with `no_known_home`. Test: fake.
 - [ ] RTH-19 [C6, C7] The resolved defaults switch to return, field in C6 and indoor in C7, and every other
-  value keeps today's default (AC-1). Test: the start-path tests named in each PR; SITL (C6); ZBook (C7).
+  value keeps today's default (AC-1). Test: the start-path tests named in each PR; SITL (C6); edge laptop (C7).
 - [ ] RTH-20 [C2] After LAND ALL every drone's edge sends LAND within 1 s and the autopilot reports LAND mode
   within 2 s, also during returns (AC-6.3; absolute bounds, M-9). A drone under external control is
   exempt: it gets exactly one LAND per operator command (RTH-35). Test: SITL.
 - [ ] RTH-21 [C1, C2] Property test: random sequences of events, commands and timeouts through the state
   machine and the ground senders never produce a takeoff (AC-6.5, M-9). Test: property test.
-- [ ] RTH-22 [C7] AC-6.6 on the ZBook: a 300 cm out-and-back lane in a 400 by 400 cm room, link cut past
+- [ ] RTH-22 [C7] AC-6.6 on the edge laptop: a 300 cm out-and-back lane in a 400 by 400 cm room, link cut past
   the wait, ten taped runs, each landing within its uncertainty bound of the mark. Test: hardware log.
 - [ ] RTH-23 [C1] Under fast uncertainty growth an indoor drone holds, then returns, then lands (AC-8.2).
   Test: fake.
@@ -653,6 +653,18 @@ UI-6, ROLES-1 to ROLES-12, MOB-9; AC-10 → PAR, RES, CONF, FACT and C5 items.
   ground handler test.
 - [ ] SEAM-8 [A3] (F8) One detection pipeline runs per unit: `select_pipeline` returns exactly one
   profile for the unit's search camera. Test: unit test with a dual-sensor unit.
+- [ ] SEAM-9 [XCP] No file under `flightrisk/` or `scripts/` outside the Tello adapter files,
+  `registry.py` and `backends.py` imports a Tello module, compares against a Tello adapter or model name, or
+  uses a Tello-only constant, except the named permanent exemptions; the remaining violations are a baseline
+  that may only shrink. Test: `tests/test_tello_coupling.py`.
+- [ ] SEAM-10 [A3] Runtime code gets today's accepted environment and flag ranges from
+  `flightrisk/params/today.py`, which equals `today_accepts_from_golden` of the golden file exactly, so
+  adopting `resolve_unit` keeps today's range checks. Every runtime call of `resolve_unit` passes today's
+  accepted ranges from `params/today.py`, never `None`. Test: `tests/test_param_today.py`, which lands with
+  A3's `flightrisk/params/today.py` and also runs an AST check over `flightrisk/` that every `resolve_unit` call
+  names the `today_accepts` keyword, that its value comes from `flightrisk.params.today`, that it is not a
+  literal `None`, and that the call has no `**` arguments; the check follows import aliases and wrappers that
+  forward a `None` default.
 
 ### Edge (EDGE)
 
@@ -826,7 +838,7 @@ UI-6, ROLES-1 to ROLES-12, MOB-9; AC-10 → PAR, RES, CONF, FACT and C5 items.
 ### Compatibility (CMP)
 
 - [ ] CMP-1 [A1 to A5] Phase A changes no runtime behaviour: the full suite passes with only the assertion edits design section 27 lists for A5, and no runtime path sends `return`, `escort_setpoint` or `on_complete: return`, enforces a target bound, or flips a default. Test: the full suite; a grep-based test for call sites.
-- [ ] CMP-2 [C6, C7] With no new setting, every resolved value equals the golden file's, except the defaults design section 27 lists for C5, C6 and C7. Test: the suites; SITL before C6 merges; the AC-6.6 hardware runs on the ZBook before C7 merges.
+- [ ] CMP-2 [C6, C7] With no new setting, every resolved value equals the golden file's, except the defaults design section 27 lists for C5, C6 and C7. Test: the suites; SITL before C6 merges; the AC-6.6 hardware runs on the edge laptop before C7 merges.
 - [ ] CMP-3 [A1, C5] (F10) `tests/test_param_parity.py` probes every environment alias
   and flag at both ends of today's range and the new bound, plus a typical and a malformed value, and
   asserts that the resolver accepts exactly what today's code accepts, except the probes listed in
