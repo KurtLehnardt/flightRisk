@@ -10,7 +10,8 @@ missing row or an unknown maximum.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Optional
 
 from flightrisk.params.table import UNSET
@@ -27,6 +28,20 @@ CAP_BOUND_ROWS: frozenset[str] = frozenset({"envelope.ceiling_cm", "envelope.alt
 ACK_ID = "outside_faa_jurisdiction"
 _RECORD_KEYS = frozenset({"value", "ack"})
 _ACK_KEYS = frozenset({"id", "text_version", "at", "by"})
+
+#: How far the acknowledgement's `at` may be ahead of the edge's clock, for clock skew between the
+#: launcher and the edge. A later time is refused.
+ACK_MAX_FUTURE = timedelta(minutes=5)
+
+#: How old the acknowledgement's `at` may be. An older one is refused, so an acknowledgement is never
+#: carried over from an old mission. A5's launcher must ask the operator again once 24 hours have passed
+#: since the last acknowledgement.
+ACK_MAX_AGE = timedelta(hours=24)
+
+#: The only accepted form of `at`: RFC 3339 with a `T` separator, seconds, an optional fraction of up to
+#: six digits, and `Z` or `+00:00`.
+_AT_FORM = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|\+00:00)")
+_AT_NOT_UTC = "the acknowledgement `at` is not an ISO 8601 time in UTC (YYYY-MM-DDTHH:MM:SS with Z or +00:00)"
 
 
 def _value(values: Mapping[str, Any], param_id: str) -> Any:
@@ -68,26 +83,30 @@ def altitude_limit_cm(values: Mapping[str, Any]) -> Optional[int]:
     return known
 
 
-def _utc(text: Any) -> bool:
-    """True when ``text`` is an ISO 8601 time with a UTC offset of zero."""
-    if not isinstance(text, str) or not text.strip():
-        return False
-    raw = text.strip()
-    if raw.endswith(("Z", "z")):
-        raw = raw[:-1] + "+00:00"
+def _at_problem(text: Any, now: Optional[datetime]) -> Optional[str]:
+    """``None`` when ``text`` is a UTC time in the accepted form within the freshness window, or the problem."""
+    if not isinstance(text, str) or _AT_FORM.fullmatch(text) is None:
+        return _AT_NOT_UTC
     try:
-        when = datetime.fromisoformat(raw)
+        when = datetime.fromisoformat(text)
     except ValueError:
-        return False
-    return when.utcoffset() == timedelta(0)
+        return _AT_NOT_UTC
+    now = datetime.now(timezone.utc) if now is None else now
+    if when > now + ACK_MAX_FUTURE:
+        return f"the acknowledgement `at` {text} is more than 5 minutes in the future"
+    if when < now - ACK_MAX_AGE:
+        return f"the acknowledgement `at` {text} is more than 24 hours old; the operator must acknowledge again"
+    return None
 
 
-def acknowledgement_problem(record: Any) -> Optional[str]:
+def acknowledgement_problem(record: Any, now: Optional[datetime] = None) -> Optional[str]:
     """``None`` for a complete cap-off acknowledgement record, or what is wrong with it.
 
     The record is the launcher's ``confirmed["regulatory.altitude_cap_on"]``:
     ``{"value": false, "ack": {"id": "outside_faa_jurisdiction", "text_version": str,
-    "at": ISO 8601 UTC, "by": role}}``. No other key is accepted.
+    "at": "YYYY-MM-DDTHH:MM:SS[.fraction]" with "Z" or "+00:00", "by": role}}``. No other key is
+    accepted. ``at`` must be no more than ``ACK_MAX_FUTURE`` after ``now`` (the current UTC time when
+    omitted) and no more than ``ACK_MAX_AGE`` before it.
     """
     if not isinstance(record, Mapping):
         return "the confirmation is not an acknowledgement record with `value` and `ack`"
@@ -108,6 +127,4 @@ def acknowledgement_problem(record: Any) -> Optional[str]:
         value = ack.get(key)
         if not isinstance(value, str) or not value.strip():
             return f"the acknowledgement has no `{key}`"
-    if not _utc(ack.get("at")):
-        return "the acknowledgement `at` is not an ISO 8601 time in UTC"
-    return None
+    return _at_problem(ack.get("at"), now)

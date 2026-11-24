@@ -41,7 +41,7 @@ today's values, so a start that is not refused flies exactly as before.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
@@ -726,6 +726,59 @@ def envelope_arguments(resolution: EdgeResolution, today: Mapping[str, Any]) -> 
     return arguments
 
 
+#: The ``EnvelopeLimits`` field of each row whose upper bound the unit's altitude limit sets (item 53).
+_ALTITUDE_BOUND_FIELDS: Mapping[str, str] = MappingProxyType({
+    "max_ceiling_cm": "envelope.ceiling_cm",
+    "max_alt_slot_cm": "envelope.alt_slot_cm",
+})
+
+
+def _cap_record(resolution: EdgeResolution) -> Any:
+    """The launcher's acknowledgement record for the altitude cap switch, or None."""
+    from flightrisk.params.altitude import CAP_ON_ID
+
+    launcher = resolution.layers.launcher
+    return None if launcher is None else launcher.confirmed.get(CAP_ON_ID)
+
+
+def envelope_limits(resolution: EdgeResolution, limits: Any) -> Any:
+    """``limits`` with the ceiling and slot upper bounds the unit's altitude limit sets (item 53).
+
+    Only a field unit the cap bounds changes (``resolver.cap_applies``); any other unit, such as an
+    indoor Tello, keeps ``limits`` whatever the switch. When the airframe maximum is known, the bound is
+    ``resolver.altitude_bound_cm``: with the cap on, each upper bound becomes the lower of today's and
+    the bound (the cap, or a lower airframe maximum); with the cap off, the launcher set it and the
+    acknowledgement is accepted again here, and each upper bound becomes the lower of the airframe
+    maximum and the row's resolved upper bound. Otherwise ``limits`` is returned unchanged. A cap that
+    is off without an accepted acknowledgement and a known airframe maximum refuses the start
+    (``EdgeStartRefused``), although ``resolve_unit`` refuses it first.
+    """
+    from flightrisk.params.altitude import CAP_ON_ID
+    from flightrisk.params.resolver import altitude_bound_cm, cap_applies
+
+    cap_on = resolution.values.get(CAP_ON_ID)
+    if cap_on is None or getattr(limits, "name", None) != "field" or not cap_applies(resolution.layers.choice.model):
+        return limits
+    bound = altitude_bound_cm(resolution.values, _cap_record(resolution))
+    if bound is None:
+        if cap_on.value is not True:
+            raise EdgeStartRefused(_refusing(
+                f"{resolution.layers.unit_id}: the altitude cap is off without an accepted acknowledgement "
+                "and a known airframe maximum."))
+        return limits
+    changes = {}
+    for name, row in _ALTITUDE_BOUND_FIELDS.items():
+        current = getattr(limits, name)
+        if cap_on.value is True:
+            new = min(current, bound)
+        else:
+            row_hi = getattr(resolution.values.get(row), "hi", None)
+            new = bound if row_hi is None else min(bound, row_hi)
+        if new != current:
+            changes[name] = float(new)
+    return replace(limits, **changes) if changes else limits
+
+
 def _refuse_shadowed(resolution: EdgeResolution, row: str, value: Any, flown: Any) -> None:
     """Refuse a start where an environment or command-line name hides a launcher or params-file value.
 
@@ -852,6 +905,8 @@ def log_edge_start(resolution: EdgeResolution, log: Any, *, drone_id: Optional[s
     with safety or setting wording (R8). A fact override ignored on a production unit is logged by the
     resolver, one line naming the variable.
     """
+    from flightrisk.params.altitude import CAP_ON_ID
+
     facts = _fact_ids(resolution.layers.profile)
     for param_id in sorted(resolution.values):
         value = resolution.values[param_id]
@@ -861,9 +916,34 @@ def log_edge_start(resolution: EdgeResolution, log: Any, *, drone_id: Optional[s
         if param_id in facts:
             log.info("edge_fact_override", drone_id=drone_id, param_id=param_id, value=value.value,
                      source=source, detail=value.source_detail)
+        elif param_id == CAP_ON_ID and value.value is False:
+            _log_cap_off(resolution, log, value, source, drone_id)
         elif value.less_safe:
             log.warning("edge_value_less_safe", drone_id=drone_id, param_id=param_id, value=value.value,
                         default=value.default, source=source, detail=value.source_detail)
         else:
             log.info("edge_value_non_default", drone_id=drone_id, param_id=param_id, value=value.value,
                      default=value.default, source=source, detail=value.source_detail)
+
+
+def _log_cap_off(resolution: EdgeResolution, log: Any, value: Any, source: str, drone_id: Optional[str]) -> None:
+    """Log the altitude cap switch off with its acknowledgement (item 53).
+
+    On a unit the cap bounds, a warning ``edge_value_less_safe`` carries the acknowledgement's ``id``,
+    ``text_version``, ``at`` and ``by``. On any other unit, such as an indoor Tello, the cap changes
+    nothing, and an info ``edge_altitude_cap_not_applicable`` says so.
+    """
+    from flightrisk.params.altitude import CAP_ON_ID
+    from flightrisk.params.resolver import cap_applies
+
+    record = _cap_record(resolution)
+    ack = record.get("ack") if isinstance(record, Mapping) else None
+    ack = ack if isinstance(ack, Mapping) else {}
+    fields = {f"ack_{key}": ack.get(key) for key in ("id", "text_version", "at", "by")}
+    if not cap_applies(resolution.layers.choice.model):
+        log.info("edge_altitude_cap_not_applicable", drone_id=drone_id, param_id=CAP_ON_ID, value=value.value,
+                 source=source, detail=f"the altitude cap does not apply to {resolution.layers.unit_id}: it "
+                 "bounds no ceiling or slot of this unit, so nothing changes", **fields)
+        return
+    log.warning("edge_value_less_safe", drone_id=drone_id, param_id=CAP_ON_ID, value=value.value,
+                default=value.default, source=source, detail=value.source_detail, **fields)

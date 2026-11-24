@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import math
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -20,7 +21,7 @@ BY_ID = {row.id: row for row in TABLE}
 
 
 ACK = {"value": False, "ack": {"id": "outside_faa_jurisdiction", "text_version": "1",
-                               "at": "2026-11-24T18:00:00Z", "by": "operator"}}
+                               "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "by": "operator"}}
 
 
 def _values(cap_on=True, cap=12000, airframe=UNSET):
@@ -175,3 +176,49 @@ def test_mavlink_fleet_drone_declares_an_unknown_maximum():
 
     drone = MavlinkFleetDrone("drone-1", MavsdkAutopilotLink("tcpout://127.0.0.1:1"), MavlinkFleetOptions())
     assert drone.capabilities.max_altitude_m is None
+
+
+# --- The acknowledgement time is strict and fresh (F4) ---------------------------------------------------------
+
+_NOW = datetime(2026, 11, 24, 18, 0, 0, tzinfo=timezone.utc)
+
+
+def _at_problem(at):
+    from flightrisk.params.altitude import acknowledgement_problem
+
+    return acknowledgement_problem({**ACK, "ack": {**ACK["ack"], "at": at}}, now=_NOW)
+
+
+@pytest.mark.parametrize("at", [
+    "2026-11-24T18:00:00Z", "2026-11-24T18:00:00+00:00", "2026-11-24T17:59:59.5Z",
+    "2026-11-24T17:59:59.123456+00:00", "2026-11-24T18:04:59Z", "2026-11-23T18:00:01Z",
+])
+def test_a_fresh_utc_time_in_the_strict_form_is_accepted(at):
+    assert _at_problem(at) is None
+
+
+@pytest.mark.parametrize("at", [
+    "2026-11-24 18:00:00Z", "20261124T180000Z", "2026-W48-2T18:00:00Z", "2026-11-24T18:00:00-00:00",
+    "2026-11-24T19:00:00+01:00", "2026-11-24T18:00:00", "2026-11-24T18:00Z", "2026-11-24T18:00:00z",
+    "2026-11-24T18:00:00.1234567Z", "2026-11-24T18:00:00Z ", "2026-13-24T18:00:00Z", 1764007200, None,
+])
+def test_any_other_form_of_the_time_is_refused(at):
+    assert "is not an ISO 8601 time in UTC" in _at_problem(at)
+
+
+@pytest.mark.parametrize("at", ["2026-11-24T18:05:01Z", "9999-12-31T23:59:59Z"])
+def test_a_time_more_than_5_minutes_ahead_is_refused(at):
+    assert "more than 5 minutes in the future" in _at_problem(at)
+
+
+@pytest.mark.parametrize("at", ["2026-11-23T17:59:59Z", "1970-01-01T00:00:00Z"])
+def test_a_time_older_than_24_hours_is_refused(at):
+    assert "more than 24 hours old" in _at_problem(at)
+
+
+def test_the_freshness_limits_are_named_constants():
+    from datetime import timedelta
+
+    from flightrisk.params import altitude
+
+    assert altitude.ACK_MAX_FUTURE == timedelta(minutes=5) and altitude.ACK_MAX_AGE == timedelta(hours=24)
