@@ -788,7 +788,8 @@ class FlightSequenceMixin:
         has its move sized from that height, because its vertical moves are
         added to it (``_move_from_height``).
 
-        Lands if the height is unknown, and lands instead of climbing when
+        Lands if neither the commanded height nor the measured height is
+        known, and lands instead of climbing when
         the slot, or the climb from the height the move is sized from (the
         commanded height when the drone reports one, else the measured
         height), would end above the ceiling limit

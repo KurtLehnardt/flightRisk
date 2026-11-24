@@ -437,6 +437,36 @@ def test_climb_from_a_takeoff_that_overshoots_ends_at_the_slot(make_edge):
     assert wait_for(lambda: abs(edge.vehicle.alt - 15.0) < 0.05), edge.vehicle.alt
 
 
+def test_climb_from_an_unknown_measured_height_uses_the_commanded_height(make_edge):
+    """A MAVLink drone that cannot read its height after takeoff, but knows the one it is commanded to hold, climbs."""
+    edge = make_edge()
+    assert edge.ready(), edge.drone.link_status()
+    measured = edge.drone.read_height_cm
+    edge.drone.read_height_cm = lambda: None if edge.drone.commanded_height_cm() is not None else measured()
+    start_lanes(edge, lanes=[{"direction": "forward", "distance_cm": 500}], alt_cm=1500)
+    assert wait_for(lambda: edge.executor.lane_index == 1 and not edge.executor.is_busy), edge.log.names()
+    assert "edge_altitude_unknown" not in edge.log.names()
+    climb = _slot_climb(edge)
+    assert (climb["direction"], climb["distance_cm"]) == ("up", 1000)
+    assert edge.drone.commanded_height_cm() == pytest.approx(1500)
+    assert wait_for(lambda: abs(edge.vehicle.alt - 15.0) < 0.05), edge.vehicle.alt
+    assert edge.vehicle.alt == pytest.approx(15.0, abs=edge.drone.options.arrival_alt_m)
+
+
+def test_climb_lands_when_neither_the_commanded_nor_the_measured_height_is_known(make_edge):
+    """A drone with no commanded height (as a Tello) and an unknown measured height still lands: height_unknown."""
+    edge = make_edge()
+    assert edge.ready(), edge.drone.link_status()
+    measured = edge.drone.read_height_cm
+    commanded = edge.drone.commanded_height_cm
+    edge.drone.commanded_height_cm = lambda: None
+    edge.drone.read_height_cm = lambda: None if commanded() is not None else measured()
+    start_lanes(edge, lanes=[{"direction": "forward", "distance_cm": 500}], alt_cm=1500)
+    assert wait_for(lambda: "edge_altitude_unknown" in edge.log.names()), edge.log.names()
+    assert wait_for(lambda: ("land",) in edge.vehicle.commands or not edge.drone.state.is_flying), edge.log.names()
+    assert not [1 for _, name, _ in edge.log.events if name == "edge_alt_slot_climb"]
+
+
 def test_commanded_height_is_unknown_before_the_first_takeoff(make_edge):
     edge = make_edge()
     assert edge.ready()
