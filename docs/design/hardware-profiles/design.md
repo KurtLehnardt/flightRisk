@@ -1221,7 +1221,7 @@ every "from <PR>" tag in `parameters.md` matches an item below naming that PR an
   edge honours today, and logs one line naming each ignored variable (FACT-3, N-10). It also ignores the 9
   overrides of the Tello flight-guard and temperature facts (the `FLIGHTRISK_TELLO_*` settle, late-takeoff,
   refusal and temperature variables), which its model does not hold, with the same log line naming each
-  variable; a MAVLink drone never uses these settings, so its flight does not change. Until B1 adds the SITL
+  variable; a MAVLink drone never uses these settings, so its flight does not change. The edge also refuses a start in which an environment variable or flag that today's envelope does not read for that drone would win an envelope row (an altitude slot or a battery level) over a launcher or params-file value, because the drone would otherwise fly neither value; before A3 that start was accepted and the launcher or file value was silently dropped. Until B1 adds the SITL
   board identity check (CAP-6), only the fake adapter counts as simulated, so every MAVLink unit counts as
   production. A test-adapter fact is never classified or logged as less safe, from any layer or value
   (R7, R8). Assertions: `tests/test_param_resolver.py:142` (a fact's off value is applied but no longer
