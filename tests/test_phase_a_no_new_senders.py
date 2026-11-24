@@ -85,6 +85,11 @@ NEW_STRINGS = NEW_STRINGS | frozenset(name for name in NEW_NAMES if name.startsw
 #: A3 and C1 add their senders here.
 ALLOWED: dict[str, frozenset[tuple[str, str]]] = {}
 
+#: The only tokens Phase A3 may add to ``ALLOWED``: the edge's ``describe_unit``
+#: reply (PROTO-4) and the ``unit_rev`` it sends in its v2 ``hello`` (PROTO-3).
+#: The ground's query builder ``make_describe_unit`` is not among them.
+A3_TOKENS = frozenset({"make_describe_unit_ack", "make_describe_unit_nack", "unit_rev", "unit_rev="})
+
 #: Uses that send nothing, each with its reason. Kept apart from ``ALLOWED``,
 #: which lists senders and stays empty in A2.
 #: Each exemption is ``(token, scope)``, where scope is the innermost enclosing
@@ -229,8 +234,10 @@ def test_an_exemption_covers_only_its_own_function():
     assert found - exempt == {("landing=", "other")}
 
 
-def test_the_allowlist_is_empty_in_phase_a2():
-    assert ALLOWED == {}
+def test_the_allowlist_names_only_a3_tokens():
+    tokens = {token for entries in ALLOWED.values() for token, _ in entries}
+    assert tokens <= A3_TOKENS
+    assert all(ALLOWED.values()), "an ALLOWED entry must name at least one token"
 
 
 def test_the_scan_covers_the_runtime_modules():
@@ -288,7 +295,6 @@ def test_the_scanner_ignores_older_unrelated_uses(source):
 
 
 _GATED_COMMANDS = [
-    fp.make_describe_unit("drone-1", cmd_id="c-du"),
     fp.make_return_home("drone-1", cmd_id="c-rh"),
     fp.make_set_no_entry("drone-1", [], fence=(7, "ground-a"), cmd_id="c-ne"),
     fp.make_set_speed("drone-1", 150, fence=(7, "ground-a"), cmd_id="c-sp"),
