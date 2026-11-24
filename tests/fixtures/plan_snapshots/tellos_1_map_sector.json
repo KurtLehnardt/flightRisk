@@ -1,0 +1,2640 @@
+{
+  "assign_lanes": {
+    "d1": [
+      {
+        "alt_cm": 100,
+        "drone_id": "d1",
+        "lanes": [
+          {
+            "direction": "forward",
+            "distance_cm": 200
+          },
+          {
+            "direction": "right",
+            "distance_cm": 200
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 180
+          },
+          {
+            "direction": "back",
+            "distance_cm": 180
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "back",
+            "distance_cm": 180
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 180
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          }
+        ],
+        "type": "assign_lanes",
+        "zone": {
+          "h_cm": 400,
+          "takeoff_x_cm": 0,
+          "takeoff_y_cm": 0,
+          "w_cm": 400,
+          "x_cm": 0,
+          "y_cm": 0
+        }
+      }
+    ]
+  },
+  "built": {
+    "area": {
+      "h_cm": 400,
+      "w_cm": 400,
+      "x_cm": 0,
+      "y_cm": 0
+    },
+    "coverage": {
+      "cell_cm": 10,
+      "footprint_cm": 75,
+      "fraction": 0.6669,
+      "model": "nominal (downward camera model)",
+      "note": "Nominal figure: a 75 cm square seen straight below each drone (FLIGHTRISK_CAMERA_FOOTPRINT_CM). The real field of view may be wider, and a gimbal camera changes it. Gaps can be intentional, for example trees or a water hazard."
+    },
+    "drones": [
+      {
+        "alt_cm": 100,
+        "drawn": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            200
+          ],
+          [
+            200,
+            200
+          ],
+          [
+            200,
+            380
+          ],
+          [
+            200,
+            200
+          ],
+          [
+            356,
+            290
+          ],
+          [
+            200,
+            200
+          ],
+          [
+            356,
+            110
+          ],
+          [
+            200,
+            200
+          ],
+          [
+            200,
+            20
+          ],
+          [
+            200,
+            200
+          ],
+          [
+            44,
+            110
+          ],
+          [
+            200,
+            200
+          ],
+          [
+            44,
+            290
+          ],
+          [
+            200,
+            200
+          ]
+        ],
+        "drone_id": "d1",
+        "edited": false,
+        "generated": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            200
+          ],
+          [
+            200,
+            200
+          ],
+          [
+            200,
+            380
+          ],
+          [
+            200,
+            200
+          ],
+          [
+            356,
+            290
+          ],
+          [
+            200,
+            200
+          ],
+          [
+            356,
+            110
+          ],
+          [
+            200,
+            200
+          ],
+          [
+            200,
+            20
+          ],
+          [
+            200,
+            200
+          ],
+          [
+            44,
+            110
+          ],
+          [
+            200,
+            200
+          ],
+          [
+            44,
+            290
+          ],
+          [
+            200,
+            200
+          ]
+        ],
+        "lanes": [
+          {
+            "direction": "forward",
+            "distance_cm": 200
+          },
+          {
+            "direction": "right",
+            "distance_cm": 200
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 180
+          },
+          {
+            "direction": "back",
+            "distance_cm": 180
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "back",
+            "distance_cm": 180
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 180
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          }
+        ],
+        "max_deviation_cm": 19.5,
+        "moves": 70,
+        "path": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            200
+          ],
+          [
+            200,
+            200
+          ],
+          [
+            200,
+            380
+          ],
+          [
+            200,
+            200
+          ],
+          [
+            239,
+            200
+          ],
+          [
+            239,
+            223
+          ],
+          [
+            278,
+            223
+          ],
+          [
+            278,
+            246
+          ],
+          [
+            317,
+            246
+          ],
+          [
+            317,
+            268
+          ],
+          [
+            356,
+            268
+          ],
+          [
+            356,
+            290
+          ],
+          [
+            317,
+            290
+          ],
+          [
+            317,
+            267
+          ],
+          [
+            278,
+            267
+          ],
+          [
+            278,
+            244
+          ],
+          [
+            239,
+            244
+          ],
+          [
+            239,
+            222
+          ],
+          [
+            200,
+            222
+          ],
+          [
+            200,
+            200
+          ],
+          [
+            239,
+            200
+          ],
+          [
+            239,
+            177
+          ],
+          [
+            278,
+            177
+          ],
+          [
+            278,
+            154
+          ],
+          [
+            317,
+            154
+          ],
+          [
+            317,
+            132
+          ],
+          [
+            356,
+            132
+          ],
+          [
+            356,
+            110
+          ],
+          [
+            317,
+            110
+          ],
+          [
+            317,
+            133
+          ],
+          [
+            278,
+            133
+          ],
+          [
+            278,
+            156
+          ],
+          [
+            239,
+            156
+          ],
+          [
+            239,
+            178
+          ],
+          [
+            200,
+            178
+          ],
+          [
+            200,
+            200
+          ],
+          [
+            200,
+            20
+          ],
+          [
+            200,
+            200
+          ],
+          [
+            161,
+            200
+          ],
+          [
+            161,
+            177
+          ],
+          [
+            122,
+            177
+          ],
+          [
+            122,
+            154
+          ],
+          [
+            83,
+            154
+          ],
+          [
+            83,
+            132
+          ],
+          [
+            44,
+            132
+          ],
+          [
+            44,
+            110
+          ],
+          [
+            83,
+            110
+          ],
+          [
+            83,
+            133
+          ],
+          [
+            122,
+            133
+          ],
+          [
+            122,
+            156
+          ],
+          [
+            161,
+            156
+          ],
+          [
+            161,
+            178
+          ],
+          [
+            200,
+            178
+          ],
+          [
+            200,
+            200
+          ],
+          [
+            161,
+            200
+          ],
+          [
+            161,
+            223
+          ],
+          [
+            122,
+            223
+          ],
+          [
+            122,
+            246
+          ],
+          [
+            83,
+            246
+          ],
+          [
+            83,
+            268
+          ],
+          [
+            44,
+            268
+          ],
+          [
+            44,
+            290
+          ],
+          [
+            83,
+            290
+          ],
+          [
+            83,
+            267
+          ],
+          [
+            122,
+            267
+          ],
+          [
+            122,
+            244
+          ],
+          [
+            161,
+            244
+          ],
+          [
+            161,
+            222
+          ],
+          [
+            200,
+            222
+          ],
+          [
+            200,
+            200
+          ]
+        ],
+        "takeoff_cm": [
+          0,
+          0
+        ],
+        "zone": {
+          "h_cm": 400,
+          "w_cm": 400,
+          "x_cm": 0,
+          "y_cm": 0
+        }
+      }
+    ],
+    "gap_cm": 100,
+    "geofence_cm": 500.0,
+    "mode": "fleet",
+    "ok": true,
+    "pattern": "sector",
+    "problems": [],
+    "snap_tolerance_cm": 40,
+    "spec": {
+      "area": {
+        "h_cm": 400,
+        "w_cm": 400,
+        "x_cm": 0,
+        "y_cm": 0
+      },
+      "paths": {},
+      "pattern": "sector",
+      "version": 1
+    },
+    "strip_cm": 75,
+    "takeoff_layout": [
+      "d1 on its mark"
+    ],
+    "takeoffs": {
+      "d1": [
+        0,
+        0
+      ]
+    },
+    "uncovered": [
+      {
+        "h_cm": 70,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 160,
+        "x_cm": 240,
+        "y_cm": 0
+      },
+      {
+        "h_cm": 70,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 160,
+        "x_cm": 0,
+        "y_cm": 330
+      },
+      {
+        "h_cm": 70,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 160,
+        "x_cm": 240,
+        "y_cm": 330
+      },
+      {
+        "h_cm": 70,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 120,
+        "x_cm": 40,
+        "y_cm": 0
+      },
+      {
+        "h_cm": 20,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 80,
+        "x_cm": 320,
+        "y_cm": 190
+      },
+      {
+        "h_cm": 30,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 40,
+        "x_cm": 120,
+        "y_cm": 70
+      },
+      {
+        "h_cm": 30,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 40,
+        "x_cm": 240,
+        "y_cm": 70
+      },
+      {
+        "h_cm": 30,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 40,
+        "x_cm": 120,
+        "y_cm": 300
+      },
+      {
+        "h_cm": 30,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 40,
+        "x_cm": 240,
+        "y_cm": 300
+      },
+      {
+        "h_cm": 100,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 10,
+        "x_cm": 390,
+        "y_cm": 70
+      },
+      {
+        "h_cm": 20,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 50,
+        "x_cm": 350,
+        "y_cm": 170
+      },
+      {
+        "h_cm": 20,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 50,
+        "x_cm": 350,
+        "y_cm": 210
+      },
+      {
+        "h_cm": 100,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 10,
+        "x_cm": 390,
+        "y_cm": 230
+      },
+      {
+        "h_cm": 90,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 10,
+        "x_cm": 0,
+        "y_cm": 240
+      }
+    ]
+  },
+  "drone_ids": [
+    "d1"
+  ],
+  "ok": true,
+  "pattern": "sector",
+  "plan": {
+    "details": {
+      "area": {
+        "h_cm": 400,
+        "w_cm": 400,
+        "x_cm": 0,
+        "y_cm": 0
+      },
+      "coverage": {
+        "cell_cm": 10,
+        "footprint_cm": 75,
+        "fraction": 0.6669,
+        "model": "nominal (downward camera model)",
+        "note": "Nominal figure: a 75 cm square seen straight below each drone (FLIGHTRISK_CAMERA_FOOTPRINT_CM). The real field of view may be wider, and a gimbal camera changes it. Gaps can be intentional, for example trees or a water hazard."
+      },
+      "drones": [
+        {
+          "alt_cm": 100,
+          "drawn": [
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              200
+            ],
+            [
+              200,
+              200
+            ],
+            [
+              200,
+              380
+            ],
+            [
+              200,
+              200
+            ],
+            [
+              356,
+              290
+            ],
+            [
+              200,
+              200
+            ],
+            [
+              356,
+              110
+            ],
+            [
+              200,
+              200
+            ],
+            [
+              200,
+              20
+            ],
+            [
+              200,
+              200
+            ],
+            [
+              44,
+              110
+            ],
+            [
+              200,
+              200
+            ],
+            [
+              44,
+              290
+            ],
+            [
+              200,
+              200
+            ]
+          ],
+          "drone_id": "d1",
+          "edited": false,
+          "generated": [
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              200
+            ],
+            [
+              200,
+              200
+            ],
+            [
+              200,
+              380
+            ],
+            [
+              200,
+              200
+            ],
+            [
+              356,
+              290
+            ],
+            [
+              200,
+              200
+            ],
+            [
+              356,
+              110
+            ],
+            [
+              200,
+              200
+            ],
+            [
+              200,
+              20
+            ],
+            [
+              200,
+              200
+            ],
+            [
+              44,
+              110
+            ],
+            [
+              200,
+              200
+            ],
+            [
+              44,
+              290
+            ],
+            [
+              200,
+              200
+            ]
+          ],
+          "lanes": [
+            {
+              "direction": "forward",
+              "distance_cm": 200
+            },
+            {
+              "direction": "right",
+              "distance_cm": 200
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 180
+            },
+            {
+              "direction": "back",
+              "distance_cm": 180
+            },
+            {
+              "direction": "right",
+              "distance_cm": 39
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 23
+            },
+            {
+              "direction": "right",
+              "distance_cm": 39
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 23
+            },
+            {
+              "direction": "right",
+              "distance_cm": 39
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 22
+            },
+            {
+              "direction": "right",
+              "distance_cm": 39
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 22
+            },
+            {
+              "direction": "left",
+              "distance_cm": 39
+            },
+            {
+              "direction": "back",
+              "distance_cm": 23
+            },
+            {
+              "direction": "left",
+              "distance_cm": 39
+            },
+            {
+              "direction": "back",
+              "distance_cm": 23
+            },
+            {
+              "direction": "left",
+              "distance_cm": 39
+            },
+            {
+              "direction": "back",
+              "distance_cm": 22
+            },
+            {
+              "direction": "left",
+              "distance_cm": 39
+            },
+            {
+              "direction": "back",
+              "distance_cm": 22
+            },
+            {
+              "direction": "right",
+              "distance_cm": 39
+            },
+            {
+              "direction": "back",
+              "distance_cm": 23
+            },
+            {
+              "direction": "right",
+              "distance_cm": 39
+            },
+            {
+              "direction": "back",
+              "distance_cm": 23
+            },
+            {
+              "direction": "right",
+              "distance_cm": 39
+            },
+            {
+              "direction": "back",
+              "distance_cm": 22
+            },
+            {
+              "direction": "right",
+              "distance_cm": 39
+            },
+            {
+              "direction": "back",
+              "distance_cm": 22
+            },
+            {
+              "direction": "left",
+              "distance_cm": 39
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 23
+            },
+            {
+              "direction": "left",
+              "distance_cm": 39
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 23
+            },
+            {
+              "direction": "left",
+              "distance_cm": 39
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 22
+            },
+            {
+              "direction": "left",
+              "distance_cm": 39
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 22
+            },
+            {
+              "direction": "back",
+              "distance_cm": 180
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 180
+            },
+            {
+              "direction": "left",
+              "distance_cm": 39
+            },
+            {
+              "direction": "back",
+              "distance_cm": 23
+            },
+            {
+              "direction": "left",
+              "distance_cm": 39
+            },
+            {
+              "direction": "back",
+              "distance_cm": 23
+            },
+            {
+              "direction": "left",
+              "distance_cm": 39
+            },
+            {
+              "direction": "back",
+              "distance_cm": 22
+            },
+            {
+              "direction": "left",
+              "distance_cm": 39
+            },
+            {
+              "direction": "back",
+              "distance_cm": 22
+            },
+            {
+              "direction": "right",
+              "distance_cm": 39
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 23
+            },
+            {
+              "direction": "right",
+              "distance_cm": 39
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 23
+            },
+            {
+              "direction": "right",
+              "distance_cm": 39
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 22
+            },
+            {
+              "direction": "right",
+              "distance_cm": 39
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 22
+            },
+            {
+              "direction": "left",
+              "distance_cm": 39
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 23
+            },
+            {
+              "direction": "left",
+              "distance_cm": 39
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 23
+            },
+            {
+              "direction": "left",
+              "distance_cm": 39
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 22
+            },
+            {
+              "direction": "left",
+              "distance_cm": 39
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 22
+            },
+            {
+              "direction": "right",
+              "distance_cm": 39
+            },
+            {
+              "direction": "back",
+              "distance_cm": 23
+            },
+            {
+              "direction": "right",
+              "distance_cm": 39
+            },
+            {
+              "direction": "back",
+              "distance_cm": 23
+            },
+            {
+              "direction": "right",
+              "distance_cm": 39
+            },
+            {
+              "direction": "back",
+              "distance_cm": 22
+            },
+            {
+              "direction": "right",
+              "distance_cm": 39
+            },
+            {
+              "direction": "back",
+              "distance_cm": 22
+            }
+          ],
+          "max_deviation_cm": 19.5,
+          "moves": 70,
+          "path": [
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              200
+            ],
+            [
+              200,
+              200
+            ],
+            [
+              200,
+              380
+            ],
+            [
+              200,
+              200
+            ],
+            [
+              239,
+              200
+            ],
+            [
+              239,
+              223
+            ],
+            [
+              278,
+              223
+            ],
+            [
+              278,
+              246
+            ],
+            [
+              317,
+              246
+            ],
+            [
+              317,
+              268
+            ],
+            [
+              356,
+              268
+            ],
+            [
+              356,
+              290
+            ],
+            [
+              317,
+              290
+            ],
+            [
+              317,
+              267
+            ],
+            [
+              278,
+              267
+            ],
+            [
+              278,
+              244
+            ],
+            [
+              239,
+              244
+            ],
+            [
+              239,
+              222
+            ],
+            [
+              200,
+              222
+            ],
+            [
+              200,
+              200
+            ],
+            [
+              239,
+              200
+            ],
+            [
+              239,
+              177
+            ],
+            [
+              278,
+              177
+            ],
+            [
+              278,
+              154
+            ],
+            [
+              317,
+              154
+            ],
+            [
+              317,
+              132
+            ],
+            [
+              356,
+              132
+            ],
+            [
+              356,
+              110
+            ],
+            [
+              317,
+              110
+            ],
+            [
+              317,
+              133
+            ],
+            [
+              278,
+              133
+            ],
+            [
+              278,
+              156
+            ],
+            [
+              239,
+              156
+            ],
+            [
+              239,
+              178
+            ],
+            [
+              200,
+              178
+            ],
+            [
+              200,
+              200
+            ],
+            [
+              200,
+              20
+            ],
+            [
+              200,
+              200
+            ],
+            [
+              161,
+              200
+            ],
+            [
+              161,
+              177
+            ],
+            [
+              122,
+              177
+            ],
+            [
+              122,
+              154
+            ],
+            [
+              83,
+              154
+            ],
+            [
+              83,
+              132
+            ],
+            [
+              44,
+              132
+            ],
+            [
+              44,
+              110
+            ],
+            [
+              83,
+              110
+            ],
+            [
+              83,
+              133
+            ],
+            [
+              122,
+              133
+            ],
+            [
+              122,
+              156
+            ],
+            [
+              161,
+              156
+            ],
+            [
+              161,
+              178
+            ],
+            [
+              200,
+              178
+            ],
+            [
+              200,
+              200
+            ],
+            [
+              161,
+              200
+            ],
+            [
+              161,
+              223
+            ],
+            [
+              122,
+              223
+            ],
+            [
+              122,
+              246
+            ],
+            [
+              83,
+              246
+            ],
+            [
+              83,
+              268
+            ],
+            [
+              44,
+              268
+            ],
+            [
+              44,
+              290
+            ],
+            [
+              83,
+              290
+            ],
+            [
+              83,
+              267
+            ],
+            [
+              122,
+              267
+            ],
+            [
+              122,
+              244
+            ],
+            [
+              161,
+              244
+            ],
+            [
+              161,
+              222
+            ],
+            [
+              200,
+              222
+            ],
+            [
+              200,
+              200
+            ]
+          ],
+          "takeoff_cm": [
+            0,
+            0
+          ],
+          "zone": {
+            "h_cm": 400,
+            "w_cm": 400,
+            "x_cm": 0,
+            "y_cm": 0
+          }
+        }
+      ],
+      "gap_cm": 100,
+      "geofence_cm": 500.0,
+      "mode": "fleet",
+      "ok": true,
+      "pattern": "sector",
+      "problems": [],
+      "snap_tolerance_cm": 40,
+      "spec": {
+        "area": {
+          "h_cm": 400,
+          "w_cm": 400,
+          "x_cm": 0,
+          "y_cm": 0
+        },
+        "paths": {},
+        "pattern": "sector",
+        "version": 1
+      },
+      "strip_cm": 75,
+      "takeoff_layout": [
+        "d1 on its mark"
+      ],
+      "takeoffs": {
+        "d1": [
+          0,
+          0
+        ]
+      },
+      "uncovered": [
+        {
+          "h_cm": 70,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 160,
+          "x_cm": 240,
+          "y_cm": 0
+        },
+        {
+          "h_cm": 70,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 160,
+          "x_cm": 0,
+          "y_cm": 330
+        },
+        {
+          "h_cm": 70,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 160,
+          "x_cm": 240,
+          "y_cm": 330
+        },
+        {
+          "h_cm": 70,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 120,
+          "x_cm": 40,
+          "y_cm": 0
+        },
+        {
+          "h_cm": 20,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 80,
+          "x_cm": 320,
+          "y_cm": 190
+        },
+        {
+          "h_cm": 30,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 40,
+          "x_cm": 120,
+          "y_cm": 70
+        },
+        {
+          "h_cm": 30,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 40,
+          "x_cm": 240,
+          "y_cm": 70
+        },
+        {
+          "h_cm": 30,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 40,
+          "x_cm": 120,
+          "y_cm": 300
+        },
+        {
+          "h_cm": 30,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 40,
+          "x_cm": 240,
+          "y_cm": 300
+        },
+        {
+          "h_cm": 100,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 10,
+          "x_cm": 390,
+          "y_cm": 70
+        },
+        {
+          "h_cm": 20,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 50,
+          "x_cm": 350,
+          "y_cm": 170
+        },
+        {
+          "h_cm": 20,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 50,
+          "x_cm": 350,
+          "y_cm": 210
+        },
+        {
+          "h_cm": 100,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 10,
+          "x_cm": 390,
+          "y_cm": 230
+        },
+        {
+          "h_cm": 90,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 10,
+          "x_cm": 0,
+          "y_cm": 240
+        }
+      ]
+    },
+    "gap_cm": 100,
+    "grid": {
+      "h_cm": 400,
+      "w_cm": 400,
+      "x_cm": 0,
+      "y_cm": 0
+    },
+    "strip_cm": 75,
+    "zones": [
+      {
+        "alt_cm": 100,
+        "drone_id": "d1",
+        "h_cm": 400,
+        "lanes": [
+          {
+            "direction": "forward",
+            "distance_cm": 200
+          },
+          {
+            "direction": "right",
+            "distance_cm": 200
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 180
+          },
+          {
+            "direction": "back",
+            "distance_cm": 180
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "back",
+            "distance_cm": 180
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 180
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 23
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "left",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 23
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 39
+          },
+          {
+            "direction": "back",
+            "distance_cm": 22
+          }
+        ],
+        "takeoff_x_cm": 0,
+        "takeoff_y_cm": 0,
+        "w_cm": 400,
+        "x_cm": 0,
+        "y_cm": 0
+      }
+    ]
+  },
+  "zone_assignments": [
+    {
+      "alt_cm": 100,
+      "drone_id": "d1",
+      "h_cm": 400,
+      "lanes": [
+        {
+          "direction": "forward",
+          "distance_cm": 200
+        },
+        {
+          "direction": "right",
+          "distance_cm": 200
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 180
+        },
+        {
+          "direction": "back",
+          "distance_cm": 180
+        },
+        {
+          "direction": "right",
+          "distance_cm": 39
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 23
+        },
+        {
+          "direction": "right",
+          "distance_cm": 39
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 23
+        },
+        {
+          "direction": "right",
+          "distance_cm": 39
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 22
+        },
+        {
+          "direction": "right",
+          "distance_cm": 39
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 22
+        },
+        {
+          "direction": "left",
+          "distance_cm": 39
+        },
+        {
+          "direction": "back",
+          "distance_cm": 23
+        },
+        {
+          "direction": "left",
+          "distance_cm": 39
+        },
+        {
+          "direction": "back",
+          "distance_cm": 23
+        },
+        {
+          "direction": "left",
+          "distance_cm": 39
+        },
+        {
+          "direction": "back",
+          "distance_cm": 22
+        },
+        {
+          "direction": "left",
+          "distance_cm": 39
+        },
+        {
+          "direction": "back",
+          "distance_cm": 22
+        },
+        {
+          "direction": "right",
+          "distance_cm": 39
+        },
+        {
+          "direction": "back",
+          "distance_cm": 23
+        },
+        {
+          "direction": "right",
+          "distance_cm": 39
+        },
+        {
+          "direction": "back",
+          "distance_cm": 23
+        },
+        {
+          "direction": "right",
+          "distance_cm": 39
+        },
+        {
+          "direction": "back",
+          "distance_cm": 22
+        },
+        {
+          "direction": "right",
+          "distance_cm": 39
+        },
+        {
+          "direction": "back",
+          "distance_cm": 22
+        },
+        {
+          "direction": "left",
+          "distance_cm": 39
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 23
+        },
+        {
+          "direction": "left",
+          "distance_cm": 39
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 23
+        },
+        {
+          "direction": "left",
+          "distance_cm": 39
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 22
+        },
+        {
+          "direction": "left",
+          "distance_cm": 39
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 22
+        },
+        {
+          "direction": "back",
+          "distance_cm": 180
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 180
+        },
+        {
+          "direction": "left",
+          "distance_cm": 39
+        },
+        {
+          "direction": "back",
+          "distance_cm": 23
+        },
+        {
+          "direction": "left",
+          "distance_cm": 39
+        },
+        {
+          "direction": "back",
+          "distance_cm": 23
+        },
+        {
+          "direction": "left",
+          "distance_cm": 39
+        },
+        {
+          "direction": "back",
+          "distance_cm": 22
+        },
+        {
+          "direction": "left",
+          "distance_cm": 39
+        },
+        {
+          "direction": "back",
+          "distance_cm": 22
+        },
+        {
+          "direction": "right",
+          "distance_cm": 39
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 23
+        },
+        {
+          "direction": "right",
+          "distance_cm": 39
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 23
+        },
+        {
+          "direction": "right",
+          "distance_cm": 39
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 22
+        },
+        {
+          "direction": "right",
+          "distance_cm": 39
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 22
+        },
+        {
+          "direction": "left",
+          "distance_cm": 39
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 23
+        },
+        {
+          "direction": "left",
+          "distance_cm": 39
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 23
+        },
+        {
+          "direction": "left",
+          "distance_cm": 39
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 22
+        },
+        {
+          "direction": "left",
+          "distance_cm": 39
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 22
+        },
+        {
+          "direction": "right",
+          "distance_cm": 39
+        },
+        {
+          "direction": "back",
+          "distance_cm": 23
+        },
+        {
+          "direction": "right",
+          "distance_cm": 39
+        },
+        {
+          "direction": "back",
+          "distance_cm": 23
+        },
+        {
+          "direction": "right",
+          "distance_cm": 39
+        },
+        {
+          "direction": "back",
+          "distance_cm": 22
+        },
+        {
+          "direction": "right",
+          "distance_cm": 39
+        },
+        {
+          "direction": "back",
+          "distance_cm": 22
+        }
+      ],
+      "takeoff_x_cm": 0,
+      "takeoff_y_cm": 0,
+      "w_cm": 400,
+      "x_cm": 0,
+      "y_cm": 0
+    }
+  ]
+}

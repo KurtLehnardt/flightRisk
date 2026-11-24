@@ -1,0 +1,2212 @@
+{
+  "assign_lanes": {
+    "d1": [
+      {
+        "alt_cm": 100,
+        "drone_id": "d1",
+        "lanes": [
+          {
+            "direction": "forward",
+            "distance_cm": 200
+          },
+          {
+            "direction": "right",
+            "distance_cm": 200
+          },
+          {
+            "direction": "left",
+            "distance_cm": 45
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 30
+          },
+          {
+            "direction": "right",
+            "distance_cm": 23
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 30
+          },
+          {
+            "direction": "right",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 48
+          },
+          {
+            "direction": "back",
+            "distance_cm": 32
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 20
+          },
+          {
+            "direction": "back",
+            "distance_cm": 48
+          },
+          {
+            "direction": "right",
+            "distance_cm": 27
+          },
+          {
+            "direction": "back",
+            "distance_cm": 58
+          },
+          {
+            "direction": "left",
+            "distance_cm": 37
+          },
+          {
+            "direction": "right",
+            "distance_cm": 20
+          },
+          {
+            "direction": "left",
+            "distance_cm": 58
+          },
+          {
+            "direction": "back",
+            "distance_cm": 32
+          },
+          {
+            "direction": "left",
+            "distance_cm": 69
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 21
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 69
+          },
+          {
+            "direction": "left",
+            "distance_cm": 36
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 80
+          },
+          {
+            "direction": "right",
+            "distance_cm": 25
+          },
+          {
+            "direction": "right",
+            "distance_cm": 40
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 20
+          },
+          {
+            "direction": "right",
+            "distance_cm": 40
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 20
+          },
+          {
+            "direction": "right",
+            "distance_cm": 90
+          },
+          {
+            "direction": "back",
+            "distance_cm": 30
+          },
+          {
+            "direction": "back",
+            "distance_cm": 45
+          },
+          {
+            "direction": "right",
+            "distance_cm": 23
+          },
+          {
+            "direction": "back",
+            "distance_cm": 45
+          },
+          {
+            "direction": "right",
+            "distance_cm": 22
+          },
+          {
+            "direction": "back",
+            "distance_cm": 101
+          },
+          {
+            "direction": "left",
+            "distance_cm": 34
+          },
+          {
+            "direction": "left",
+            "distance_cm": 51
+          },
+          {
+            "direction": "back",
+            "distance_cm": 25
+          },
+          {
+            "direction": "left",
+            "distance_cm": 50
+          },
+          {
+            "direction": "back",
+            "distance_cm": 24
+          },
+          {
+            "direction": "left",
+            "distance_cm": 111
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 56
+          },
+          {
+            "direction": "left",
+            "distance_cm": 27
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 55
+          },
+          {
+            "direction": "left",
+            "distance_cm": 27
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 61
+          },
+          {
+            "direction": "right",
+            "distance_cm": 22
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 61
+          },
+          {
+            "direction": "right",
+            "distance_cm": 21
+          },
+          {
+            "direction": "right",
+            "distance_cm": 61
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 29
+          },
+          {
+            "direction": "right",
+            "distance_cm": 61
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 29
+          }
+        ],
+        "type": "assign_lanes",
+        "zone": {
+          "h_cm": 400,
+          "takeoff_x_cm": 0,
+          "takeoff_y_cm": 0,
+          "w_cm": 400,
+          "x_cm": 0,
+          "y_cm": 0
+        }
+      }
+    ]
+  },
+  "built": {
+    "area": {
+      "h_cm": 400,
+      "w_cm": 400,
+      "x_cm": 0,
+      "y_cm": 0
+    },
+    "coverage": {
+      "cell_cm": 10,
+      "footprint_cm": 75,
+      "fraction": 0.77,
+      "model": "nominal (downward camera model)",
+      "note": "Nominal figure: a 75 cm square seen straight below each drone (FLIGHTRISK_CAMERA_FOOTPRINT_CM). The real field of view may be wider, and a gimbal camera changes it. Gaps can be intentional, for example trees or a water hazard."
+    },
+    "drones": [
+      {
+        "alt_cm": 100,
+        "drawn": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            200
+          ],
+          [
+            200,
+            200
+          ],
+          [
+            155,
+            200
+          ],
+          [
+            200,
+            260
+          ],
+          [
+            248,
+            248
+          ],
+          [
+            275,
+            200
+          ],
+          [
+            258,
+            142
+          ],
+          [
+            200,
+            110
+          ],
+          [
+            131,
+            131
+          ],
+          [
+            95,
+            200
+          ],
+          [
+            120,
+            280
+          ],
+          [
+            200,
+            320
+          ],
+          [
+            290,
+            290
+          ],
+          [
+            335,
+            200
+          ],
+          [
+            301,
+            99
+          ],
+          [
+            200,
+            50
+          ],
+          [
+            89,
+            89
+          ],
+          [
+            35,
+            200
+          ],
+          [
+            78,
+            322
+          ],
+          [
+            200,
+            380
+          ]
+        ],
+        "drone_id": "d1",
+        "edited": false,
+        "generated": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            200
+          ],
+          [
+            200,
+            200
+          ],
+          [
+            155,
+            200
+          ],
+          [
+            200,
+            260
+          ],
+          [
+            248,
+            248
+          ],
+          [
+            275,
+            200
+          ],
+          [
+            258,
+            142
+          ],
+          [
+            200,
+            110
+          ],
+          [
+            131,
+            131
+          ],
+          [
+            95,
+            200
+          ],
+          [
+            120,
+            280
+          ],
+          [
+            200,
+            320
+          ],
+          [
+            290,
+            290
+          ],
+          [
+            335,
+            200
+          ],
+          [
+            301,
+            99
+          ],
+          [
+            200,
+            50
+          ],
+          [
+            89,
+            89
+          ],
+          [
+            35,
+            200
+          ],
+          [
+            78,
+            322
+          ],
+          [
+            200,
+            380
+          ]
+        ],
+        "lanes": [
+          {
+            "direction": "forward",
+            "distance_cm": 200
+          },
+          {
+            "direction": "right",
+            "distance_cm": 200
+          },
+          {
+            "direction": "left",
+            "distance_cm": 45
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 30
+          },
+          {
+            "direction": "right",
+            "distance_cm": 23
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 30
+          },
+          {
+            "direction": "right",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 48
+          },
+          {
+            "direction": "back",
+            "distance_cm": 32
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 20
+          },
+          {
+            "direction": "back",
+            "distance_cm": 48
+          },
+          {
+            "direction": "right",
+            "distance_cm": 27
+          },
+          {
+            "direction": "back",
+            "distance_cm": 58
+          },
+          {
+            "direction": "left",
+            "distance_cm": 37
+          },
+          {
+            "direction": "right",
+            "distance_cm": 20
+          },
+          {
+            "direction": "left",
+            "distance_cm": 58
+          },
+          {
+            "direction": "back",
+            "distance_cm": 32
+          },
+          {
+            "direction": "left",
+            "distance_cm": 69
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 21
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 69
+          },
+          {
+            "direction": "left",
+            "distance_cm": 36
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 80
+          },
+          {
+            "direction": "right",
+            "distance_cm": 25
+          },
+          {
+            "direction": "right",
+            "distance_cm": 40
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 20
+          },
+          {
+            "direction": "right",
+            "distance_cm": 40
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 20
+          },
+          {
+            "direction": "right",
+            "distance_cm": 90
+          },
+          {
+            "direction": "back",
+            "distance_cm": 30
+          },
+          {
+            "direction": "back",
+            "distance_cm": 45
+          },
+          {
+            "direction": "right",
+            "distance_cm": 23
+          },
+          {
+            "direction": "back",
+            "distance_cm": 45
+          },
+          {
+            "direction": "right",
+            "distance_cm": 22
+          },
+          {
+            "direction": "back",
+            "distance_cm": 101
+          },
+          {
+            "direction": "left",
+            "distance_cm": 34
+          },
+          {
+            "direction": "left",
+            "distance_cm": 51
+          },
+          {
+            "direction": "back",
+            "distance_cm": 25
+          },
+          {
+            "direction": "left",
+            "distance_cm": 50
+          },
+          {
+            "direction": "back",
+            "distance_cm": 24
+          },
+          {
+            "direction": "left",
+            "distance_cm": 111
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 56
+          },
+          {
+            "direction": "left",
+            "distance_cm": 27
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 55
+          },
+          {
+            "direction": "left",
+            "distance_cm": 27
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 61
+          },
+          {
+            "direction": "right",
+            "distance_cm": 22
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 61
+          },
+          {
+            "direction": "right",
+            "distance_cm": 21
+          },
+          {
+            "direction": "right",
+            "distance_cm": 61
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 29
+          },
+          {
+            "direction": "right",
+            "distance_cm": 61
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 29
+          }
+        ],
+        "max_deviation_cm": 36.8,
+        "moves": 53,
+        "path": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            200
+          ],
+          [
+            200,
+            200
+          ],
+          [
+            155,
+            200
+          ],
+          [
+            155,
+            230
+          ],
+          [
+            178,
+            230
+          ],
+          [
+            178,
+            260
+          ],
+          [
+            200,
+            260
+          ],
+          [
+            248,
+            260
+          ],
+          [
+            248,
+            228
+          ],
+          [
+            248,
+            248
+          ],
+          [
+            248,
+            200
+          ],
+          [
+            275,
+            200
+          ],
+          [
+            275,
+            142
+          ],
+          [
+            238,
+            142
+          ],
+          [
+            258,
+            142
+          ],
+          [
+            200,
+            142
+          ],
+          [
+            200,
+            110
+          ],
+          [
+            131,
+            110
+          ],
+          [
+            131,
+            131
+          ],
+          [
+            131,
+            200
+          ],
+          [
+            95,
+            200
+          ],
+          [
+            95,
+            280
+          ],
+          [
+            120,
+            280
+          ],
+          [
+            160,
+            280
+          ],
+          [
+            160,
+            300
+          ],
+          [
+            200,
+            300
+          ],
+          [
+            200,
+            320
+          ],
+          [
+            290,
+            320
+          ],
+          [
+            290,
+            290
+          ],
+          [
+            290,
+            245
+          ],
+          [
+            313,
+            245
+          ],
+          [
+            313,
+            200
+          ],
+          [
+            335,
+            200
+          ],
+          [
+            335,
+            99
+          ],
+          [
+            301,
+            99
+          ],
+          [
+            250,
+            99
+          ],
+          [
+            250,
+            74
+          ],
+          [
+            200,
+            74
+          ],
+          [
+            200,
+            50
+          ],
+          [
+            89,
+            50
+          ],
+          [
+            89,
+            89
+          ],
+          [
+            89,
+            145
+          ],
+          [
+            62,
+            145
+          ],
+          [
+            62,
+            200
+          ],
+          [
+            35,
+            200
+          ],
+          [
+            35,
+            261
+          ],
+          [
+            57,
+            261
+          ],
+          [
+            57,
+            322
+          ],
+          [
+            78,
+            322
+          ],
+          [
+            139,
+            322
+          ],
+          [
+            139,
+            351
+          ],
+          [
+            200,
+            351
+          ],
+          [
+            200,
+            380
+          ]
+        ],
+        "takeoff_cm": [
+          0,
+          0
+        ],
+        "zone": {
+          "h_cm": 400,
+          "w_cm": 400,
+          "x_cm": 0,
+          "y_cm": 0
+        }
+      }
+    ],
+    "gap_cm": 100,
+    "geofence_cm": 500.0,
+    "mode": "fleet",
+    "ok": true,
+    "pattern": "spiral",
+    "problems": [],
+    "snap_tolerance_cm": 40,
+    "spec": {
+      "area": {
+        "h_cm": 400,
+        "w_cm": 400,
+        "x_cm": 0,
+        "y_cm": 0
+      },
+      "paths": {},
+      "pattern": "spiral",
+      "version": 1
+    },
+    "strip_cm": 75,
+    "takeoff_layout": [
+      "d1 on its mark"
+    ],
+    "takeoffs": {
+      "d1": [
+        0,
+        0
+      ]
+    },
+    "uncovered": [
+      {
+        "h_cm": 40,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 160,
+        "x_cm": 240,
+        "y_cm": 360
+      },
+      {
+        "h_cm": 80,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 70,
+        "x_cm": 330,
+        "y_cm": 280
+      },
+      {
+        "h_cm": 180,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 30,
+        "x_cm": 370,
+        "y_cm": 60
+      },
+      {
+        "h_cm": 30,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 160,
+        "x_cm": 240,
+        "y_cm": 10
+      },
+      {
+        "h_cm": 10,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 360,
+        "x_cm": 40,
+        "y_cm": 0
+      },
+      {
+        "h_cm": 30,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 100,
+        "x_cm": 0,
+        "y_cm": 360
+      },
+      {
+        "h_cm": 20,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 110,
+        "x_cm": 290,
+        "y_cm": 40
+      },
+      {
+        "h_cm": 40,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 50,
+        "x_cm": 350,
+        "y_cm": 240
+      },
+      {
+        "h_cm": 10,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 160,
+        "x_cm": 0,
+        "y_cm": 390
+      },
+      {
+        "h_cm": 60,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 20,
+        "x_cm": 0,
+        "y_cm": 300
+      },
+      {
+        "h_cm": 100,
+        "kind": "area",
+        "reason": "may not be covered by the nominal (downward camera model)",
+        "w_cm": 10,
+        "x_cm": 40,
+        "y_cm": 10
+      }
+    ]
+  },
+  "drone_ids": [
+    "d1"
+  ],
+  "ok": true,
+  "pattern": "spiral",
+  "plan": {
+    "details": {
+      "area": {
+        "h_cm": 400,
+        "w_cm": 400,
+        "x_cm": 0,
+        "y_cm": 0
+      },
+      "coverage": {
+        "cell_cm": 10,
+        "footprint_cm": 75,
+        "fraction": 0.77,
+        "model": "nominal (downward camera model)",
+        "note": "Nominal figure: a 75 cm square seen straight below each drone (FLIGHTRISK_CAMERA_FOOTPRINT_CM). The real field of view may be wider, and a gimbal camera changes it. Gaps can be intentional, for example trees or a water hazard."
+      },
+      "drones": [
+        {
+          "alt_cm": 100,
+          "drawn": [
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              200
+            ],
+            [
+              200,
+              200
+            ],
+            [
+              155,
+              200
+            ],
+            [
+              200,
+              260
+            ],
+            [
+              248,
+              248
+            ],
+            [
+              275,
+              200
+            ],
+            [
+              258,
+              142
+            ],
+            [
+              200,
+              110
+            ],
+            [
+              131,
+              131
+            ],
+            [
+              95,
+              200
+            ],
+            [
+              120,
+              280
+            ],
+            [
+              200,
+              320
+            ],
+            [
+              290,
+              290
+            ],
+            [
+              335,
+              200
+            ],
+            [
+              301,
+              99
+            ],
+            [
+              200,
+              50
+            ],
+            [
+              89,
+              89
+            ],
+            [
+              35,
+              200
+            ],
+            [
+              78,
+              322
+            ],
+            [
+              200,
+              380
+            ]
+          ],
+          "drone_id": "d1",
+          "edited": false,
+          "generated": [
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              200
+            ],
+            [
+              200,
+              200
+            ],
+            [
+              155,
+              200
+            ],
+            [
+              200,
+              260
+            ],
+            [
+              248,
+              248
+            ],
+            [
+              275,
+              200
+            ],
+            [
+              258,
+              142
+            ],
+            [
+              200,
+              110
+            ],
+            [
+              131,
+              131
+            ],
+            [
+              95,
+              200
+            ],
+            [
+              120,
+              280
+            ],
+            [
+              200,
+              320
+            ],
+            [
+              290,
+              290
+            ],
+            [
+              335,
+              200
+            ],
+            [
+              301,
+              99
+            ],
+            [
+              200,
+              50
+            ],
+            [
+              89,
+              89
+            ],
+            [
+              35,
+              200
+            ],
+            [
+              78,
+              322
+            ],
+            [
+              200,
+              380
+            ]
+          ],
+          "lanes": [
+            {
+              "direction": "forward",
+              "distance_cm": 200
+            },
+            {
+              "direction": "right",
+              "distance_cm": 200
+            },
+            {
+              "direction": "left",
+              "distance_cm": 45
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 30
+            },
+            {
+              "direction": "right",
+              "distance_cm": 23
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 30
+            },
+            {
+              "direction": "right",
+              "distance_cm": 22
+            },
+            {
+              "direction": "right",
+              "distance_cm": 48
+            },
+            {
+              "direction": "back",
+              "distance_cm": 32
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 20
+            },
+            {
+              "direction": "back",
+              "distance_cm": 48
+            },
+            {
+              "direction": "right",
+              "distance_cm": 27
+            },
+            {
+              "direction": "back",
+              "distance_cm": 58
+            },
+            {
+              "direction": "left",
+              "distance_cm": 37
+            },
+            {
+              "direction": "right",
+              "distance_cm": 20
+            },
+            {
+              "direction": "left",
+              "distance_cm": 58
+            },
+            {
+              "direction": "back",
+              "distance_cm": 32
+            },
+            {
+              "direction": "left",
+              "distance_cm": 69
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 21
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 69
+            },
+            {
+              "direction": "left",
+              "distance_cm": 36
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 80
+            },
+            {
+              "direction": "right",
+              "distance_cm": 25
+            },
+            {
+              "direction": "right",
+              "distance_cm": 40
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 20
+            },
+            {
+              "direction": "right",
+              "distance_cm": 40
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 20
+            },
+            {
+              "direction": "right",
+              "distance_cm": 90
+            },
+            {
+              "direction": "back",
+              "distance_cm": 30
+            },
+            {
+              "direction": "back",
+              "distance_cm": 45
+            },
+            {
+              "direction": "right",
+              "distance_cm": 23
+            },
+            {
+              "direction": "back",
+              "distance_cm": 45
+            },
+            {
+              "direction": "right",
+              "distance_cm": 22
+            },
+            {
+              "direction": "back",
+              "distance_cm": 101
+            },
+            {
+              "direction": "left",
+              "distance_cm": 34
+            },
+            {
+              "direction": "left",
+              "distance_cm": 51
+            },
+            {
+              "direction": "back",
+              "distance_cm": 25
+            },
+            {
+              "direction": "left",
+              "distance_cm": 50
+            },
+            {
+              "direction": "back",
+              "distance_cm": 24
+            },
+            {
+              "direction": "left",
+              "distance_cm": 111
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 39
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 56
+            },
+            {
+              "direction": "left",
+              "distance_cm": 27
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 55
+            },
+            {
+              "direction": "left",
+              "distance_cm": 27
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 61
+            },
+            {
+              "direction": "right",
+              "distance_cm": 22
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 61
+            },
+            {
+              "direction": "right",
+              "distance_cm": 21
+            },
+            {
+              "direction": "right",
+              "distance_cm": 61
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 29
+            },
+            {
+              "direction": "right",
+              "distance_cm": 61
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 29
+            }
+          ],
+          "max_deviation_cm": 36.8,
+          "moves": 53,
+          "path": [
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              200
+            ],
+            [
+              200,
+              200
+            ],
+            [
+              155,
+              200
+            ],
+            [
+              155,
+              230
+            ],
+            [
+              178,
+              230
+            ],
+            [
+              178,
+              260
+            ],
+            [
+              200,
+              260
+            ],
+            [
+              248,
+              260
+            ],
+            [
+              248,
+              228
+            ],
+            [
+              248,
+              248
+            ],
+            [
+              248,
+              200
+            ],
+            [
+              275,
+              200
+            ],
+            [
+              275,
+              142
+            ],
+            [
+              238,
+              142
+            ],
+            [
+              258,
+              142
+            ],
+            [
+              200,
+              142
+            ],
+            [
+              200,
+              110
+            ],
+            [
+              131,
+              110
+            ],
+            [
+              131,
+              131
+            ],
+            [
+              131,
+              200
+            ],
+            [
+              95,
+              200
+            ],
+            [
+              95,
+              280
+            ],
+            [
+              120,
+              280
+            ],
+            [
+              160,
+              280
+            ],
+            [
+              160,
+              300
+            ],
+            [
+              200,
+              300
+            ],
+            [
+              200,
+              320
+            ],
+            [
+              290,
+              320
+            ],
+            [
+              290,
+              290
+            ],
+            [
+              290,
+              245
+            ],
+            [
+              313,
+              245
+            ],
+            [
+              313,
+              200
+            ],
+            [
+              335,
+              200
+            ],
+            [
+              335,
+              99
+            ],
+            [
+              301,
+              99
+            ],
+            [
+              250,
+              99
+            ],
+            [
+              250,
+              74
+            ],
+            [
+              200,
+              74
+            ],
+            [
+              200,
+              50
+            ],
+            [
+              89,
+              50
+            ],
+            [
+              89,
+              89
+            ],
+            [
+              89,
+              145
+            ],
+            [
+              62,
+              145
+            ],
+            [
+              62,
+              200
+            ],
+            [
+              35,
+              200
+            ],
+            [
+              35,
+              261
+            ],
+            [
+              57,
+              261
+            ],
+            [
+              57,
+              322
+            ],
+            [
+              78,
+              322
+            ],
+            [
+              139,
+              322
+            ],
+            [
+              139,
+              351
+            ],
+            [
+              200,
+              351
+            ],
+            [
+              200,
+              380
+            ]
+          ],
+          "takeoff_cm": [
+            0,
+            0
+          ],
+          "zone": {
+            "h_cm": 400,
+            "w_cm": 400,
+            "x_cm": 0,
+            "y_cm": 0
+          }
+        }
+      ],
+      "gap_cm": 100,
+      "geofence_cm": 500.0,
+      "mode": "fleet",
+      "ok": true,
+      "pattern": "spiral",
+      "problems": [],
+      "snap_tolerance_cm": 40,
+      "spec": {
+        "area": {
+          "h_cm": 400,
+          "w_cm": 400,
+          "x_cm": 0,
+          "y_cm": 0
+        },
+        "paths": {},
+        "pattern": "spiral",
+        "version": 1
+      },
+      "strip_cm": 75,
+      "takeoff_layout": [
+        "d1 on its mark"
+      ],
+      "takeoffs": {
+        "d1": [
+          0,
+          0
+        ]
+      },
+      "uncovered": [
+        {
+          "h_cm": 40,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 160,
+          "x_cm": 240,
+          "y_cm": 360
+        },
+        {
+          "h_cm": 80,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 70,
+          "x_cm": 330,
+          "y_cm": 280
+        },
+        {
+          "h_cm": 180,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 30,
+          "x_cm": 370,
+          "y_cm": 60
+        },
+        {
+          "h_cm": 30,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 160,
+          "x_cm": 240,
+          "y_cm": 10
+        },
+        {
+          "h_cm": 10,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 360,
+          "x_cm": 40,
+          "y_cm": 0
+        },
+        {
+          "h_cm": 30,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 100,
+          "x_cm": 0,
+          "y_cm": 360
+        },
+        {
+          "h_cm": 20,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 110,
+          "x_cm": 290,
+          "y_cm": 40
+        },
+        {
+          "h_cm": 40,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 50,
+          "x_cm": 350,
+          "y_cm": 240
+        },
+        {
+          "h_cm": 10,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 160,
+          "x_cm": 0,
+          "y_cm": 390
+        },
+        {
+          "h_cm": 60,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 20,
+          "x_cm": 0,
+          "y_cm": 300
+        },
+        {
+          "h_cm": 100,
+          "kind": "area",
+          "reason": "may not be covered by the nominal (downward camera model)",
+          "w_cm": 10,
+          "x_cm": 40,
+          "y_cm": 10
+        }
+      ]
+    },
+    "gap_cm": 100,
+    "grid": {
+      "h_cm": 400,
+      "w_cm": 400,
+      "x_cm": 0,
+      "y_cm": 0
+    },
+    "strip_cm": 75,
+    "zones": [
+      {
+        "alt_cm": 100,
+        "drone_id": "d1",
+        "h_cm": 400,
+        "lanes": [
+          {
+            "direction": "forward",
+            "distance_cm": 200
+          },
+          {
+            "direction": "right",
+            "distance_cm": 200
+          },
+          {
+            "direction": "left",
+            "distance_cm": 45
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 30
+          },
+          {
+            "direction": "right",
+            "distance_cm": 23
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 30
+          },
+          {
+            "direction": "right",
+            "distance_cm": 22
+          },
+          {
+            "direction": "right",
+            "distance_cm": 48
+          },
+          {
+            "direction": "back",
+            "distance_cm": 32
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 20
+          },
+          {
+            "direction": "back",
+            "distance_cm": 48
+          },
+          {
+            "direction": "right",
+            "distance_cm": 27
+          },
+          {
+            "direction": "back",
+            "distance_cm": 58
+          },
+          {
+            "direction": "left",
+            "distance_cm": 37
+          },
+          {
+            "direction": "right",
+            "distance_cm": 20
+          },
+          {
+            "direction": "left",
+            "distance_cm": 58
+          },
+          {
+            "direction": "back",
+            "distance_cm": 32
+          },
+          {
+            "direction": "left",
+            "distance_cm": 69
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 21
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 69
+          },
+          {
+            "direction": "left",
+            "distance_cm": 36
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 80
+          },
+          {
+            "direction": "right",
+            "distance_cm": 25
+          },
+          {
+            "direction": "right",
+            "distance_cm": 40
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 20
+          },
+          {
+            "direction": "right",
+            "distance_cm": 40
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 20
+          },
+          {
+            "direction": "right",
+            "distance_cm": 90
+          },
+          {
+            "direction": "back",
+            "distance_cm": 30
+          },
+          {
+            "direction": "back",
+            "distance_cm": 45
+          },
+          {
+            "direction": "right",
+            "distance_cm": 23
+          },
+          {
+            "direction": "back",
+            "distance_cm": 45
+          },
+          {
+            "direction": "right",
+            "distance_cm": 22
+          },
+          {
+            "direction": "back",
+            "distance_cm": 101
+          },
+          {
+            "direction": "left",
+            "distance_cm": 34
+          },
+          {
+            "direction": "left",
+            "distance_cm": 51
+          },
+          {
+            "direction": "back",
+            "distance_cm": 25
+          },
+          {
+            "direction": "left",
+            "distance_cm": 50
+          },
+          {
+            "direction": "back",
+            "distance_cm": 24
+          },
+          {
+            "direction": "left",
+            "distance_cm": 111
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 39
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 56
+          },
+          {
+            "direction": "left",
+            "distance_cm": 27
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 55
+          },
+          {
+            "direction": "left",
+            "distance_cm": 27
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 61
+          },
+          {
+            "direction": "right",
+            "distance_cm": 22
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 61
+          },
+          {
+            "direction": "right",
+            "distance_cm": 21
+          },
+          {
+            "direction": "right",
+            "distance_cm": 61
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 29
+          },
+          {
+            "direction": "right",
+            "distance_cm": 61
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 29
+          }
+        ],
+        "takeoff_x_cm": 0,
+        "takeoff_y_cm": 0,
+        "w_cm": 400,
+        "x_cm": 0,
+        "y_cm": 0
+      }
+    ]
+  },
+  "zone_assignments": [
+    {
+      "alt_cm": 100,
+      "drone_id": "d1",
+      "h_cm": 400,
+      "lanes": [
+        {
+          "direction": "forward",
+          "distance_cm": 200
+        },
+        {
+          "direction": "right",
+          "distance_cm": 200
+        },
+        {
+          "direction": "left",
+          "distance_cm": 45
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 30
+        },
+        {
+          "direction": "right",
+          "distance_cm": 23
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 30
+        },
+        {
+          "direction": "right",
+          "distance_cm": 22
+        },
+        {
+          "direction": "right",
+          "distance_cm": 48
+        },
+        {
+          "direction": "back",
+          "distance_cm": 32
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 20
+        },
+        {
+          "direction": "back",
+          "distance_cm": 48
+        },
+        {
+          "direction": "right",
+          "distance_cm": 27
+        },
+        {
+          "direction": "back",
+          "distance_cm": 58
+        },
+        {
+          "direction": "left",
+          "distance_cm": 37
+        },
+        {
+          "direction": "right",
+          "distance_cm": 20
+        },
+        {
+          "direction": "left",
+          "distance_cm": 58
+        },
+        {
+          "direction": "back",
+          "distance_cm": 32
+        },
+        {
+          "direction": "left",
+          "distance_cm": 69
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 21
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 69
+        },
+        {
+          "direction": "left",
+          "distance_cm": 36
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 80
+        },
+        {
+          "direction": "right",
+          "distance_cm": 25
+        },
+        {
+          "direction": "right",
+          "distance_cm": 40
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 20
+        },
+        {
+          "direction": "right",
+          "distance_cm": 40
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 20
+        },
+        {
+          "direction": "right",
+          "distance_cm": 90
+        },
+        {
+          "direction": "back",
+          "distance_cm": 30
+        },
+        {
+          "direction": "back",
+          "distance_cm": 45
+        },
+        {
+          "direction": "right",
+          "distance_cm": 23
+        },
+        {
+          "direction": "back",
+          "distance_cm": 45
+        },
+        {
+          "direction": "right",
+          "distance_cm": 22
+        },
+        {
+          "direction": "back",
+          "distance_cm": 101
+        },
+        {
+          "direction": "left",
+          "distance_cm": 34
+        },
+        {
+          "direction": "left",
+          "distance_cm": 51
+        },
+        {
+          "direction": "back",
+          "distance_cm": 25
+        },
+        {
+          "direction": "left",
+          "distance_cm": 50
+        },
+        {
+          "direction": "back",
+          "distance_cm": 24
+        },
+        {
+          "direction": "left",
+          "distance_cm": 111
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 39
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 56
+        },
+        {
+          "direction": "left",
+          "distance_cm": 27
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 55
+        },
+        {
+          "direction": "left",
+          "distance_cm": 27
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 61
+        },
+        {
+          "direction": "right",
+          "distance_cm": 22
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 61
+        },
+        {
+          "direction": "right",
+          "distance_cm": 21
+        },
+        {
+          "direction": "right",
+          "distance_cm": 61
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 29
+        },
+        {
+          "direction": "right",
+          "distance_cm": 61
+        },
+        {
+          "direction": "forward",
+          "distance_cm": 29
+        }
+      ],
+      "takeoff_x_cm": 0,
+      "takeoff_y_cm": 0,
+      "w_cm": 400,
+      "x_cm": 0,
+      "y_cm": 0
+    }
+  ]
+}
