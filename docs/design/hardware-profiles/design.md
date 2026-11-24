@@ -732,7 +732,7 @@ refused value is listed in section 27 (B4). ArduPilot names follow the connected
 | Low battery | `BATT_FS_LOW_ACT` 1 or 2; the autopilot's low level (`BATT_LOW_MAH` as a share of `BATT_CAPACITY`) at most `battery.return_floor_pct` − 5 points; a voltage-only threshold is refused because it cannot be compared; `BATT_LOW_VOLT` 0 when the capacity threshold is used, because a voltage trigger can fire before FlightRisk's return (N-18); `BATT_CRT_VOLT` kept as a backstop and shown (a critical-voltage landing short of home is the `critical_battery` fallback) | 1, 2, 3, 4, 6, 7; level not compared | `BAT_LOW_THR` at most the return floor − 5 points | not compared | drain slowly: FlightRisk returns before the autopilot's low failsafe |
 | RC loss | `FS_THR_ENABLE` 1 (RTL) or 3 (land) | 1, 3, 4, 5, 6, 7 | `NAV_RCL_ACT` 2 or 3 | 2, 3 | RC off in SITL: return or land |
 | Edge hang (N-1) | `mavsdk_server` tied to the edge; the stall watchdog kills it after `FS_GCS_TIMEOUT` | not checked (an untied server only logs a warning) | the same, with `COM_DL_LOSS_T` | not checked | stall the edge's control loop: the heartbeat stops and the GCS failsafe acts |
-| Kept from today | `FENCE_ENABLE` 1, `FENCE_TYPE` circle and max altitude, fence radius containing the edge's fence, `FENCE_ALT_MAX` above the ceiling and at most 120 m while the regulatory altitude cap is on (item 53 of section 27; with the cap off, at most the unit's known airframe maximum), `BATT_ARM_VOLT`, system id | same | `GF_MAX_HOR_DIST`, `GF_MAX_VER_DIST`, system id | same | existing tests |
+| Kept from today | `FENCE_ENABLE` 1, `FENCE_TYPE` circle and max altitude, fence radius containing the edge's fence, `FENCE_ALT_MAX` above the ceiling and at most 120 m while the regulatory altitude cap is on (item 53 of section 27; with the cap off, at most the unit's known airframe maximum), `BATT_ARM_VOLT`, system id | same | `GF_MAX_HOR_DIST`, `GF_MAX_VER_DIST` (at most 120 m while the cap is on, at most the known airframe maximum with it off), system id | same | existing tests |
 
 Sources: ArduPilot GCS failsafe (https://ardupilot.org/copter/docs/gcs-failsafe.html), RTL mode
 (https://ardupilot.org/copter/docs/rtl-mode.html), EKF failsafe
@@ -1193,7 +1193,32 @@ every "from <PR>" tag in `parameters.md` matches an item below naming that PR an
   line naming each variable (N-10, FACT-3). Environment and flag ranges stay today's (SEAM-10). Assertions:
   any existing test that starts an edge, a ground or a launcher with one of the pinned combinations, named in
   the description. For A5 the assertions are `tests/test_launcher_commands.py:67` and `:119-121`.
-- **A3, A4, A5, B4:** 53. The 120 m altitude limit, which comes from FAA rules that may not apply to a search-and-rescue mission, becomes a separate regulatory cap that is on by default for every unit. An operator may turn it off for a unit at launch only, with an explicit acknowledgement that the mission is outside FAA jurisdiction and that the operator is entirely responsible. The acknowledgement is recorded with the launch and logged by the edge, and it is never implied or carried over silently. The ground can show the cap's state but cannot change it, so no wire shape changes. The airframe maximum altitude is row 8 (`envelope.max_altitude_cm`). For `generic_multirotor` it becomes unknown unless the inventory states it. The 120 m values that stand in for it today stop counting as a known maximum: row 8's 12000 cm for `generic_multirotor`, the catalogue's `max_height_m` of 120 for the generic models, MavlinkFleetDrone's declared 120 m, and the `DroneCapabilities` default of 120 m. With the cap off, only the bounds that are 120 m because of the cap rise to the unit's known airframe maximum: the field ceiling range, the field altitude slot range and the `FENCE_ALT_MAX` check. Indoor bounds and every other bound are unchanged. The autopilot fence (B3) still applies, and the FlightRisk geofence is horizontal and does not bound height. A unit with no known airframe maximum cannot turn the cap off. Owners: A3 for the rows listed in tasks.md, the catalogue value, the stale note at `scripts/make_param_golden.py:178`, and the edge's enforcement and refusal; A5 for the launcher control, the acknowledgement text and its record; A4 for the ground's display of the cap state and of an unknown maximum; B4 for the `FENCE_ALT_MAX` bound. The `DroneCapabilities` type change that allows an unknown maximum is behaviour-neutral and lands separately. Assertions: named in each PR's description.
+- **A3, A4, A5, B4:** 53. The 120 m altitude limit, which comes from FAA rules that may not apply to a
+  search-and-rescue mission, becomes a separate regulatory cap that is on by default for every unit. An
+  operator may turn it off for a unit at launch only, with an explicit acknowledgement that the mission is
+  outside FAA jurisdiction and that the operator is entirely responsible. The acknowledgement is recorded
+  with the launch and logged by the edge, and it is never implied or carried over silently. The ground can
+  show the cap's state but cannot change it, so no wire shape changes. The airframe maximum altitude is row
+  8 (`envelope.max_altitude_cm`). For `generic_multirotor` it becomes unknown unless the inventory states
+  it. The 120 m values that stand in for it today stop counting as a known maximum: row 8's 12000 cm for
+  `generic_multirotor`, the catalogue's `max_height_m` of 120 for the generic models, MavlinkFleetDrone's
+  declared 120 m, and the `DroneCapabilities` default of 120 m, and the legacy controller's 120 m
+  (`flightrisk/drone/mavlink.py`, the dashboard's MavlinkController). Every consumer of the airframe maximum
+  must handle an unknown value without crashing and without falling back to a lower or default cap. With the
+  cap off, only the bounds that are 120 m because of the cap rise to the unit's known airframe maximum: the
+  field ceiling range, the field altitude slot range and the `FENCE_ALT_MAX` check (ArduPilot) and PX4's
+  `GF_MAX_VER_DIST`. `flightrisk/drone/coverage.py` `MAX_ALT_M` and the 12000 cm airspace rows stay at 120 m
+  for now, and environment and flag ceiling and slot values stay at or below 12000 cm (SEAM-10's today
+  ranges). Indoor bounds and every other bound are unchanged. The autopilot fence (B3) still applies, and
+  the FlightRisk geofence is horizontal and does not bound height. A unit with no known airframe maximum
+  cannot turn the cap off. `regulatory.altitude_cap_on` is read-only to every generic path: the edge refuses
+  an off value from a parameter file, the environment, a flag, `--confirm-less-safe` or a ground message,
+  and takes it only from the launcher layer's confirmation with a complete acknowledgement. It refuses an
+  incomplete acknowledgement. Owners: A3 for the rows listed in tasks.md, the catalogue value, the stale
+  note at `scripts/make_param_golden.py:178`, and the edge's enforcement and refusal; A5 for the launcher
+  control, the acknowledgement text and its record; A4 for the ground's display of the cap state and of an
+  unknown maximum; B4 for the `FENCE_ALT_MAX` bound. The `DroneCapabilities` type change that allows an
+  unknown maximum is behaviour-neutral and lands separately. Assertions: named in each PR's description.
 - **A4:** 1. A fleet mixing indoor and field units is refused at Plan (nitpick 12).
   48. The dashboard's default MAVLink address becomes `udpin://0.0.0.0:14540` (today `udp://:14540`, the
   listen form MAVSDK 2 and later reject). Assertions: `tests/test_config.py:107`.
