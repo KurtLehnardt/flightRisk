@@ -20,7 +20,7 @@ UI-6, ROLES-1 to ROLES-12, MOB-9; AC-10 → PAR, RES, CONF, FACT and C5 items.
 - [ ] CAP-2 [A1] A missing fact takes its most conservative value marked `unverified`; an unknown model
   gets the intersection of its environment's built-in bounds with the safer default of each. Test: unit.
 - [ ] CAP-3 [C1] A runtime capability missing at takeoff refuses the takeoff, naming it; one lost in flight
-  raises its spec 6.2 event (moved from A3, which changes no behaviour; nitpick 7). Test: fake.
+  raises its spec 6.2 event (moved from A3; nitpick 7). Test: fake.
 - [ ] CAP-4 [A3] Changing a fake drone's declared capabilities changes its return method and separation with
   no rule change (AC-4.3). Test: fake.
 - [ ] CAP-5 [A2] A custom model can never set `environment` or `indoor_profile_measured` (M-11). Test:
@@ -653,13 +653,15 @@ UI-6, ROLES-1 to ROLES-12, MOB-9; AC-10 → PAR, RES, CONF, FACT and C5 items.
   ground handler test.
 - [ ] SEAM-8 [A3] (F8) One detection pipeline runs per unit: `select_pipeline` returns exactly one
   profile for the unit's search camera. Test: unit test with a dual-sensor unit.
-- [ ] SEAM-9 [XCP] No module under `flightrisk/` or `scripts/` outside the Tello adapter files,
+- [ ] SEAM-9 [XCP] No file under `flightrisk/` or `scripts/` outside the Tello adapter files,
   `registry.py` and `backends.py` imports a Tello module, compares against a Tello adapter or model name, or
   uses a Tello-only constant, except the named permanent exemptions; the remaining violations are a baseline
   that may only shrink. Test: `tests/test_tello_coupling.py`.
 - [ ] SEAM-10 [XCb] Runtime code gets today's accepted environment and flag ranges from
   `flightrisk/params/today.py`, which equals `today_accepts_from_golden` of the golden file exactly, so
-  adopting `resolve_unit` keeps today's range checks. Test: `tests/test_param_today.py`.
+  adopting `resolve_unit` keeps today's range checks. Every runtime call of `resolve_unit` passes today's
+  accepted ranges from `params/today.py`, never `None`. Test: `tests/test_param_today.py`, which also runs an
+  AST check over `flightrisk/` that every `resolve_unit` call passes the today ranges argument.
 
 ### Edge (EDGE)
 
