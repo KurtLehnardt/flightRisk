@@ -19,15 +19,21 @@ from .table import FACT_NOTE, TABLE
 # The parameter profiles in catalogue order, each listed once.
 PROFILES = tuple(dict.fromkeys(m.profile for m in BUILTIN_MODELS.values()))
 
-# Short column-heading names. A profile without an entry falls back to the name of its first built-in model.
-_PROFILE_NAMES = {"tello": "Tello", "generic_multirotor": "Generic"}
+# A profile heading is the coverage name of its first built-in model in catalogue order. An entry here overrides that
+# name only where the heading is deliberately shorter than the coverage name.
+_PROFILE_NAMES = {"generic_multirotor": "Generic"}
 
 
 def _profile_name(profile: str) -> str:
-    """The display name used in the column headings for one profile."""
+    """The display name used in the column headings for one profile.
+
+    It is the override in ``_PROFILE_NAMES`` when there is one, and otherwise the coverage name of the first built-in
+    model of that profile in catalogue order.
+    """
     if profile in _PROFILE_NAMES:
         return _PROFILE_NAMES[profile]
-    return next(m.name for m in BUILTIN_MODELS.values() if m.profile == profile)
+    return next(m.coverage_name or m.name for m in BUILTIN_MODELS.values() if m.profile == profile)
+
 
 _EDIT_WORDS = {
     Edit.UI: "setting",
