@@ -11,7 +11,7 @@
 -r requirements-edge.txt
 flask>=3.1
 flask-socketio>=5.4
-Pillow>=10.4
+Pillow>=13.0,<14
 open-clip-torch>=2.26
 # Capped below 2.4: flightrisk/reasoning/claude_agent.py relies on SDK 2.3 details
 # (header reset after construction, the streamed response body), checked at startup and in tests.
