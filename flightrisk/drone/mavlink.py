@@ -504,8 +504,8 @@ class MavlinkController:
             return False
         with self._cmd_lock:
             self._running = True
-            self._start_loop()
             try:
+                self._start_loop()
                 return self._run(self._connect_async())
             except Exception as exc:
                 logger.error("[%s] Connect failed: %s", self.name, exc)

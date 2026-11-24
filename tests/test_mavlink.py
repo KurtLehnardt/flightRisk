@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import sys
-import threading
 import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -169,17 +168,8 @@ def _make_controller(system: _FakeSystem | None = None) -> MavlinkController:
     if system is not None:
         ctrl._system = system
         ctrl._running = True
-        ctrl._loop = asyncio.new_event_loop()
-        ctrl._loop_thread = threading.Thread(
-            target=ctrl._loop.run_forever, daemon=True
-        )
-        ctrl._loop_thread.start()
-        # Thread.start() returns before run_forever() has set the loop to
-        # running. AsyncBridge.run() refuses a loop that is not running yet,
-        # so block until the loop has really processed a callback.
-        started = threading.Event()
-        ctrl._loop.call_soon_threadsafe(started.set)
-        assert started.wait(timeout=10.0), "event loop thread never started"
+        # start_loop() returns only once the loop is running, which AsyncBridge.run() requires.
+        ctrl._start_loop()
     return ctrl
 
 
@@ -293,11 +283,7 @@ class TestAsyncBridge:
 
     def test_run_dispatches_coroutine(self):
         ctrl = MavlinkController(name="bridge")
-        ctrl._loop = asyncio.new_event_loop()
-        ctrl._loop_thread = threading.Thread(
-            target=ctrl._loop.run_forever, daemon=True
-        )
-        ctrl._loop_thread.start()
+        ctrl._start_loop()
         try:
             result = ctrl._run(asyncio.coroutine(lambda: 42)() if False else self._async_return(42))
             assert result == 42
@@ -315,11 +301,7 @@ class TestAsyncBridge:
 
     def test_run_timeout(self):
         ctrl = MavlinkController(name="timeout")
-        ctrl._loop = asyncio.new_event_loop()
-        ctrl._loop_thread = threading.Thread(
-            target=ctrl._loop.run_forever, daemon=True
-        )
-        ctrl._loop_thread.start()
+        ctrl._start_loop()
         try:
             with pytest.raises(TimeoutError):
                 ctrl._run(asyncio.sleep(999), timeout=0.1)
@@ -358,6 +340,15 @@ class TestConnect:
             finally:
                 ctrl._running = False
                 ctrl._stop_loop()
+
+    def test_connect_returns_false_when_the_event_loop_does_not_start(self):
+        ctrl = MavlinkController(name="no-loop")
+        with patch.object(
+            ctrl._bridge, "start_loop", side_effect=RuntimeError("[x] Event loop did not start within 5s")
+        ):
+            assert ctrl.connect() is False
+        assert ctrl._running is False
+        assert ctrl._loop is None
 
 
 class TestDisconnect:

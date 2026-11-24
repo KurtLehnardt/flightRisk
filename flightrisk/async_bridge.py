@@ -61,6 +61,26 @@ def _drain_and_close(loop: asyncio.AbstractEventLoop, name: str) -> None:
 _START_TIMEOUT = 5.0
 
 
+def _run_loop(loop: asyncio.AbstractEventLoop, abandoned: threading.Event) -> None:
+    """Thread target: run *loop*, and close it on this thread if its start was abandoned.
+
+    ``stop_loop()`` closes a loop that ``start_loop()`` published. A loop that ``start_loop()`` gave
+    up on is never published, and its thread may only stop long after ``start_loop()`` returned, so
+    the thread closes that loop itself and its self-pipe sockets are released.
+    """
+    try:
+        loop.run_forever()
+    finally:
+        if abandoned.is_set():
+            loop.close()
+
+
+def _abandon(loop: asyncio.AbstractEventLoop, abandoned: threading.Event) -> None:
+    """Make an unpublished loop's thread stop the loop and then close it."""
+    abandoned.set()  # set before the stop is queued, so the thread sees it once run_forever() returns
+    loop.call_soon_threadsafe(loop.stop)
+
+
 class AsyncBridge:
     """Runs an asyncio event loop on a background thread for sync-over-async patterns."""
 
@@ -69,7 +89,9 @@ class AsyncBridge:
         self._cmd_timeout = cmd_timeout
         self.loop: asyncio.AbstractEventLoop | None = None
         self.loop_thread: threading.Thread | None = None
+        self._start_lock = threading.Lock()
         self._stop_lock = threading.Lock()
+        self._stops = 0  # incremented by every stop_loop(), under _stop_lock
 
     @property
     def is_running(self) -> bool:
@@ -77,42 +99,56 @@ class AsyncBridge:
         return bool(loop and loop.is_running())
 
     def start_loop(self) -> None:
-        """Start the background event loop.
+        """Start the background event loop and wait until it is running.
 
         No-ops if already running -- calling ``start_loop()`` twice without
         an intervening ``stop_loop()`` would otherwise orphan the first
-        loop/thread.
+        loop/thread. ``_start_lock`` serializes callers, so two concurrent
+        calls start one loop and one thread.
+
+        The wait for the loop holds only ``_start_lock``. The loop's first
+        callback takes no lock and ``stop_loop()`` takes only ``_stop_lock``,
+        so neither can block on a start. A ``stop_loop()`` that runs while a
+        start is waiting is not missed: the start sees it when it would
+        publish the loop, and shuts the new loop down instead.
+
+        Raises ``RuntimeError`` if the loop is not running within
+        ``_START_TIMEOUT`` seconds, which bounds the whole call.
         """
-        if self.is_running:
-            return
-        loop = asyncio.new_event_loop()
-        thread = threading.Thread(
-            target=loop.run_forever,
-            daemon=True,
-            name=f"{self._name}-loop",
-        )
-        # Thread.start() returns before run_forever() has marked the loop as
-        # running, and run() refuses a loop that is not running. Queue a
-        # callback first, so that once it has fired the loop is certainly
-        # running, and wait for it before returning.
-        started = threading.Event()
-        loop.call_soon(started.set)
-        thread.start()
-        if not started.wait(timeout=_START_TIMEOUT):
-            # Never hand back a loop that is not running: stop the thread and
-            # release the loop before raising.
-            try:
-                loop.call_soon_threadsafe(loop.stop)
-            except RuntimeError:
-                pass
-            thread.join(timeout=_START_TIMEOUT)
-            if not thread.is_alive() and not loop.is_closed():
-                loop.close()
-            raise RuntimeError(
-                f"[{self._name}] Event loop did not start within {_START_TIMEOUT:.0f}s"
+        with self._start_lock:
+            if self.is_running:
+                return
+            with self._stop_lock:
+                stops_before = self._stops
+            loop = asyncio.new_event_loop()
+            abandoned = threading.Event()
+            thread = threading.Thread(
+                target=_run_loop,
+                args=(loop, abandoned),
+                daemon=True,
+                name=f"{self._name}-loop",
             )
-        self.loop = loop
-        self.loop_thread = thread
+            # Thread.start() returns before run_forever() has marked the loop as
+            # running, and run() refuses a loop that is not running. Queue a
+            # callback first, so that once it has fired the loop is certainly
+            # running, and wait for it before returning.
+            started = threading.Event()
+            loop.call_soon(started.set)
+            thread.start()
+            if not started.wait(timeout=_START_TIMEOUT):
+                # Never hand back a loop that is not running. The thread may only
+                # run much later, so it stops and closes the loop itself.
+                _abandon(loop, abandoned)
+                raise RuntimeError(
+                    f"[{self._name}] Event loop did not start within {_START_TIMEOUT:g}s"
+                )
+            with self._stop_lock:
+                if self._stops == stops_before:
+                    self.loop = loop
+                    self.loop_thread = thread
+                    return
+            logger.debug("[%s] stop_loop() ran during start_loop(); not keeping the new loop", self._name)
+            _abandon(loop, abandoned)
 
     def stop_loop(self) -> None:
         """Stop the background event loop and join its thread.
@@ -126,6 +162,7 @@ class AsyncBridge:
         raises ``RuntimeError``.
         """
         with self._stop_lock:
+            self._stops += 1
             loop = self.loop
             thread = self.loop_thread
             try:

@@ -371,18 +371,86 @@ class TestStartLoopWaitsForRunning:
         finally:
             bridge.stop_loop()
 
+    def _record_new_loops(self, monkeypatch):
+        created = []
+        real_new_event_loop = asyncio.new_event_loop
+
+        def recording_new_event_loop():
+            loop = real_new_event_loop()
+            created.append(loop)
+            return loop
+
+        monkeypatch.setattr(asyncio, "new_event_loop", recording_new_event_loop)
+        return created
+
     def test_start_loop_raises_and_leaves_nothing_running_when_the_loop_never_starts(self, monkeypatch):
         import flightrisk.async_bridge as ab
 
         monkeypatch.setattr(ab, "_START_TIMEOUT", 0.1)
         self._delay_thread_run(monkeypatch, 0.5)
+        created = self._record_new_loops(monkeypatch)
         before = {t for t in threading.enumerate()}
         bridge = AsyncBridge(name="never-start")
-        with pytest.raises(RuntimeError, match="did not start"):
+        started_at = time.monotonic()
+        with pytest.raises(RuntimeError, match=r"did not start within 0\.1s"):
             bridge.start_loop()
+        # The timeout bounds the whole call: nothing waits a second time for the thread.
+        assert time.monotonic() - started_at < 0.4
         assert bridge.loop is None
         assert bridge.loop_thread is None
         assert not bridge.is_running
         time.sleep(1.0)
         leaked = [t for t in threading.enumerate() if t not in before and t.is_alive() and "never-start" in t.name]
         assert leaked == []
+        # The late thread closes the abandoned loop, so its self-pipe sockets are not leaked.
+        assert len(created) == 1 and created[0].is_closed()
+
+    def test_concurrent_start_loop_calls_start_one_loop_and_thread(self, monkeypatch):
+        # Slow the loop thread so both callers would pass the is_running check without the start lock.
+        self._delay_thread_run(monkeypatch, 0.2)
+        created = self._record_new_loops(monkeypatch)
+        bridge = AsyncBridge(name="dual-start")
+        barrier = threading.Barrier(2)
+        errors = []
+
+        def start():
+            try:
+                barrier.wait(timeout=5)
+                bridge.start_loop()
+            except Exception as exc:  # pragma: no cover - reported by the assertion below
+                errors.append(exc)
+
+        callers = [threading.Thread(target=start) for _ in range(2)]
+        for caller in callers:
+            caller.start()
+        for caller in callers:
+            caller.join(timeout=10)
+        try:
+            assert errors == []
+            assert len(created) == 1
+            assert bridge.is_running and bridge.loop is created[0]
+            loop_threads = [t for t in threading.enumerate() if t.name == "dual-start-loop" and t.is_alive()]
+            assert loop_threads == [bridge.loop_thread]
+        finally:
+            bridge.stop_loop()
+        assert created[0].is_closed()
+
+    def test_stop_loop_during_start_loop_is_not_missed(self, monkeypatch):
+        self._delay_thread_run(monkeypatch, 0.3)
+        created = self._record_new_loops(monkeypatch)
+        bridge = AsyncBridge(name="stop-mid-start")
+        starter = threading.Thread(target=bridge.start_loop)
+        starter.start()
+        deadline = time.monotonic() + 5
+        while not created and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert created, "start_loop never created its loop"
+        bridge.stop_loop()  # runs while start_loop is still waiting for the loop thread
+        starter.join(timeout=10)
+        assert not starter.is_alive()
+        assert bridge.loop is None
+        assert not bridge.is_running
+        deadline = time.monotonic() + 5
+        while not created[0].is_closed() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert created[0].is_closed()
