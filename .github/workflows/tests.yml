@@ -1,0 +1,105 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A new run on the same ref cancels the older one.
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUNBUFFERED: "1"
+  PYTHONUTF8: "1"
+
+jobs:
+  python-tests:
+    name: python (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      # Full history: tests/test_fleet_protocol_compat.py reads commit dab72db.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements*.txt
+            installer/locks/*.txt
+
+      # macOS and Windows install the hash-locked sets the installers use.
+      # No Linux lock exists, so Linux installs from requirements.txt.
+      - name: Install (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Install (macOS, locked)
+        if: runner.os == 'macOS'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --require-hashes -r installer/locks/macos-arm64.txt
+          python -m pip install -r requirements-dev.txt
+
+      - name: Install (Windows, locked)
+        if: runner.os == 'Windows'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --require-hashes -r installer/locks/windows-x64-ground.txt
+          python -m pip install -r requirements-dev.txt
+
+      # pytest.ini deselects the sitl and slow markers by default.
+      - name: Run tests
+        run: python -m pytest -q -p no:cacheprovider --junitxml=pytest-report.xml
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-report-${{ runner.os }}
+          path: pytest-report.xml
+          if-no-files-found: ignore
+
+  android-contract:
+    name: android contract and unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      # The runner image ships the Android SDK and sets ANDROID_HOME.
+      - name: Run Gradle tests
+        working-directory: mobile
+        run: ./gradlew :contract:test :app:testDebugUnitTest --console=plain
+
+  ios-package:
+    name: ios package tests
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: swift test
+        working-directory: ios/FlightRiskGround
+        run: swift test
