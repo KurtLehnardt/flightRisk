@@ -22,6 +22,17 @@ unless every later hash is also recomputed; CODEOWNERS review of this file is th
 - SHA-256 golden: 7403c28493386027b0c383326d30d2bb2645fa54c154e289276f9246289d2504
 - SHA-256 allowlist: 49966ba5ce72cc90ec17e4890d171c9a67078dec3c69ea91c391f5569b39e750
 
+## A2 return-command wire caps
+
+- Value: none changed.
+- Old and new: not applicable.
+- Reason: A2 adds the return-command wire caps to the protocol constants and allowlists them.
+- Section 27 item: none.
+- SHA-256 previous: ef1d4ca66102f52f0090d56ea1bd9fdb6b3d2dc7782739409dc61f68d30953e9
+- SHA-256 table: f949df64f14cee5c1c025d683cabea1d56a493941db05c214c33f7deac628378
+- SHA-256 golden: 7403c28493386027b0c383326d30d2bb2645fa54c154e289276f9246289d2504
+- SHA-256 allowlist: 448848fa34bc7ea6dc130b3b0c423bb48ce68a5303e665f68a00278e173cc79e
+
 ## PR #227: ArduCopter 4.7 fence altitude frame
 
 - Value: `_AP_FENCE_ALT_FRAME_ABOVE_HOME` in `flightrisk/drone/autopilot.py`, the only accepted `FENCE_ALT_MAX_TP`.
@@ -32,7 +43,7 @@ unless every later hash is also recomputed; CODEOWNERS review of this file is th
   `FENCE_ALT_MAX` as metres above home, so any other frame could let the autopilot fence sit above the
   ceiling or the 120 m cap. The allowlist gains this ArduPilot enumeration value.
 - Section 27 item: none listed; it is of the kind in item 6 (B4, newly refused autopilot values).
-- SHA-256 previous: ef1d4ca66102f52f0090d56ea1bd9fdb6b3d2dc7782739409dc61f68d30953e9
+- SHA-256 previous: fdb6b42784beff334a555dd0cd69f6c17b594fc66449c3e5026c12586867efa5
 - SHA-256 table: f949df64f14cee5c1c025d683cabea1d56a493941db05c214c33f7deac628378
 - SHA-256 golden: 7403c28493386027b0c383326d30d2bb2645fa54c154e289276f9246289d2504
-- SHA-256 allowlist: 18d1e5db2a75449fd9a01cf6b594d6e62947043627fdce9f9b236a1611d48619
+- SHA-256 allowlist: 7b4539efd7be798d98e11aa03af4a962acab92f084b5e7d020cbe47b9a8904db

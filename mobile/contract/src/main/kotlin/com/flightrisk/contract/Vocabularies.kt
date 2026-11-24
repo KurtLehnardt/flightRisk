@@ -130,7 +130,7 @@ object NackReasons {
     val FENCED_COMMAND_V2: Set<String> = setOf(
         "altitude", "battery", "busy", "drone_unreachable", "geofence", "invalid", "landing",
         "no_valid_plan", "not_authority", "not_flying", "other_drone", "plan_mismatch",
-        "stale_epoch", "stale_plan",
+        "stale_epoch", "stale_plan", "straight_line_home",
     )
 
     val SET_DETECTION_PROFILE: Set<String> =
@@ -143,7 +143,7 @@ object NackReasons {
     val MANUAL_COMMAND: Set<String> = setOf(
         "altitude", "battery", "busy", "ceiling", "drone_unreachable", "floor", "geofence", "invalid",
         "landing", "no_valid_plan", "not_authority", "not_flying", "not_manual", "other_drone",
-        "plan_mismatch", "slot_band", "stale_epoch", "stale_plan", "unsupported",
+        "plan_mismatch", "slot_band", "stale_epoch", "stale_plan", "straight_line_home", "unsupported",
     )
 
     val CONTROL_MODES: Set<String> = setOf("autonomous", "held", "manual")
