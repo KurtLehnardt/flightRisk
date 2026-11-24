@@ -551,7 +551,7 @@ class PlanningFootprint:
         return self._camera_at(alt_cm + self.altitude_margin_cm).eroded(placement_tolerance_cm)
 
     def to_dict(self) -> dict:
-        return {
+        out = {
             "kind": self.kind,
             "lateral_cm": self.lateral_cm,
             "near_cm": self.near_cm,
@@ -560,6 +560,9 @@ class PlanningFootprint:
             "ahead_cm": self.ahead_cm,
             "slot_cm": self.slot_cm,
         }
+        if self.altitude_margin_cm != ALTITUDE_MARGIN_CM:
+            out["altitude_margin_cm"] = self.altitude_margin_cm
+        return out
 
 
 def planning_footprint(

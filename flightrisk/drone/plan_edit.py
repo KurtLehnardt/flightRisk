@@ -61,7 +61,7 @@ from flightrisk.drone.fleet_plan_model import (
     PatternKind,
     Region,
 )
-from flightrisk.drone.safety import MIN_MOVE_CM, EnvelopeLimits
+from flightrisk.drone.safety import MIN_MOVE_CM, ROOM_LIMITS, EnvelopeLimits
 from flightrisk.fleet_protocol import MAX_ROSTER, is_identifier
 
 __all__ = [
@@ -279,6 +279,8 @@ class BuiltPlan:
     uncovered: list[dict] = field(default_factory=list)
     footprint_cm: int | None = None
     takeoffs: dict[str, pp.Point] = field(default_factory=dict)
+    limits: list[EnvelopeLimits] = field(default_factory=list)
+    """The envelope profile of every planned drone, in fleet order; empty means ``ROOM_LIMITS``."""
 
     def takeoff_layout(self) -> list[str]:
         """Where to put each drone, relative to the first one, in words for the operator."""
@@ -313,7 +315,7 @@ class BuiltPlan:
             "strip_cm": self.strip_cm,
             "gap_cm": self.gap_cm,
             "geofence_cm": self.geofence_cm,
-            "snap_tolerance_cm": pp.SNAP_TOLERANCE_CM,
+            "snap_tolerance_cm": pp.snap_tolerance_cm(self.limits or ROOM_LIMITS),
             "drones": [d.payload() for d in self.drones],
             "problems": [p.to_dict() for p in self.problems],
             "coverage": None if self.coverage is None else {
@@ -457,7 +459,7 @@ def build_plan(
     profiles = _per_drone_limits(unit_limits, ids)
     _area_cap(max_area_side_cm)
     problems: list[Problem] = []
-    built = BuiltPlan(spec, mode, [], problems, strip, int(gap_cm), geofence_cm)
+    built = BuiltPlan(spec, mode, [], problems, strip, int(gap_cm), geofence_cm, limits=list(profiles))
     built.footprint_cm = int(footprint_cm) if footprint_cm is not None else strip
     if not ids:
         problems.append(Problem("spec", "no drone to plan for"))
