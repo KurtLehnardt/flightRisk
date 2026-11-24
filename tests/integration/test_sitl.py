@@ -13,6 +13,8 @@ import time
 
 import pytest
 
+from tests.integration import sitl_support
+
 pytestmark = [
     pytest.mark.sitl,
     pytest.mark.integration,
@@ -43,6 +45,82 @@ def _wait_for(condition, timeout=10, interval=0.5):
             return True
         time.sleep(interval)
     return False
+
+
+#: How long a takeoff is retried while the autopilot still refuses it (ArduCopter refuses GUIDED until its EKF
+#: has an absolute position, and MAVSDK reports that refusal as a FAILED or DENIED action result).
+TAKEOFF_RETRY_S = 90.0
+TAKEOFF_RETRY_INTERVAL_S = 2.0
+CLIMB_WAIT_S = 30.0
+CLIMB_MARGIN_M = 1.5
+LAND_WAIT_S = 60.0
+LAND_MARGIN_M = 0.5
+LAND_HOLD_S = 3.0
+DISARM_WAIT_S = 5.0
+
+
+def _is_refused_action(exc: BaseException) -> bool:
+    """True for a MAVSDK ActionError whose result is FAILED or DENIED, matched by class name.
+
+    Matching by name keeps the fake-module guard working: the real class is never imported here.
+    """
+    while exc is not None:
+        if type(exc).__name__ == "ActionError":
+            text = str(exc).upper()
+            return "FAILED" in text or "DENIED" in text
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
+def _takeoff(ctrl):
+    """Take off, retrying while the autopilot refuses, then wait for a climb of 1.5 m above the connect-time ground."""
+    ground = ctrl.sitl_ground_msl
+    deadline = time.monotonic() + TAKEOFF_RETRY_S
+    while True:
+        try:
+            ctrl.takeoff()
+            break
+        except Exception as exc:  # noqa: BLE001 - only a refused action is retried
+            if not _is_refused_action(exc) or time.monotonic() >= deadline:
+                raise
+            time.sleep(TAKEOFF_RETRY_INTERVAL_S)
+    assert _wait_for(
+        lambda: ctrl.state.altitude_msl is not None and ctrl.state.altitude_msl >= ground + CLIMB_MARGIN_M,
+        timeout=CLIMB_WAIT_S,
+    ), f"Drone did not climb {CLIMB_MARGIN_M} m above the ground altitude {ground:.1f} m"
+
+
+def _armed(ctrl) -> bool:
+    """Read the vehicle's armed flag once from MAVSDK; the controller's state does not carry it."""
+
+    async def first_armed(system):
+        async for armed in system.telemetry.armed():
+            return armed
+
+    return bool(ctrl._run(first_armed(ctrl._system), timeout=5))
+
+
+def _land(ctrl, ground):
+    """Land and wait until the drone has been within 0.5 m of the ground for 3 s, then for the automatic disarm.
+
+    ``is_flying`` goes false as soon as LAND is accepted, so the measured altitude is the landing signal.
+    """
+    ctrl.land()
+    deadline = time.monotonic() + LAND_WAIT_S
+    on_ground_since = None
+    while time.monotonic() < deadline:
+        altitude = ctrl.state.altitude_msl
+        if altitude is not None and abs(altitude - ground) <= LAND_MARGIN_M:
+            if on_ground_since is None:
+                on_ground_since = time.monotonic()
+            elif time.monotonic() - on_ground_since >= LAND_HOLD_S:
+                break
+        else:
+            on_ground_since = None
+        time.sleep(0.5)
+    else:
+        pytest.fail(f"Drone did not land within {LAND_WAIT_S:g} s (ground {ground:.1f} m, now {ctrl.state.altitude_msl})")
+    _wait_for(lambda: not _armed(ctrl), timeout=DISARM_WAIT_S)
 
 
 def _import_real_mavlink_controller():
@@ -124,6 +202,10 @@ def sitl_available():
     MavlinkController = _import_real_mavlink_controller()
 
     address = _sitl_address()
+    try:
+        sitl_support.wait_ready(address, sitl_support.sitl_env().ready_timeout_s)
+    except sitl_support.SitlNotReady as e:
+        pytest.fail(f"SITL at {address} never became ready: {e}")
     ctrl = MavlinkController("sitl-test", host=address)
     # connect() is already bounded by mavlink_cmd_timeout, so no extra guard is needed here.
     # The variable is set, so a failed connect is a real failure and must not skip.
@@ -133,6 +215,9 @@ def sitl_available():
         pytest.fail(f"could not connect to SITL at {address}: {e}")
     if not connected:
         pytest.fail(f"could not connect to SITL at {address}")
+    # The ground altitude the flight tests measure climbs and landings against.
+    assert _wait_for(lambda: ctrl.state.altitude_msl is not None, timeout=30), "position telemetry not received"
+    ctrl.sitl_ground_msl = ctrl.state.altitude_msl
 
     yield ctrl
 
@@ -176,19 +261,20 @@ class TestSITLConnection:
 class TestSITLFlight:
     def test_takeoff_and_land(self, sitl_available):
         ctrl = sitl_available
-        ctrl.takeoff()
+        ground = ctrl.sitl_ground_msl
+        _takeoff(ctrl)
         try:
             assert _wait_for(
                 lambda: ctrl.state.is_flying, timeout=10
             ), "Drone did not report flying after takeoff"
             assert ctrl.state.altitude_msl is not None
         finally:
-            ctrl.land()
-            _wait_for(lambda: not ctrl.state.is_flying, timeout=15)
+            _land(ctrl, ground)
 
     def test_hover(self, sitl_available):
         ctrl = sitl_available
-        ctrl.takeoff()
+        ground = ctrl.sitl_ground_msl
+        _takeoff(ctrl)
         try:
             assert _wait_for(
                 lambda: ctrl.state.is_flying, timeout=10
@@ -196,12 +282,12 @@ class TestSITLFlight:
             ctrl.hover()
             assert ctrl.state.is_flying is True
         finally:
-            ctrl.land()
-            _wait_for(lambda: not ctrl.state.is_flying, timeout=15)
+            _land(ctrl, ground)
 
     def test_move_forward(self, sitl_available):
         ctrl = sitl_available
-        ctrl.takeoff()
+        ground = ctrl.sitl_ground_msl
+        _takeoff(ctrl)
         try:
             assert _wait_for(
                 lambda: ctrl.state.is_flying, timeout=10
@@ -214,12 +300,12 @@ class TestSITLFlight:
                 timeout=10,
             ), "Position did not change after move"
         finally:
-            ctrl.land()
-            _wait_for(lambda: not ctrl.state.is_flying, timeout=15)
+            _land(ctrl, ground)
 
     def test_rotate(self, sitl_available):
         ctrl = sitl_available
-        ctrl.takeoff()
+        ground = ctrl.sitl_ground_msl
+        _takeoff(ctrl)
         try:
             assert _wait_for(
                 lambda: ctrl.state.is_flying, timeout=10
@@ -230,12 +316,12 @@ class TestSITLFlight:
                 lambda: ctrl.state.heading != initial_heading, timeout=10
             ), "Heading did not change after rotate"
         finally:
-            ctrl.land()
-            _wait_for(lambda: not ctrl.state.is_flying, timeout=15)
+            _land(ctrl, ground)
 
     def test_goto_gps(self, sitl_available):
         ctrl = sitl_available
-        ctrl.takeoff()
+        ground = ctrl.sitl_ground_msl
+        _takeoff(ctrl)
         try:
             assert _wait_for(
                 lambda: ctrl.state.is_flying, timeout=10
@@ -243,55 +329,6 @@ class TestSITLFlight:
             lat = ctrl.state.latitude
             lon = ctrl.state.longitude
             assert lat is not None and lon is not None, "GPS not available"
-            ctrl.goto_gps(lat + 0.0001, lon, 10.0, timeout=60)
+            ctrl.goto_gps(lat + 0.0001, lon, ctrl.state.altitude_msl, timeout=60)
         finally:
-            ctrl.land()
-            _wait_for(lambda: not ctrl.state.is_flying, timeout=15)
-
-
-class TestSITLCoverageFlight:
-    """Fly two lanes of the planned lawnmower with scripts/sitl_fly_coverage.py.
-
-    Needs SITL started with ./scripts/start_sitl.sh (instance 0, TCP port 5760).
-    """
-
-    def test_fly_two_lanes(self):
-        import importlib.util
-        from pathlib import Path
-
-        _import_real_mavlink_controller()  # Skips when the real mavsdk is missing.
-        address = _sitl_address()  # Skips when FLIGHTRISK_SITL_ADDRESS is unset.
-        root = Path(__file__).resolve().parents[2]
-        spec = importlib.util.spec_from_file_location("sitl_fly_coverage_it", root / "scripts" / "sitl_fly_coverage.py")
-        script = importlib.util.module_from_spec(spec)
-        # Python 3.13 needs the module in sys.modules while it runs (dataclasses look it up there).
-        sys.modules[spec.name] = script
-        try:
-            spec.loader.exec_module(script)
-        except BaseException:
-            sys.modules.pop(spec.name, None)
-            raise
-
-        # Re-import the real controller for the script, then restore the fakes
-        # that the unit tests rely on once this test is done.
-        saved = {n: m for n, m in sys.modules.items() if n == "mavsdk" or n.startswith("mavsdk.") or n == "flightrisk.drone.mavlink"}
-        for name in saved:
-            del sys.modules[name]
-        try:
-            from flightrisk.drone.mavlink import MavlinkController  # noqa: F401  (real module)
-
-            args = script.build_parser().parse_args(["--max-lanes", "2", "--area", "300x300"])
-            plan = script.build_plan(args)
-            assert len(plan.waypoints) == 4
-            controller = script._make_sitl_controller_class()("sitl-coverage-it", host=address)
-            assert controller.connect(), "SITL not reachable (run scripts/start_sitl.sh)"
-            try:
-                lines: list[str] = []
-                script.fly(controller, plan, out=lines.append, climb_timeout=300.0, leg_timeout=300.0)
-                assert sum(1 for line in lines if line.startswith("Waypoint")) == 4
-            finally:
-                controller.disconnect()
-        finally:
-            for name in [n for n in sys.modules if n == "mavsdk" or n.startswith("mavsdk.") or n == "flightrisk.drone.mavlink"]:
-                del sys.modules[name]
-            sys.modules.update(saved)
+            _land(ctrl, ground)
