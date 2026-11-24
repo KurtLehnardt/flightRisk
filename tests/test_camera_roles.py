@@ -73,3 +73,11 @@ def test_role_conflict_names_mount():
     assert msg == ("camera mount `gimbal` cannot look level for obstacle sensing and down for "
                    "bird's-eye search at once")
     assert role_conflict("gimbal", [ROLE_LEVEL, ROLE_LEVEL]) is None
+
+
+def test_mount_role_does_not_depend_on_camera_order():
+    """M3: three cameras on one gimbal, one unmeasured, give the stricter role in every order."""
+    a, b = _cam(id="a"), _cam(id="b", pitch_measured=False)
+    c = _cam(id="c2")
+    for order in ([a, b, c], [a, b], [b, a, c], [a, c, b], [c, a, b]):
+        assert mount_roles(order, {"gimbal": 0}) == {"gimbal": ROLE_OBLIQUE}, order

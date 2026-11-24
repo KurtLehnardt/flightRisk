@@ -26,9 +26,14 @@ NADIR_MAX_PITCH_DEG = -60
 MISSION_PITCH_REASON = "declare the gimbal's mission pitch"
 
 
-def default_level_tolerance_deg() -> float:
-    """The registry default of the level pitch tolerance, the same for every built-in profile."""
+def default_level_tolerance_deg(profile: Optional[str] = None) -> float:
+    """The registry default of the level pitch tolerance for ``profile``.
+
+    Without a profile, or for a profile with no default, it is the first profile default in the row.
+    """
     spec = spec_for(LEVEL_TOLERANCE_PARAM)
+    if profile is not None and spec.defaults.get(profile) is not None:
+        return float(spec.defaults[profile])
     values = [v for v in spec.defaults.values() if v is not None]
     return float(values[0])
 
@@ -57,30 +62,23 @@ def role_unavailable_reason(camera: CameraSpec, mission_pitch_deg: Optional[floa
 
 def mount_roles(cameras: Iterable[CameraSpec], mission_pitch_deg: Mapping[str, float] = None,
                 tolerance_deg: Optional[float] = None) -> dict:
-    """One role per mount id. Cameras sharing a mount (RGB plus thermal) always share its role."""
+    """One role per mount id. Cameras sharing a mount (RGB plus thermal) always share its role.
+
+    A mount's role is derived once: if any camera on it reports an unmeasured pitch, the stricter
+    unmeasured reading wins (ROLE-3), whatever order the cameras are listed in.
+    """
     pitches = mission_pitch_deg or {}
-    roles: dict = {}
-    first: dict = {}
+    groups: dict = {}
     for camera in cameras:
-        role = derive_role(camera, pitches.get(camera.mount), tolerance_deg)
-        if camera.mount in roles:
-            seen = first[camera.mount]
-            if (seen.mount_kind, seen.orientation) != (camera.mount_kind, camera.orientation):
-                raise ValueError(f"camera mount `{camera.mount}` is declared as two different kinds of mount")
-            if role != roles[camera.mount]:
-                roles[camera.mount] = derive_role(seen, pitches.get(camera.mount), tolerance_deg)
-                if not (seen.pitch_measured and camera.pitch_measured):
-                    roles[camera.mount] = _both(seen, camera, pitches.get(camera.mount), tolerance_deg)
-            continue
-        roles[camera.mount] = role
-        first[camera.mount] = camera
+        group = groups.setdefault(camera.mount, [])
+        if group and (group[0].mount_kind, group[0].orientation) != (camera.mount_kind, camera.orientation):
+            raise ValueError(f"camera mount `{camera.mount}` is declared as two different kinds of mount")
+        group.append(camera)
+    roles: dict = {}
+    for mount, group in groups.items():
+        strict = next((c for c in group if not c.pitch_measured), group[0])
+        roles[mount] = derive_role(strict, pitches.get(mount), tolerance_deg)
     return roles
-
-
-def _both(a: CameraSpec, b: CameraSpec, pitch: Optional[float], tolerance_deg: Optional[float]) -> Optional[str]:
-    """Role for two cameras on one gimbal whose measured flags differ: the stricter reading wins."""
-    unmeasured = a if not a.pitch_measured else b
-    return derive_role(unmeasured, pitch, tolerance_deg)
 
 
 def role_conflict(mount: str, needed_roles: Sequence[str]) -> Optional[str]:
@@ -205,6 +203,8 @@ def feature_reason(feature_id: str, model: DroneModel, *, mission_pitch_deg: Map
     if feature_id not in FEATURES:
         raise KeyError(f"unknown feature {feature_id!r}")
     cameras = tuple(model.cameras)
+    if tolerance_deg is None:
+        tolerance_deg = default_level_tolerance_deg(model.profile)
     roles = mount_roles(cameras, mission_pitch_deg, tolerance_deg)
     pitch_reason = next((role_unavailable_reason(c, (mission_pitch_deg or {}).get(c.mount)) for c in cameras
                          if roles.get(c.mount) is None), None)
@@ -248,6 +248,26 @@ def feature_reason(feature_id: str, model: DroneModel, *, mission_pitch_deg: Map
     return None  # claude_second_opinion: a ground setting, nothing on the unit.
 
 
+#: The mount role each role-gated feature needs when it is switched on (ROLE-2).
+FEATURE_ROLES = {FORWARD_OBSTACLE_SENSING: ROLE_LEVEL, LEVEL_SEARCH: ROLE_LEVEL, BIRDSEYE_SEARCH: ROLE_NADIR}
+
+
+def requested_role_conflict(model: DroneModel, wanted: Iterable[str]) -> Optional[str]:
+    """ROLE-2: refusal text when the features switched on need two roles of the one mount that can serve them.
+
+    A role is served by a fixed mount with that role, or else by a gimbal. When a role has no fixed
+    mount and the model has exactly one gimbal, that gimbal must take the role; two such roles on it
+    conflict, and the text names the mount.
+    """
+    cameras = tuple(model.cameras)
+    fixed_roles = {derive_role(c) for c in cameras if c.mount_kind == "fixed"}
+    gimbals = sorted({c.mount for c in cameras if c.mount_kind == "gimbal"})
+    needed = sorted({FEATURE_ROLES[f] for f in wanted if f in FEATURE_ROLES} - fixed_roles)
+    if len(gimbals) != 1:
+        return None
+    return role_conflict(gimbals[0], needed)
+
+
 def resolve_features(model: DroneModel, requested: Mapping[str, bool] = None,
                      request_sources: Mapping[str, str] = None, **context) -> dict:
     """The ``gates`` dictionary: ``{feature id: {"on", "ok", "why", "src"}}`` (plain dicts and scalars).
@@ -262,6 +282,10 @@ def resolve_features(model: DroneModel, requested: Mapping[str, bool] = None,
     unknown = sorted(set(requested) - set(FEATURES))
     if unknown:
         raise KeyError(f"unknown feature {unknown[0]!r}")
+    conflict = requested_role_conflict(model, [fid for fid, on in requested.items() if on])
+    if conflict:
+        fid = next(f for f in (BIRDSEYE_SEARCH, LEVEL_SEARCH, FORWARD_OBSTACLE_SENSING) if requested.get(f))
+        raise FeatureRefused(fid, conflict)
     gates: dict = {}
     for fid, feature in FEATURES.items():
         reason = feature_reason(fid, model, **context)

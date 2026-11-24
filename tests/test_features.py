@@ -160,3 +160,25 @@ def test_slot_model_is_listed_but_not_addable():
     assert model_addable_reason(slot) == SLOT_ADAPTER_REASON
     assert model_addable_reason(TELLO) is None
     assert model_addable_reason(GENERIC) is None
+
+
+def test_role2_resolve_features_refuses_level_and_nadir_on_one_gimbal_naming_the_mount():
+    """B3: the critic's probe, through resolve_features rather than the helper."""
+    from flightrisk.hardware.features import FeatureRefused, resolve_features
+    one_gimbal = _with(GENERIC, _cam(id="rgb", mount="gimbal", sensor="rgb"))
+    with pytest.raises(FeatureRefused) as err:
+        resolve_features(one_gimbal, {"forward_obstacle_sensing": True, "birdseye_search": True},
+                         mission_pitch_deg={"gimbal": 0}, source="camera")
+    assert "`gimbal`" in str(err.value)
+    assert str(err.value) == ("camera mount `gimbal` cannot look level for obstacle sensing and down for "
+                              "bird's-eye search at once")
+
+
+def test_role2_no_conflict_when_a_fixed_mount_serves_one_role():
+    from flightrisk.hardware.features import resolve_features
+    two = _with(GENERIC, _cam(id="fwd", mount="front", mount_kind="fixed", orientation="forward",
+                              pitch_min_deg=None, pitch_max_deg=None, pitch_measured=False, sensor="rgb"),
+                _cam(id="rgb", mount="gimbal", sensor="rgb"))
+    gates = resolve_features(two, {"forward_obstacle_sensing": True, "birdseye_search": True},
+                             mission_pitch_deg={"gimbal": -90}, source="camera")
+    assert gates["birdseye_search"]["on"] and gates["forward_obstacle_sensing"]["on"]
