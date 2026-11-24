@@ -643,6 +643,11 @@ _NUMERIC_KINDS = (Kind.INT, Kind.FLOAT, Kind.INT_LIST, Kind.INT_PAIR)
 #: and the row has no bound. C7 must add the bound before any code reads it. Pinned by a test.
 IGNORED_WITHOUT_BOUND = frozenset({("tello", "FLIGHTRISK_LINK_LOSS_WAIT_S")})
 
+#: Fact rows whose variable the edge still reads itself on every unit, so a test-adapter override of one on
+#: a production unit is left out of the resolution but is not ignored: the hover-only test is a mission
+#: switch that today's reader honours (``edge_device._flight_guards``). Pinned by a test.
+READ_BY_THE_EDGE = frozenset({"mode.hover_test"})
+
 
 def _new_name_without_bound(spec: ParamSpec, profile: str, name: str) -> bool:
     """True for a number from a name today's code does not read, on a row with no target bound."""
@@ -802,7 +807,11 @@ def resolve(
                 continue
             if edit is Edit.FACT:
                 if not test_unit:
-                    log.warning("%s is ignored on %s: it is a test-adapter override", detail, unit_id)
+                    if param_id in READ_BY_THE_EDGE:
+                        log.info("%s is not resolved on %s, a production unit; the edge reads it itself",
+                                 detail, unit_id)
+                    else:
+                        log.warning("%s is ignored on %s: it is a test-adapter override", detail, unit_id)
                     continue
                 log.info("test-adapter override %s=%r on %s", detail, raw, unit_id)
             try:

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import os
 import threading
 from types import SimpleNamespace
@@ -181,6 +182,24 @@ def test_the_hover_test_keeps_todays_reader(edge_env):
     today, (guards, _), _ = _settings(_FIELD)
     assert today[0].hover_test is True
     assert guards.hover_test is True
+
+
+def test_the_hover_test_on_a_production_mavlink_unit_is_not_logged_as_ignored(edge_env, caplog):
+    edge_env.setenv(G + "HOVER_TEST", "1")
+    with caplog.at_level(logging.DEBUG, logger="flightrisk.params.resolver"):
+        _, (guards, _), args = _settings(_FIELD)
+    assert args.edge_resolution.simulated is False
+    assert guards.hover_test is True  # The edge honours it.
+    lines = [r.getMessage() for r in caplog.records if r.name == "flightrisk.params.resolver"]
+    hover = [line for line in lines if "FLIGHTRISK_HOVER_TEST" in line]
+    assert hover and not any("ignored" in line for line in hover)
+    assert any("the edge reads it itself" in line for line in hover)
+
+
+def test_only_the_hover_test_is_read_by_the_edge():
+    from flightrisk.params.resolver import READ_BY_THE_EDGE
+
+    assert READ_BY_THE_EDGE == frozenset({"mode.hover_test"})
 
 
 # --- Test-adapter overrides on a production MAVLink unit --------------------------------------------------
