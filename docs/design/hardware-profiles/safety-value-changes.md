@@ -73,7 +73,7 @@ unless every later hash is also recomputed; CODEOWNERS review of this file is th
   controller's own declaration, not row 8 and not the generic_multirotor airframe limit that section 27 item 53
   removes.
 - Section 27 item: none.
-- SHA-256 previous: 79c17994057de59fb0abd4a575c978dad863b81ec39efdb6f9d0432d66acb710
+- SHA-256 previous: 2c084fb72e228cdb48ed6e2da64b4252c8fadb8795afbb8cd299bdf0128d35a9
 - SHA-256 table: f949df64f14cee5c1c025d683cabea1d56a493941db05c214c33f7deac628378
 - SHA-256 golden: 7403c28493386027b0c383326d30d2bb2645fa54c154e289276f9246289d2504
-- SHA-256 allowlist: ee4fe3ff88ae5ef9b87858fcf2ff36543053dc693bc6234bf1d3e051b2175469
+- SHA-256 allowlist: dd1af99c5e3615ed79b51d9efbed782d2f3abf41cd3855f08831cdde67c68621
