@@ -30,6 +30,7 @@ from flightrisk.fleet_protocol.constants import (
     NACK,
     PEER_TYPES,
     PROTOCOL_VERSION,
+    RETURN_HOME,
     V2_FIELDS,
     V2_ONLY_COMMAND_TYPES,
 )
@@ -248,7 +249,10 @@ def shape_for_peer(msg: Mapping[str, Any], peer_proto: int) -> dict[str, Any]:
     * every other message loses the v2 fields (``V2_FIELDS``) and must then
       pass the v1 rules, so for example a nack with a v2-only reason raises.
 
-    A v1 edge ignores ``on_complete`` and hovers at the end of its lanes.
+    A v1 edge ignores ``on_complete`` and hovers at the end of its lanes,
+    so ``on_complete: "hover"`` or ``"land"`` is stripped, but an
+    ``on_complete: "return_home"`` raises: stripping it would change what the
+    drone does without any refusal.
     The legacy ``set_target``, ``stream_video`` and ``detections`` messages
     are copied unchanged; a type this protocol does not define raises.
     Configuration commands (``CONFIG_COMMAND_TYPES``) and their acks and
@@ -295,6 +299,11 @@ def shape_for_peer(msg: Mapping[str, Any], peer_proto: int) -> dict[str, Any]:
         return {key: value for key, value in msg.items() if key != "unit_rev"}
     if mtype in V2_ONLY_COMMAND_TYPES or mtype in PEER_TYPES:
         raise ProtocolError(f"{mtype!r} cannot be sent to a protocol v1 peer")
+    if msg.get("on_complete") == RETURN_HOME:
+        # A v1 edge has no return home. Stripping the order would leave the
+        # drone hovering at the end of its lanes with no refusal, so it is
+        # refused like the corridor, landing, no_entry and speed keys.
+        raise ProtocolError(f"{mtype!r} with on_complete 'return_home' cannot be sent to a protocol v1 peer")
     shaped = {key: value for key, value in msg.items() if key not in V2_FIELDS}
     validate_message(shaped, proto=1)
     return shaped

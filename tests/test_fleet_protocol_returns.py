@@ -86,9 +86,21 @@ def test_every_new_key_passes_the_privacy_screen():
 def test_commands_validate_at_proto_2(index):
     msg = _commands()[index]
     assert fp.validate_message(msg, proto=2) == msg["type"]
-    assert fp.validate_ground_to_edge(msg, proto=2) == msg["type"]
-    assert fp.validate_ground_to_edge(msg, proto=2, require_fence=True) == msg["type"]
     assert fp.shape_for_peer(msg, 2) == msg
+
+
+@pytest.mark.parametrize("index", range(7))
+def test_the_live_edge_still_refuses_return_commands_at_decode(index):
+    # Until the edge handles them (C1), the strict validator and the edge's
+    # decode refuse them, as on main, so they reach on_decode_error and are
+    # never silently ignored as an unexpected type.
+    msg = _commands()[index]
+    assert msg["type"] in fp.RETURN_COMMAND_TYPES
+    for fenced in (False, True):
+        with pytest.raises(fp.ProtocolError):
+            fp.validate_ground_to_edge(msg, proto=2, require_fence=fenced)
+    with pytest.raises(fp.ProtocolError):
+        fp.decode(json.dumps(msg), direction=fp.DIRECTION_GROUND_TO_EDGE, proto=2)
 
 
 @pytest.mark.parametrize("index", range(7))
@@ -242,9 +254,17 @@ def test_assign_lanes_return_keys_rejected_at_proto_1(extra):
     with pytest.raises(fp.ProtocolError):
         fp.validate_message(v1, proto=1)
     fp.validate_message(_lanes(**extra), proto=2)
-    if "on_complete" not in extra:
-        with pytest.raises(fp.ProtocolError):
-            fp.shape_for_peer(_lanes(**extra), 1)
+    # shape_for_peer refuses every one of them for a v1 peer, the return home
+    # order included: stripping it would leave the drone hovering unrefused.
+    with pytest.raises(fp.ProtocolError):
+        fp.shape_for_peer(_lanes(**extra), 1)
+
+
+@pytest.mark.parametrize("action", ["hover", "land"])
+def test_shape_for_v1_peer_still_strips_hover_and_land(action):
+    extra = {"hover_timeout_s": 5} if action == "hover" else {}
+    shaped = fp.shape_for_peer(_lanes(on_complete=action, **extra), 1)
+    assert "on_complete" not in shaped and "hover_timeout_s" not in shaped
 
 
 def test_hover_timeout_with_return_home_has_a_one_second_floor():
@@ -318,3 +338,12 @@ def test_make_assign_lanes_with_todays_arguments_is_byte_identical(kwargs, expec
         kwargs = {"fence": fp.Fence(3, "ground-a"), "cmd_id": "c-1", "plan_id": "p-1", "plan_seq": 2, **kwargs}
     msg = fp.make_assign_lanes("drone-1", 120, LANES, ZONE, **kwargs)
     assert json.dumps(msg, separators=(",", ":")) == expected
+
+
+def test_repeated_no_entry_area_ids_are_refused():
+    other = dict(AREA, points=[{"x_cm": 0, "y_cm": 0}, {"x_cm": 50, "y_cm": 0}, {"x_cm": 0, "y_cm": 50}])
+    with pytest.raises(fp.ProtocolError, match="repeats the area id"):
+        fp.make_set_no_entry("drone-1", [AREA, other], fence=FENCE, cmd_id="n-3")
+    with pytest.raises(fp.ProtocolError, match="repeats the area id"):
+        fp.validate_message(_lanes(no_entry=[AREA, other]), proto=2)
+    fp.make_set_no_entry("drone-1", [AREA, dict(other, id="area-other")], fence=FENCE, cmd_id="n-4")

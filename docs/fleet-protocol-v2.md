@@ -497,7 +497,7 @@ The ground announces each change of a re-flight with a `fleet_event` whose `even
   |---|---|
   | Encoded fleet message (`decode`/`encode`) | 64 KiB (a ground-to-edge landing over it goes through the 1 MiB fail-safe fallback) |
   | Encoded legacy message (`detections` from an edge, `set_target` or `stream_video` from a ground) | 1 MiB (`LEGACY_MAX_BYTES`, the WebSocket frame limit; a larger caller `max_bytes` raises it) |
-  | Top-level fields | 48 (`MAX_FIELDS`; it was 32 before the MAVLink edge's GPS, drone link, obstacle and profile fields together passed that, so a ground older than this limit drops such an edge's telemetry). The edge's own worst-case telemetry is 38 fields, and `tests/test_telemetry_field_cap.py` requires at most `MAX_FIELDS - 5`. The detection profile status travels as one `detection_profile` object for that reason; group a new family of related fields the same way |
+  | Top-level fields | 48 (`MAX_FIELDS`; it was 32 before the MAVLink edge's GPS, drone link, obstacle and profile fields together passed that, so a ground older than this limit drops such an edge's telemetry). The edge's own worst-case telemetry, with every optional group the producers can add, is 40 fields and 41 with the v2 `rth` group; `tests/test_telemetry_field_cap.py` and `tests/test_fleet_protocol_rth_telemetry.py` compute it from the producers and require at most `MAX_FIELDS - 5`. The detection profile status travels as one `detection_profile` object for that reason; group a new family of related fields the same way |
   | Nesting depth | 8 |
   | Values in one message | 10,000 |
   | Identifiers (`drone_id`, `node_id`, `leader_id`, `cmd_id`, `plan_id`, `to_node`) | 64 characters |
@@ -1261,7 +1261,8 @@ link watchdog (A3).
   "w_px", "h_px", "hfov_deg", "sensor", "radiometric"}}`). `link` is only the link kind
   (`wifi_ap`, `wifi_station` or `radio`), never an SSID, host or address. `unit` and each
   camera are strict: an unknown key is refused.
-- `gates`: `{"<feature id>": {"on", "ok", "why", "src"}}`.
+- `gates`: `{"<feature id>": {"on", "ok", "why", "src"}}`. `why` is the reason a feature is
+  unavailable, 1 to 200 printable characters, or null when there is none (an available feature).
 - `values`: `{"<param id>": {"v", "src", "d", "lo", "hi", "edit"}}`, drone-scope rows only.
   `edit` is `ui`, `file_env` or `read_only`, so a phone-facing view can show read-only rows
   as read-only and never as settings. A test-adapter fact (`edit: fact`, for example the
@@ -1302,7 +1303,10 @@ older ground ignores the key, and `shape_for_peer` strips it for a v1 peer.
   an edge whose validated reply lists every name the message needs (`required_accepts`).
   Today's messages are always allowed.
 - `nack_reason_for_peer(reason, peer_query)`: an edge sends `straight_line_home` only to a
-  ground that has sent it `describe_unit`, and `invalid` otherwise.
+  ground that has sent it `describe_unit`, and `invalid` otherwise. A query carries no sender
+  identity, so `peer_query` must be the last query received on the same connection as the
+  nack's destination, never the last one from any ground (a failover to an older standby would
+  otherwise send it a reason it drops as malformed).
 
 **Logging (PROTO-7).** `flightrisk/obs_comm.py` counts `describe_unit` queries and their
 replies on every message and logs them as one aggregated event per side, direction, type and

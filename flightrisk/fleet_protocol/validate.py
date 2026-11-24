@@ -674,11 +674,9 @@ def validate_ground_to_edge(msg: Any, *, proto: int, require_fence: bool = False
                     f"unfenced or incomplete {mtype!r} refused: this edge requires the v2 form on every link ({exc})"
                 ) from exc
         return mtype
-    if mtype in RETURN_COMMAND_TYPES:
-        # Protocol v2 only; refused on a v1 link like any unknown command.
-        if not (_is_int(proto) and proto >= 2):
-            raise ProtocolError(f"{_short(mtype)} is not a ground-to-edge message in protocol v{_short(proto)}")
-        return validate_message(msg, proto=proto)
+    # The return commands (RETURN_COMMAND_TYPES) are not allowed here yet:
+    # like describe_unit, the live edge keeps refusing them at decode until it
+    # handles them (C1), so this change leaves the edge's behaviour as it was.
     allowed = GROUND_TO_EDGE_TYPES_V2 if _is_int(proto) and proto >= 2 else GROUND_TO_EDGE_TYPES | {HELLO}
     if mtype not in allowed:
         raise ProtocolError(f"{_short(mtype)} is not a ground-to-edge message in protocol v{_short(proto)}")

@@ -394,15 +394,17 @@ MAX_LANDING_INTERVAL_S = 300.0
 # Longest validity of one escort setpoint, in seconds: wire sanity limit, not a flight parameter.
 MAX_SETPOINT_VALID_S = 10.0
 # Top-level fields of one message. An edge's telemetry is the executor's own
-# fields (up to 35 with GPS, the drone link and the obstacle fields, the
-# re-look and sidestep group ``obstacle_avoid`` included; a Tello has no GPS
-# but adds its temperature as one grouped field, ``temp_preflight``) plus the
-# ones the edge adds on the way out (``detector_ok``, ``camera_ok`` and the
-# grouped ``detection_profile``), so up to 38 on a real edge and 39 with every
-# optional field present. The limit leaves headroom above that; a new optional
-# field belongs
-# in a group. ``tests/test_telemetry_field_cap.py`` guards it. Raising it only
-# loosens what a ground accepts, so an older edge's messages are unchanged.
+# fields (GPS, the drone link and the obstacle fields, the re-look and
+# sidestep group ``obstacle_avoid`` included; a Tello has no GPS but adds its
+# temperature as one grouped field, ``temp_preflight``) plus the ones the edge
+# adds on the way out (``detector_ok``, ``camera_ok`` and the grouped
+# ``detection_profile``). With every optional group the producers can add the
+# worst case is 40 fields, and 41 with the v2 ``rth`` group. The limit leaves
+# headroom above that; a new optional field belongs in a group.
+# ``tests/test_telemetry_field_cap.py`` and
+# ``tests/test_fleet_protocol_rth_telemetry.py`` compute the count from the
+# producers and guard it. Raising it only loosens what a ground accepts, so an
+# older edge's messages are unchanged.
 MAX_FIELDS = 48
 MAX_DEPTH = 8
 MAX_NODES = 10_000

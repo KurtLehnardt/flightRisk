@@ -420,6 +420,12 @@ def nack_reason_for_peer(reason: str, peer_query: Any) -> str:
     edge a ``describe_unit`` query (*peer_query*, the last one it sent, or
     None), which proves the ground understands it; any other ground gets
     ``invalid``, with the same ``detail`` text. Other reasons pass unchanged.
+
+    A ``describe_unit`` query carries no sender identity, so the caller must
+    pass the last query received on the same connection as the nack's
+    destination, never the last one the edge received from any ground. After
+    a failover to an older standby, a query from the former leader proves
+    nothing about the new ground, which would drop the nack as malformed.
     """
     if reason not in NEW_NACK_REASONS:
         return reason

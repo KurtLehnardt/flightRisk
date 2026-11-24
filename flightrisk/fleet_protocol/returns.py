@@ -22,8 +22,9 @@ Rules:
 * **Protocol v2 only.** Each command, and each ``ack`` or ``nack`` whose
   ``for`` names one, is refused on a v1 link, and ``shape_for_peer`` refuses
   to shape one for a v1 peer. A ground sends them only to an edge whose
-  ``describe_unit`` reply lists them in ``accepts``; an older edge refuses
-  the unknown type.
+  ``describe_unit`` reply lists them in ``accepts``. An edge that does not
+  handle them refuses them at decode: the strict ``validate_ground_to_edge``
+  keeps refusing them until the edge adopts them (C1).
 * **Every command carries ``drone_id`` and ``cmd_id``.** ``set_no_entry``,
   ``set_speed``, ``escort_setpoint`` and a ``return_home`` with ``wait``
   also carry the fence (``epoch`` and ``leader_id``), because only the
@@ -191,12 +192,17 @@ def _validate_areas(areas: Any, what: str) -> None:
         raise ProtocolError(f"{what} must be a list of area objects, got {_short(areas)}")
     if len(areas) > MAX_NO_ENTRY_AREAS:
         raise ProtocolError(f"{what} has {len(areas)} areas; the limit is {MAX_NO_ENTRY_AREAS}")
+    seen: set[str] = set()
     for index, area in enumerate(areas):
         name = f"{what} area {index}"
         if not isinstance(area, Mapping):
             raise ProtocolError(f"{name} must be an object, got {_short(area)}")
         _only(area, _AREA_FIELDS, name)
         _require_id(area, "id")
+        if area["id"] in seen:
+            # A later set_no_entry names an area by its id, so ids must be unique.
+            raise ProtocolError(f"{name} repeats the area id {_short(area['id'])}")
+        seen.add(area["id"])
         _require_choice(area, "kind", NO_ENTRY_KINDS)
         if "drone_id" in area:
             _require_drone_id(area)
