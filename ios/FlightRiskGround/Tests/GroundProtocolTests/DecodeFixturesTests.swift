@@ -3,10 +3,10 @@ import XCTest
 
 /// R-8: every received payload decodes from its fixture; missing optional fields decode as nil.
 final class DecodeFixturesTests: XCTestCase {
-    func testThereAreTwentySevenFixtureFiles() throws {
-        // 24, plus reasoning_result.json, alert_upgrade.json and demo_scenario.json.
+    func testThereAreTwentyEightFixtureFiles() throws {
+        // 27, plus catalogue.json (a reference fixture the apps do not decode yet).
         let names = try Fixtures.fileNames()
-        XCTAssertEqual(names.count, 27, "fixture files: \(names)")
+        XCTAssertEqual(names.count, 28, "fixture files: \(names)")
     }
 
     /// Every case of every file with a server event this build handles decodes into the matching
@@ -40,6 +40,14 @@ final class DecodeFixturesTests: XCTestCase {
             XCTAssertFalse(cases.isEmpty, file)
             for c in cases {
                 total += 1
+                if file == "catalogue" {
+                    XCTAssertEqual(c.raw["direction"] as? String, "reference", "\(file)/\(c.name)")
+                    XCTAssertNil(c.event, "\(file)/\(c.name)")
+                    let payload = c.raw["payload"] as? [String: Any]
+                    XCTAssertFalse(payload?.isEmpty ?? true, "\(file)/\(c.name)")
+                    XCTAssertEqual(c.name, "builtin_models")
+                    continue
+                }
                 XCTAssertTrue(c.raw["payload"] != nil || c.raw["frame"] != nil, "\(file)/\(c.name)")
             }
         }

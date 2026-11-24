@@ -35,7 +35,7 @@ class AllFixturesDecodeTest {
             }
         }
         assertEquals(total, decoded)
-        // 27 files; the count only guards against an empty or truncated directory.
+        // 28 files; the count only guards against an empty or truncated directory.
         assertTrue("expected well over 100 cases, got $total", total > 100)
     }
 
@@ -53,6 +53,13 @@ class AllFixturesDecodeTest {
                 // Not an event: the scorer tests read these. Check the shape both apps rely on.
                 val p = payload as JsonObject
                 for (key in listOf("scorer", "signals", "extra_signal_weights", "expected")) assertNotNull("$label: $key", p[key])
+            }
+            "catalogue.json" -> {
+                // Reference fixture, not an event: the apps do not decode it yet (F2/F3).
+                assertEquals(label, "reference", (case["direction"] as JsonPrimitive).content)
+                assertEquals(label, "builtin_models", caseName)
+                assertTrue("$label: no event expected", case["event"].stringValue() == null)
+                assertTrue("$label: empty payload", (payload as JsonObject).isNotEmpty())
             }
             "client_emits.json" -> {
                 val event = (case["event"] as JsonPrimitive).content
