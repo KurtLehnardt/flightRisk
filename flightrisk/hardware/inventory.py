@@ -23,9 +23,9 @@ from typing import Any, Iterable, Mapping, Optional, Union
 from flightrisk.fleet_protocol.checks import is_identifier
 from flightrisk.hardware.catalogue import BUILTIN_MODELS
 from flightrisk.hardware.features import FEATURES
-from flightrisk.launcher.settings import _DRONE_ID
+from flightrisk.hardware.ids import DRONE_ID
 from flightrisk.params.custom import CustomModel, custom_model
-from flightrisk.params.resolver import ParamRefused, spec_for
+from flightrisk.params.resolver import FACT_NOT_SETTABLE, ParamRefused, spec_for
 from flightrisk.params.table import TABLE
 
 try:  # POSIX
@@ -42,8 +42,17 @@ SECRET_WORDS = frozenset({"password", "passphrase", "secret", "token", "key"})
 TOP_FIELDS = ("version", "rev", "models", "units")
 UNIT_FIELDS = ("unit_id", "name", "model", "link", "serial", "available", "features", "mounts")
 LINK_KINDS = ("wifi_ap", "wifi_station", "radio")
+#: The keys a ``link`` may hold (design detail 8.1); every value is text.
+LINK_FIELDS = ("kind", "ssid", "host", "mavlink_address")
+#: The keys a ``mounts`` entry may hold.
+MOUNT_FIELDS = ("mission_pitch_deg",)
 #: Parameter ids of every row that is a test-adapter fact for some profile.
 FACT_ROW_IDS = frozenset(s.id for s in TABLE if any(e.value == "fact" for e in s.edit.values()))
+#: Every fact row id, each dotted prefix and each segment: a refusal never quotes one of these.
+FACT_ROW_PARTS = frozenset(
+    part for fid in FACT_ROW_IDS for i in range(1, fid.count(".") + 2)
+    for part in (".".join(fid.split(".")[:i]), fid.split(".")[i - 1]))
+HIDDEN = "(not shown)"
 
 
 class InventoryRefused(ValueError):
@@ -80,13 +89,24 @@ def implicit_inventory(unit_ids: Iterable[str], reported_models: Mapping[str, st
     for unit_id in unit_ids:
         _check_unit_id(unit_id)
         model = reported.get(unit_id, DEFAULT_MODEL)
+        if not isinstance(model, str) or model not in BUILTIN_MODELS:
+            model = DEFAULT_MODEL  # an edge-reported model the catalogue does not know is a Tello
         units.append({"unit_id": unit_id, "model": model, "available": True})
     return Inventory(0, {}, tuple(units), {"version": VERSION, "rev": 0, "models": {}, "units": units})
 
 
+def _shown(value: Any) -> str:
+    """``value`` quoted for a refusal, unless it is (part of) a fact row id, which is never named."""
+    if isinstance(value, str) and value in FACT_ROW_PARTS:
+        return HIDDEN
+    if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+        return repr(value)
+    return HIDDEN
+
+
 def _check_unit_id(unit_id: Any) -> None:
-    if not (is_identifier(unit_id) and _DRONE_ID.match(unit_id)):
-        raise InventoryRefused(f"unit id {unit_id!r} is not a valid drone id: letters, digits, '_' and '-', "
+    if not (isinstance(unit_id, str) and is_identifier(unit_id) and DRONE_ID.match(unit_id)):
+        raise InventoryRefused(f"unit id {_shown(unit_id)} is not a valid drone id: letters, digits, '_' and '-', "
                                "starting with a letter or digit, at most 64 characters.")
 
 
@@ -98,7 +118,8 @@ def _walk_secrets(value: Any, token: Optional[str], path: str = "") -> None:
     """INV-2: refuse a key named like a secret and any value equal to the edge token."""
     if isinstance(value, Mapping):
         for key, item in value.items():
-            where = f"{path}.{key}" if path else str(key)
+            name = str(key) if str(key) not in FACT_ROW_PARTS else HIDDEN
+            where = f"{path}.{name}" if path else name
             if _secret_key(str(key)):
                 raise InventoryRefused(f"`{where}` is named like a secret; the inventory never stores one.")
             _walk_secrets(item, token, where)
@@ -115,7 +136,7 @@ def _walk_facts(value: Any, profile: str, unit_id: str) -> None:
         for key, item in value.items():
             spec = spec_for(key) if isinstance(key, str) else None
             if spec is not None and (spec.is_fact(profile) or key in FACT_ROW_IDS):
-                raise InventoryRefused(f"unit {unit_id}: `{key}` is not a setting and cannot be stored.")
+                raise InventoryRefused(FACT_NOT_SETTABLE.format(detail=f"inventory.json unit {unit_id}"))
             _walk_facts(item, profile, unit_id)
     elif isinstance(value, (list, tuple)):
         for item in value:
@@ -126,41 +147,57 @@ def _finite_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
+def _unit_model(unit_id: str, model_id: Any, models: Mapping[str, CustomModel]):
+    if isinstance(model_id, str) and model_id in BUILTIN_MODELS:
+        return BUILTIN_MODELS[model_id], BUILTIN_MODELS[model_id].profile
+    if isinstance(model_id, str) and model_id in models:
+        return models[model_id].model, models[model_id].base.profile
+    raise InventoryRefused(f"unit {unit_id}: model {_shown(model_id)} is neither built in nor defined in `models`.")
+
+
+def _check_keys(unit_id: str, where: str, value: Any, allowed: Iterable[str]) -> None:
+    """A closed object: ``value`` is an object and holds no key outside ``allowed``."""
+    if not isinstance(value, Mapping):
+        raise InventoryRefused(f"unit {unit_id}: `{where}` must be an object.")
+    for key in value:
+        if key not in allowed:
+            raise InventoryRefused(f"unit {unit_id}: {_shown(key)} is not a field of `{where}`.")
+
+
 def _check_unit(record: Any, models: Mapping[str, CustomModel]) -> dict:
+    """One unit record against the closed schema of design detail 8.1; never stores a fact row."""
     if not isinstance(record, Mapping):
         raise InventoryRefused("a unit record must be an object.")
     unit_id = record.get("unit_id")
     _check_unit_id(unit_id)
-    model_id = record.get("model")
-    if model_id in BUILTIN_MODELS:
-        profile = BUILTIN_MODELS[model_id].profile
-    elif model_id in models:
-        profile = models[model_id].base.profile
-    else:
-        raise InventoryRefused(f"unit {unit_id}: model {model_id!r} is neither built in nor defined in `models`.")
+    model, profile = _unit_model(unit_id, record.get("model"), models)
     _walk_facts(record, profile, unit_id)
-    for name in record:
-        if name not in UNIT_FIELDS:
-            raise InventoryRefused(f"unit {unit_id}: `{name}` is not a field of a unit.")
+    _check_keys(unit_id, "unit", record, UNIT_FIELDS)
     for name in ("name", "serial"):
         if name in record and not isinstance(record[name], str):
             raise InventoryRefused(f"unit {unit_id}: `{name}` must be text.")
     if "available" in record and not isinstance(record["available"], bool):
         raise InventoryRefused(f"unit {unit_id}: `available` must be true or false.")
-    link = record.get("link")
-    if link is not None and (not isinstance(link, Mapping) or link.get("kind") not in LINK_KINDS):
-        raise InventoryRefused(f"unit {unit_id}: `link.kind` must be one of {', '.join(LINK_KINDS)}.")
-    for feature_id, wanted in (record.get("features") or {}).items():
-        feature = FEATURES.get(feature_id)
-        if feature is None:
-            raise InventoryRefused(f"unit {unit_id}: unknown feature {feature_id!r}.")
+    if "link" in record:
+        link = record["link"]
+        _check_keys(unit_id, "link", link, LINK_FIELDS)
+        if link.get("kind") not in LINK_KINDS:
+            raise InventoryRefused(f"unit {unit_id}: `link.kind` must be one of {', '.join(LINK_KINDS)}.")
+        for key, text in link.items():
+            if not isinstance(text, str):
+                raise InventoryRefused(f"unit {unit_id}: `link.{key}` must be text.")
+    features = record.get("features", {})
+    _check_keys(unit_id, "features", features, FEATURES)
+    for feature_id, wanted in features.items():
         if not isinstance(wanted, bool):
             raise InventoryRefused(f"unit {unit_id}: feature {feature_id} must be true or false.")
-        if feature.safety_switch and not wanted:
+        if FEATURES[feature_id].safety_switch and not wanted:
             raise InventoryRefused(f"unit {unit_id}: {feature_id} is a safety switch and cannot be stored off.")
-    for mount, entry in (record.get("mounts") or {}).items():
-        pitch = entry.get("mission_pitch_deg") if isinstance(entry, Mapping) else None
-        if not _finite_number(pitch):
+    mounts = record.get("mounts", {})
+    _check_keys(unit_id, "mounts", mounts, {c.mount for c in model.cameras})
+    for mount, entry in mounts.items():
+        _check_keys(unit_id, f"mounts.{mount}", entry, MOUNT_FIELDS)
+        if not _finite_number(entry.get("mission_pitch_deg")):
             raise InventoryRefused(f"unit {unit_id}: mount {mount!r} needs a numeric `mission_pitch_deg`.")
     return dict(record)
 
@@ -185,11 +222,14 @@ def parse_inventory(data: Any, *, edge_token: Optional[str] = None) -> Inventory
     models: dict[str, CustomModel] = {}
     for model_id, record in raw_models.items():
         if not isinstance(record, Mapping):
-            raise InventoryRefused(f"model {model_id!r} must be an object.")
+            raise InventoryRefused(f"model {_shown(model_id)} must be an object.")
         try:
             models[model_id] = custom_model(model_id, record)
         except ParamRefused as exc:
             raise InventoryRefused(str(exc)) from exc
+        except (AttributeError, TypeError, KeyError) as exc:  # a hand-edited field of the wrong type
+            raise InventoryRefused(f"model {_shown(model_id)} has a field of the wrong type; "
+                                   "see the inventory format.") from exc
     units, seen = [], set()
     for record in raw_units:
         unit = _check_unit(record, models)

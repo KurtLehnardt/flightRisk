@@ -6,7 +6,7 @@ import threading
 import pytest
 
 from flightrisk.hardware.inventory import (
-    STALE_REV, Inventory, InventoryRefused, InventoryStore, implicit_inventory, inventory_path, parse_inventory,
+    FACT_ROW_IDS, STALE_REV, Inventory, InventoryRefused, InventoryStore, implicit_inventory, inventory_path, parse_inventory,
 )
 
 HEX = {"extends": "generic_multirotor", "name": "Site hexacopter",
@@ -122,13 +122,13 @@ def test_fact_row_id_in_unit_is_refused():
 def test_safety_switch_off_and_unknown_feature_refused():
     with pytest.raises(InventoryRefused, match="safety switch"):
         parse_inventory(doc(units=[unit(features={"forward_obstacle_sensing": False})]))
-    with pytest.raises(InventoryRefused, match="unknown feature"):
+    with pytest.raises(InventoryRefused, match="not a field of `features`"):
         parse_inventory(doc(units=[unit(features={"nope": True})]))
 
 
 def test_unit_mount_needs_numeric_pitch():
     with pytest.raises(InventoryRefused, match="mission_pitch_deg"):
-        parse_inventory(doc(units=[unit(mounts={"gimbal": {"mission_pitch_deg": "down"}})]))
+        parse_inventory(doc(units=[unit(mounts={"front": {"mission_pitch_deg": "down"}})]))
 
 
 def test_inv7_stale_rev_refused(tmp_path):
@@ -161,3 +161,114 @@ def test_inv7_two_threads_same_rev_one_success(tmp_path):
         t.join(30)
     assert sorted(results) == sorted(["ok", STALE_REV])
     assert store.load().rev == 2
+
+
+FACT_VALUE = 7919
+
+
+def _nested(fact_id, value):
+    """``a.b.c`` as ``{"a": {"b": {"c": value}}}``."""
+    for part in reversed(fact_id.split(".")):
+        value = {part: value}
+    return value
+
+
+def _fact_placements(fact_id):
+    nested = _nested(fact_id, FACT_VALUE)
+    return [
+        {**unit(), fact_id: FACT_VALUE},
+        {**unit(), **nested},
+        unit(features={fact_id: FACT_VALUE}),
+        unit(link={"kind": "wifi_ap", fact_id: FACT_VALUE}),
+        unit(link={"kind": "wifi_ap", "params": nested}),
+        unit(link=[["kind", "wifi_ap"], [fact_id, FACT_VALUE]]),
+        unit(mounts={"front": {"mission_pitch_deg": 0, **nested}}),
+        unit(mounts={"front": {"mission_pitch_deg": 0, "p": [[fact_id, FACT_VALUE]]}}),
+        unit(mounts={"front": [["mission_pitch_deg", 0], [fact_id, FACT_VALUE]]}),
+        unit(mounts=[[fact_id, FACT_VALUE]]),
+        unit(mounts={fact_id: {"mission_pitch_deg": 0}}),
+    ]
+
+
+@pytest.mark.parametrize("fact_id", sorted(FACT_ROW_IDS))
+def test_fact_row_refusal_never_names_the_fact(fact_id):
+    """B1/B2: a fact row is refused at any depth, as a key or a list, and the text names neither it nor its value."""
+    for record in _fact_placements(fact_id):
+        with pytest.raises(InventoryRefused) as err:
+            parse_inventory(doc(units=[record]))
+        text = str(err.value)
+        assert fact_id not in text and str(FACT_VALUE) not in text, (record, text)
+
+
+def test_unit_fact_refusal_uses_the_a1_wording():
+    with pytest.raises(InventoryRefused) as err:
+        parse_inventory(doc(units=[{**unit(unit_id="d1"), "avoid.clear_votes": 3}]))
+    assert str(err.value) == ("A value in inventory.json unit d1 is not a setting and cannot be stored. "
+                              "Refusing to start.")
+
+
+def test_critic_nested_and_list_forms_are_refused():
+    """B2: the probed forms that were accepted and persisted before."""
+    for record in (unit(mounts={"front": {"mission_pitch_deg": 0, "avoid": {"clear_votes": 1}}}),
+                   unit(link={"kind": "wifi_ap", "params": {"avoid": {"clear_votes": 1}}}),
+                   unit(mounts={"front": {"mission_pitch_deg": 0, "p": [["avoid.clear_votes", 1]]}}),
+                   unit(mounts={"nonexistent": {"mission_pitch_deg": 0}})):
+        with pytest.raises(InventoryRefused):
+            parse_inventory(doc(units=[record]))
+
+
+def test_link_and_mount_keep_their_8_1_keys():
+    inv = parse_inventory(doc(units=[unit(link={"kind": "radio", "mavlink_address": "udp://:14550"},
+                                          mounts={"front": {"mission_pitch_deg": 0}})]))
+    assert inv.unit("drone-1")["link"]["kind"] == "radio"
+
+
+WRONG_TYPES = (None, True, 3, 2.5, "text", [], ["x"], {}, {"x": 1}, [["avoid.clear_votes", 1]])
+
+
+@pytest.mark.parametrize("field", ["unit_id", "name", "model", "link", "serial", "available", "features",
+                                   "mounts"])
+def test_every_unit_field_with_a_wrong_type_is_refused_not_crashed(field):
+    """M1: a hand-edited file with a wrong type is InventoryRefused, never AttributeError or TypeError."""
+    for bad in WRONG_TYPES:
+        try:
+            parse_inventory(doc(units=[unit(**{field: bad})]))
+        except InventoryRefused:
+            pass
+
+
+@pytest.mark.parametrize("field", ["version", "rev", "models", "units"])
+def test_every_top_field_with_a_wrong_type_is_refused_not_crashed(field):
+    for bad in WRONG_TYPES:
+        try:
+            parse_inventory(doc(**{field: bad}))
+        except InventoryRefused:
+            pass
+
+
+@pytest.mark.parametrize("field", ["extends", "name", "cameras", "param_bounds", "param_defaults", "sources",
+                                   "positioning"])
+def test_every_model_field_with_a_wrong_type_is_refused_not_crashed(field):
+    for bad in WRONG_TYPES:
+        try:
+            parse_inventory(doc(models={"site_hex": {**HEX, field: bad}}))
+        except InventoryRefused:
+            pass
+
+
+def test_critic_malformed_records_are_refused():
+    for record in (unit(features=["birdseye_search"]), unit(mounts=[{"front": 0}]), unit(model=["tello"])):
+        with pytest.raises(InventoryRefused):
+            parse_inventory(doc(units=[record]))
+
+
+def test_implicit_inventory_unknown_reported_model_is_tello():
+    inv = implicit_inventory(["d1"], {"d1": "made_up"})
+    assert inv.unit("d1")["model"] == "tello"
+
+
+def test_drone_id_rule_matches_the_launcher():
+    from flightrisk.hardware.ids import DRONE_ID
+    from flightrisk.launcher import settings
+    assert settings._DRONE_ID is DRONE_ID
+    assert DRONE_ID.pattern == r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
