@@ -10,4 +10,10 @@
 /flightrisk/fleet_protocol/constants.py @KurtLehnardt
 /tests/test_param_literals.py @KurtLehnardt
 /tests/test_param_change_control.py @KurtLehnardt
+/tests/param_adopters.py @KurtLehnardt
+/tests/tello_coupling_baseline.py @KurtLehnardt
+/tests/test_tello_coupling.py @KurtLehnardt
+/tests/fixtures/edge_start_baseline.json @KurtLehnardt
+/tests/test_edge_start_baseline.py @KurtLehnardt
+/tests/tools/make_edge_baseline.py @KurtLehnardt
 /docs/design/hardware-profiles/safety-value-changes.md @KurtLehnardt
