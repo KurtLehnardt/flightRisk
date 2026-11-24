@@ -63,6 +63,7 @@ from flightrisk.drone.udp_endpoints import (
 )
 from flightrisk.obs_log import Throttle, log_event, notice
 from flightrisk.params import table as _registry
+from flightrisk.params.defaults import model_default
 
 _log = logging.getLogger(__name__)
 
@@ -87,22 +88,11 @@ __all__ = [
 IP_UNICAST_IF = 31
 
 
-def _registry_default(param_id: str) -> Any:
-    """The registry default of ``param_id`` in the Tello profile column.
-
-    The three UDP ports are read-only SDK rows, so this module reads them
-    instead of keeping a copy.
-    """
-    for spec in _registry.TABLE:
-        if spec.id == param_id:
-            return spec.defaults[_registry.T]
-    raise KeyError(f"no registry row {param_id!r}")
-
 
 #: The Tello's UDP ports: commands and replies, state, and video.
-TELLO_CMD_PORT = _registry_default("tello_sdk.command_port")
-TELLO_STATE_PORT = _registry_default("tello_sdk.state_port")
-TELLO_VIDEO_PORT = _registry_default("tello_sdk.video_port")
+TELLO_CMD_PORT = model_default("tello_sdk.command_port", _registry.T)
+TELLO_STATE_PORT = model_default("tello_sdk.state_port", _registry.T)
+TELLO_VIDEO_PORT = model_default("tello_sdk.video_port", _registry.T)
 
 # Receiver threads wake this often to notice that their socket was closed.
 _RECV_POLL_S = 0.2

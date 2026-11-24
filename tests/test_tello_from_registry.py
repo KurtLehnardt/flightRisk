@@ -18,6 +18,7 @@ import pytest
 
 from flightrisk.drone import tello
 from flightrisk.params import table as registry
+from flightrisk.params.defaults import model_default
 
 PROFILE = registry.T
 
@@ -131,12 +132,12 @@ ALL_ROWS = [(name, param_id) for name, param_id, _ in MODULE_CONSTANTS] + [
 ]
 
 
-@pytest.mark.parametrize("name, param_id", ALL_ROWS)
-def test_changing_a_registry_value_changes_the_lookup(monkeypatch, name, param_id):
-    before = tello._registry_default(param_id)
+@pytest.mark.parametrize("param_id", [param_id for _, param_id in ALL_ROWS])
+def test_changing_a_registry_value_changes_the_lookup(monkeypatch, param_id):
+    before = model_default(param_id, PROFILE)
     new = before * 2 + 1
     _patched_table(monkeypatch, param_id, new)
-    assert tello._registry_default(param_id) == new != before
+    assert model_default(param_id, PROFILE) == new != before
 
 
 @pytest.mark.parametrize("param_id", ["move.min_cm", "move.max_cm"])
@@ -148,6 +149,19 @@ def test_changing_a_move_row_changes_new_capabilities(monkeypatch, param_id):
         assert getattr(tello.TelloController(host="192.0.2.1").capabilities, field) == 77
 
 
+def test_controller_max_altitude_is_row_8_in_whole_metres():
+    """Row 8 (envelope.max_altitude_cm) is FlightRisk's 10 m Tello ceiling; the controller declares it as an int."""
+    assert _same(_default("envelope.max_altitude_cm"), 1000)
+    with patch("flightrisk.drone.tello.Tello"):
+        assert _same(tello.TelloController(host="192.0.2.1").capabilities.max_altitude_m, 10)
+
+
+def test_changing_row_8_changes_new_controller_max_altitude(monkeypatch):
+    _patched_table(monkeypatch, "envelope.max_altitude_cm", 750)
+    with patch("flightrisk.drone.tello.Tello"):
+        assert _same(tello.TelloController(host="192.0.2.1").capabilities.max_altitude_m, 7)
+
+
 def test_unknown_row_is_an_error():
     with pytest.raises(KeyError):
-        tello._registry_default("no.such_row")
+        model_default("no.such_row", PROFILE)

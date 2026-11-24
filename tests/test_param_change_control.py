@@ -35,6 +35,8 @@ CHECKER_PATHS = (
     "docs/design/hardware-profiles/safety-value-changes.md",
     "flightrisk/params/legacy.py",
     "tests/test_params_legacy.py",
+    "flightrisk/params/defaults.py",
+    "tests/test_params_defaults.py",
 )
 # The A1 baseline entry. Editing it needs an edit here too, which CODEOWNERS makes owned (F6, F7).
 MIN_ENTRIES = 1
