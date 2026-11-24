@@ -139,7 +139,12 @@ def _type_checking_nodes(tree):
     for node in ast.walk(tree):
         if isinstance(node, ast.If) and (
             (isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING")
-            or (isinstance(node.test, ast.Attribute) and node.test.attr == "TYPE_CHECKING")
+            or (
+                isinstance(node.test, ast.Attribute)
+                and node.test.attr == "TYPE_CHECKING"
+                and isinstance(node.test.value, ast.Name)
+                and node.test.value.id == "typing"
+            )
         ):
             for child in node.body:
                 inside.update(ast.walk(child))
@@ -147,14 +152,16 @@ def _type_checking_nodes(tree):
 
 
 def test_the_allowed_leaf_imports_hold_no_registry_or_catalogue_value():
-    source = (ROOT / "flightrisk" / "hardware" / "ids.py").read_text(encoding="utf-8")
-    imported = {
-        alias.name
-        for node in ast.walk(ast.parse(source))
-        if isinstance(node, (ast.Import, ast.ImportFrom))
-        for alias in node.names
-    }
-    assert imported <= {"re"}, imported
+    """ids.py imports only re, and the hardware package's __init__ imports nothing, so importing the
+    id rule never loads the catalogue."""
+    tree = ast.parse((ROOT / "flightrisk" / "hardware" / "ids.py").read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            assert node.module == "re" and not node.level, ast.dump(node)
+        elif isinstance(node, ast.Import):
+            assert [a.name for a in node.names] == ["re"], ast.dump(node)
+    package = ast.parse((ROOT / "flightrisk" / "hardware" / "__init__.py").read_text(encoding="utf-8"))
+    assert not [n for n in ast.walk(package) if isinstance(n, (ast.Import, ast.ImportFrom))]
 
 
 def test_no_runtime_module_imports_params_or_hardware():
