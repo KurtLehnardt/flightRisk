@@ -15,6 +15,7 @@ from flightrisk.fleet_protocol.checks import (
     _short,
 )
 from flightrisk.fleet_protocol.constants import (
+    ASSIGN_LANES,
     _KNOWN_TYPES,
     _MAX_PROTO_FIELD,
     ACK,
@@ -36,7 +37,10 @@ from flightrisk.fleet_protocol.constants import (
 )
 from flightrisk.fleet_protocol.manual import MANUAL_COMMAND_TYPES, is_manual_reply
 from flightrisk.fleet_protocol.unit import (
+    NEW_NACK_REASONS,
     is_describe_unit_reply,
+    may_send,
+    required_accepts,
     validate_describe_unit,
     validate_describe_unit_reply,
 )
@@ -235,8 +239,19 @@ def parse_hello(msg: Any) -> GroundHello | EdgeHello:
     )
 
 
-def shape_for_peer(msg: Mapping[str, Any], peer_proto: int) -> dict[str, Any]:
+def shape_for_peer(
+    msg: Mapping[str, Any], peer_proto: int, *, peer_description: Any = None
+) -> dict[str, Any]:
     """The form of *msg* to send to a peer speaking *peer_proto*.
+
+    An ``assign_lanes`` that carries ``corridor``, ``landing``, ``no_entry``,
+    ``speed_cm_s`` or ``on_complete: "return_home"`` raises
+    ``ProtocolError`` unless *peer_description* (the edge's validated
+    ``describe_unit`` ack) lists every name the message needs in
+    ``accepts`` (``may_send``), and always raises for a v1 peer. An older
+    edge on a v2 link accepts the four optional keys and silently drops them,
+    so the send path enforces the gate itself rather than trusting each
+    sender to call ``may_send`` first.
 
     For a v2 peer the message is checked under v2 rules and returned as a
     copy. For a v1 peer:
@@ -277,7 +292,10 @@ def shape_for_peer(msg: Mapping[str, Any], peer_proto: int) -> dict[str, Any]:
         mtype in (ACK, NACK) and _is_member(msg.get("for"), CONFIG_COMMAND_TYPES)
     ) or mtype in MANUAL_COMMAND_TYPES or is_manual_reply(msg):
         # Configuration commands and their replies are the same on every
-        # version, so the cmd_id survives a v1 link.
+        # version, so the cmd_id survives a v1 link. A nack reason newer than
+        # the v1 rules (straight_line_home) never goes to a v1 peer.
+        if peer_proto < 2 and mtype == NACK and _is_member(msg.get("reason"), NEW_NACK_REASONS):
+            raise ProtocolError(f"nack reason {msg['reason']!r} cannot be sent to a protocol v1 peer")
         validate_message(msg, proto=peer_proto)
         return dict(msg)
     if mtype == DESCRIBE_UNIT or is_describe_unit_reply(msg):
@@ -290,6 +308,13 @@ def shape_for_peer(msg: Mapping[str, Any], peer_proto: int) -> dict[str, Any]:
         return dict(msg)
     if mtype not in _KNOWN_TYPES:
         raise ProtocolError(f"{_short(mtype)} is not a fleet protocol message")
+    if mtype == ASSIGN_LANES and required_accepts(msg) and (
+        peer_proto < 2 or not may_send(peer_description, msg)
+    ):
+        needed = sorted(required_accepts(msg))
+        raise ProtocolError(
+            f"'assign_lanes' needs the edge to accept {needed}; the peer has not proved it does"
+        )
     if peer_proto >= 2:
         validate_message(msg, proto=peer_proto)
         return dict(msg)

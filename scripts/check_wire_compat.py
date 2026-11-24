@@ -9,8 +9,10 @@ that mechanically:
 1. It extracts ``flightrisk/fleet_protocol`` at the base commit with
    ``git show`` into a temporary directory and imports it under another
    module name, so the base validators run beside today's code.
-2. It builds every message today's builders can produce (``corpus``),
-   including the A2 shapes, and shapes each one for a protocol v1 and a
+2. It builds a corpus of messages from today's builders (``corpus``): each
+   builder with the argument combinations listed there, the legacy
+   messages and every A2 shape and key. It is not every possible message.
+   It shapes each one for a protocol v1 and a
    protocol v2 peer with today's ``shape_for_peer``, exactly as a sender
    does. A message that today's code refuses to send on a link is skipped
    for that link.
@@ -32,11 +34,13 @@ Usage::
 
     venv/bin/python scripts/check_wire_compat.py --base dab72db
 
-It prints ``compatible: N messages, gated: M refused by base`` and exits 0,
+It prints ``compatible: N messages, gated: M refused by base, K accepted by
+base but stripped of meaning (now refused by the send path)`` and exits 0,
 or lists every incompatible message and exits 1. A gated message that the
-base accepts (it would ignore the new key without refusing it) is listed as
-a note; the gate is still what keeps it away from the older peer. The
-temporary directory is removed before the script exits.
+base accepts (an older edge would drop the new key without refusing it) is
+listed as a note, and today's ``shape_for_peer`` must refuse it for a peer
+that has not proved it accepts the key; if it does not, the message is
+incompatible. The temporary directory is removed before the script exits.
 
 ``tests/test_fleet_protocol_compat.py`` runs the same check as a test and
 adds the reverse direction (the base builders' messages under today's
@@ -96,7 +100,10 @@ class Report:
         return not self.incompatible
 
     def summary(self) -> str:
-        return f"compatible: {len(self.compatible)} messages, gated: {len(self.gated_refused)} refused by base"
+        return (
+            f"compatible: {len(self.compatible)} messages, gated: {len(self.gated_refused)} refused by base, "
+            f"{len(self.gated_accepted)} accepted by base but stripped of meaning (now refused by the send path)"
+        )
 
 
 # --- the base package ---------------------------------------------------------
@@ -199,6 +206,13 @@ def common_corpus(fp: ModuleType) -> list[Sample]:
     add("manual_takeoff", g2e, lambda: fp.make_manual_takeoff(drone_id="drone-1", cmd_id="c-mt", fence=fence))
     add("resume_search", g2e, lambda: fp.make_resume_search(drone_id="drone-1", cmd_id="c-rs", fence=fence))
     add("manual_land", g2e, lambda: fp.make_manual_land(cmd_id="c-ml"))
+    add("manual_move", g2e, lambda: fp.make_manual_move(
+        "forward", distance_cm=50, drone_id="drone-1", cmd_id="c-mm", fence=fence))
+    add("manual_move_rotate", g2e, lambda: fp.make_manual_move(
+        "cw", degrees=30, drone_id="drone-1", cmd_id="c-mm", fence=fence))
+    # The legacy messages pass by type only; these are the shapes the app sends.
+    add("set_target", g2e, lambda: {"type": "set_target", "drone_id": "drone-1", "label": "person"})
+    add("stream_video", g2e, lambda: {"type": "stream_video", "drone_id": "drone-1", "enabled": True})
 
     add("pong", e2g, lambda: fp.make_pong(1000.0, 1000.25, 1000.26))
     tel = ("drone-1", 82, 100, True, 10.0, -5.0, 90.0, 1, 4, 0.1, 1000.0)
@@ -215,6 +229,12 @@ def common_corpus(fp: ModuleType) -> list[Sample]:
         add(f"nack_assign_lanes_{reason}", e2g, lambda r=reason, g=geo: fp.make_nack_assign_lanes("drone-1", r, 8, **g))
     add("ack_hold", e2g, lambda: fp.make_ack("hold", "drone-1", "c-h", epoch_seen=7))
     add("ack_land", e2g, lambda: fp.make_ack("land", "drone-1", None))
+    add("ack_takeoff", e2g, lambda: fp.make_ack("takeoff", "drone-1", "c-to", epoch_seen=7))
+    add("ack_resume", e2g, lambda: fp.make_ack("resume", "drone-1", "c-r", epoch_seen=7))
+    add("ack_nudge", e2g, lambda: fp.make_ack("nudge", "drone-1", "c-n", epoch_seen=7))
+    add("ack_handover", e2g, lambda: fp.make_ack("handover", "drone-1", "c-ho", epoch_seen=7))
+    add("ack_emergency_land_all", e2g, lambda: fp.make_ack("emergency_land_all", "drone-1", None))
+    add("detections", e2g, lambda: {"type": "detections", "drone_id": "drone-1", "detections": []})
     for reason in sorted(fp.NACK_REASONS_V2):
         add(f"nack_takeoff_{reason}", e2g, lambda r=reason: fp.make_nack(
             "takeoff", "drone-1", r, "c-to", epoch_seen=7, detail="refused"))
@@ -315,6 +335,13 @@ def a2_corpus(fp: ModuleType = current) -> list[Sample]:
         {"type": "return_home", "drone_id": "drone-1", "cmd_id": "c-rh"}, "straight_line_home"))
     add("nack_straight_line_home", e2g, lambda: fp.make_nack(
         "takeoff", "drone-1", "straight_line_home", "c-to", detail="no route home"))
+    for for_type, extra in (("hold", {}), ("assign_lanes", {"lanes_total": 8})):
+        for reason in ("straight_line_home", fp.nack_reason_for_peer("straight_line_home", None)):
+            add(f"nack_{for_type}_{reason}", e2g, lambda f=for_type, r=reason, x=extra: fp.make_nack(
+                f, "drone-1", r, "c-x", detail="no route home", **x))
+    for reason in ("straight_line_home", fp.nack_reason_for_peer("straight_line_home", None)):
+        add(f"nack_manual_takeoff_{reason}", e2g, lambda r=reason: fp.make_manual_nack(
+            "manual_takeoff", "drone-1", "c-mt", r))
     return out
 
 
@@ -334,6 +361,11 @@ def fixture_samples() -> list[Sample]:
 
 
 # --- the gates ----------------------------------------------------------------
+
+
+#: The part of a ``describe_unit`` ack that ``may_send`` reads, listing every
+#: name, as a sender holds it once the edge has proved it accepts the new keys.
+PROOF: Mapping[str, Any] = {"accepts": sorted(current.ACCEPT_NAMES)}
 
 
 def _older_edge_hello() -> Mapping[str, Any]:
@@ -390,7 +422,9 @@ def _links(sample: Sample, report: Report) -> Iterator[tuple[int, str]]:
     sent = False
     for proto in PEER_PROTOS:
         try:
-            shaped = current.shape_for_peer(sample.msg, proto)
+            # A sender that has the edge's proof: the gated keys still reach
+            # the base validators, so the check shows whether a gate is needed.
+            shaped = current.shape_for_peer(sample.msg, proto, peer_description=PROOF)
             try:
                 text = current.encode(shaped, direction=sample.direction, proto=proto)
             except current.ProtocolError:
@@ -406,6 +440,15 @@ def _links(sample: Sample, report: Report) -> Iterator[tuple[int, str]]:
         report.unsendable.append(sample.name)
 
 
+def _send_path_refuses(msg: Mapping[str, Any], proto: int) -> bool:
+    """True when today's ``shape_for_peer`` refuses *msg* for a peer with no ``accepts`` proof."""
+    try:
+        current.shape_for_peer(msg, proto)
+    except current.ProtocolError:
+        return True
+    return False
+
+
 def check_forward(base: ModuleType, samples: list[Sample] | None = None) -> Report:
     """Today's messages, as sent to each peer version, under the base validators."""
     report = Report()
@@ -415,7 +458,14 @@ def check_forward(base: ModuleType, samples: list[Sample] | None = None) -> Repo
             gate = gate_of(json.loads(text))
             refusal = _accepts(base, text, sample.direction, proto)
             if gate is not None:
-                (report.gated_refused if refusal else report.gated_accepted).append(f"{label}: {gate}")
+                if refusal:
+                    report.gated_refused.append(f"{label}: {gate}")
+                elif _send_path_refuses(sample.msg, proto):
+                    report.gated_accepted.append(f"{label}: {gate}")
+                else:
+                    report.incompatible.append(
+                        f"{label}: accepted by base without its meaning, and the send path does not refuse it"
+                    )
                 continue
             if refusal is None and sample.direction == current.DIRECTION_GROUND_TO_EDGE and proto >= 2:
                 # An edge that requires the v2 form on every link must still
@@ -442,7 +492,7 @@ def main(argv: list[str] | None = None) -> int:
         for label in report.gated_refused:
             print(f"gated   {label}")
     for label in report.gated_accepted:
-        print(f"note: gated, accepted by base (the gate keeps it away): {label}")
+        print(f"note: gated, accepted by base, refused by the send path without accepts: {label}")
     for name in report.unsendable:
         print(f"INCOMPATIBLE {name}: today's code sends it on no link")
     for label in report.incompatible:

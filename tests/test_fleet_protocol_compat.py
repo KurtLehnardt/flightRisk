@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -30,6 +31,8 @@ from flightrisk.fleet_protocol.builders import TelemetryV2
 
 ROOT = Path(__file__).resolve().parent.parent
 BASE = "dab72db"
+#: Set to 1 to skip the cross-version proof when the base commit is missing.
+SKIP_ENV = "FLIGHTRISK_SKIP_WIRE_COMPAT"
 
 _spec = importlib.util.spec_from_file_location("check_wire_compat", ROOT / "scripts" / "check_wire_compat.py")
 compat = importlib.util.module_from_spec(_spec)
@@ -47,7 +50,13 @@ def _have_base() -> bool:
 @pytest.fixture(scope="module")
 def base():
     if not _have_base():
-        pytest.skip(f"the base commit {BASE} is not in this clone (a shallow checkout)")
+        message = (
+            f"the base commit {BASE} is not in this clone (a shallow checkout), so the compatibility proof "
+            f"cannot run; fetch the history with 'git fetch --unshallow' (or 'git fetch origin {BASE}')"
+        )
+        if os.environ.get(SKIP_ENV) == "1":
+            pytest.skip(f"{message}; skipped because {SKIP_ENV}=1")
+        pytest.fail(f"{message}, or set {SKIP_ENV}=1 to skip it on purpose")
     with compat.base_package(BASE) as module:
         yield module
 
@@ -65,7 +74,8 @@ def test_every_message_an_older_peer_can_receive_is_accepted_by_the_base(forward
     assert forward.unsendable == []
     assert len(forward.compatible) > 100
     assert forward.summary() == (
-        f"compatible: {len(forward.compatible)} messages, gated: {len(forward.gated_refused)} refused by base"
+        f"compatible: {len(forward.compatible)} messages, gated: {len(forward.gated_refused)} refused by base, "
+        f"{len(forward.gated_accepted)} accepted by base but stripped of meaning (now refused by the send path)"
     )
 
 
@@ -96,6 +106,13 @@ def test_no_message_from_before_a2_is_gated():
         if sample.name == "nack_takeoff_straight_line_home":
             continue
         assert compat.gate_of(sample.msg) is None, sample.name
+
+
+def test_the_corpus_covers_the_reviewed_shapes():
+    names = {sample.name for sample in compat.corpus()}
+    assert {"manual_move", "set_target", "stream_video", "detections", "ack_takeoff", "ack_resume",
+            "ack_nudge", "ack_handover", "ack_emergency_land_all", "nack_hold_straight_line_home",
+            "nack_assign_lanes_straight_line_home", "nack_manual_takeoff_straight_line_home"} <= names
 
 
 def test_the_older_ground_gets_invalid_instead_of_straight_line_home():
@@ -211,7 +228,8 @@ def test_unit_rev_and_rth_are_stripped_not_refused_for_a_v1_peer():
 def test_the_script_prints_the_summary_and_exits_zero(base, capsys):
     assert compat.main(["--base", BASE]) == 0
     last = capsys.readouterr().out.strip().splitlines()[-1]
-    assert last.startswith("compatible: ") and ", gated: " in last and last.endswith(" refused by base")
+    assert last.startswith("compatible: ") and ", gated: " in last
+    assert last.endswith(" accepted by base but stripped of meaning (now refused by the send path)")
 
 
 def test_the_script_leaves_no_base_module_behind(base):
@@ -220,3 +238,81 @@ def test_the_script_leaves_no_base_module_behind(base):
         directory = Path(module.__file__).parent
     assert name not in sys.modules
     assert not directory.exists()
+
+
+# --- the send path enforces the accepts gate ---------------------------------
+
+
+_GATED_KEYS = {
+    "corridor": {"corridor": [{"x_cm": 0, "y_cm": 0}, {"x_cm": 300, "y_cm": 0}, {"x_cm": 300, "y_cm": 300}]},
+    "landing": {"landing": {"area_id": "pad-1", "place": 0, "interval_s": 5}},
+    "no_entry": {"no_entry": []},
+    "speed_cm_s": {"speed_cm_s": 150},
+}
+
+
+def _plan(**extra):
+    return fp.make_assign_lanes(
+        "drone-1", 100, [{"direction": "forward", "distance_cm": 200}], {"x_cm": 0, "y_cm": 0, "w_cm": 400, "h_cm": 400},
+        fence=fp.Fence(7, "ground-a"), cmd_id="c-al", plan_id="p-1", plan_seq=3, **extra)
+
+
+def _proof(*names):
+    return compat._describe_unit_ack(fp, list(names))
+
+
+@pytest.mark.parametrize("key", sorted(_GATED_KEYS))
+def test_the_send_path_refuses_a_gated_key_for_a_v2_peer_without_proof(key):
+    msg = _plan(**_GATED_KEYS[key])
+    with pytest.raises(fp.ProtocolError, match="has not proved"):
+        fp.shape_for_peer(msg, 2)
+    with pytest.raises(fp.ProtocolError, match="has not proved"):
+        fp.shape_for_peer(msg, 2, peer_description=_proof("return_home"))
+
+
+@pytest.mark.parametrize("key", sorted(_GATED_KEYS))
+def test_the_send_path_refuses_a_gated_key_for_a_v1_peer_even_with_proof(key):
+    msg = _plan(**_GATED_KEYS[key])
+    for description in (None, _proof(f"assign_lanes.{key}")):
+        with pytest.raises(fp.ProtocolError):
+            fp.shape_for_peer(msg, 1, peer_description=description)
+
+
+@pytest.mark.parametrize("key", sorted(_GATED_KEYS))
+def test_the_send_path_allows_a_gated_key_with_proof(key):
+    msg = _plan(**_GATED_KEYS[key])
+    assert fp.shape_for_peer(msg, 2, peer_description=_proof(f"assign_lanes.{key}")) == msg
+
+
+def test_the_send_path_needs_proof_for_every_key_the_message_carries():
+    msg = _plan(**_GATED_KEYS["corridor"], **_GATED_KEYS["speed_cm_s"])
+    with pytest.raises(fp.ProtocolError):
+        fp.shape_for_peer(msg, 2, peer_description=_proof("assign_lanes.corridor"))
+    proof = _proof("assign_lanes.corridor", "assign_lanes.speed_cm_s")
+    assert fp.shape_for_peer(msg, 2, peer_description=proof) == msg
+
+
+def test_the_send_path_refuses_on_complete_return_home_without_proof():
+    msg = _plan(on_complete="return_home", hover_timeout_s=5)
+    with pytest.raises(fp.ProtocolError):
+        fp.shape_for_peer(msg, 2)
+    proof = _proof("assign_lanes.on_complete.return_home")
+    assert fp.shape_for_peer(msg, 2, peer_description=proof) == msg
+
+
+@pytest.mark.parametrize("sample", [s for s in compat.common_corpus(fp) if s.msg.get("type") == "assign_lanes"],
+                         ids=lambda s: s.name)
+@pytest.mark.parametrize("proto", [1, 2])
+def test_an_assign_lanes_without_the_new_keys_is_byte_identical(sample, proto, base):
+    """Today's plans are unchanged by the gate: same bytes as the base send path, with or without proof."""
+    try:
+        want = json.dumps(base.shape_for_peer(sample.msg, proto), separators=(",", ":"))
+    except base.ProtocolError:
+        want = None  # the base refuses it for this link (an unfenced plan on v2), so must today
+    for description in (None, _proof(*sorted(fp.ACCEPT_NAMES - {"escort_setpoint"}))):
+        if want is None:
+            with pytest.raises(fp.ProtocolError):
+                fp.shape_for_peer(sample.msg, proto, peer_description=description)
+            continue
+        got = fp.shape_for_peer(sample.msg, proto, peer_description=description)
+        assert json.dumps(got, separators=(",", ":")) == want

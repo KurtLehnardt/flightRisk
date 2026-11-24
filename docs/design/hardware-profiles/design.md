@@ -957,6 +957,13 @@ advertises them. Shapes are defined once in A2.
 | `ap_link_loss` | in `describe_unit` and inside the `rth` telemetry object | the autopilot's link-loss action, `return`, `land` or `unknown` (B-3) | ignored by older grounds; `unknown` counts as return |
 | nack reason `straight_line_home` | `NACK_REASONS_V2` | an assignment whose straight line home leaves its zone and corridor while the action cannot be land (B-3) | v2 only |
 
+Note (correction from the A2 review): "optional keys" in the `corridor`, `landing`, `no_entry`,
+`speed_cm_s` row does not make them safe for an older edge. An edge from before A2 accepts them on a
+v2 link and silently drops them, so they are gated like `on_complete: "return_home"`, and the gate is
+enforced on the send path: `shape_for_peer` refuses such an `assign_lanes` unless the edge's
+`describe_unit` reply lists the keys in `accepts` (`docs/fleet-protocol-v2.md`, the gates for the
+ground and the edge).
+
 Every motion command and `return_home` is refused with `landing` while the drone lands (10.2). A plan is
 never refused because the drone is `landed` (N-19). Fleets stay within `MAX_ROSTER = 8`
 (`fleet_protocol/constants.py:310`, `fleet_plan_check.py:259`): every SITL scenario uses at most eight

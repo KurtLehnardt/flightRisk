@@ -599,14 +599,17 @@ def test_catalogue_carries_no_registry_fact_row_id_or_fact_value():
     }
     forbidden_parts = ("threshold", "tuning", "settle", "tello_param")
 
-    def walk(value):
+    def walk(value, parent=""):
+        # Every (key, value) pair, and every item of a list paired with the
+        # list's own key, so plain values inside lists are checked too.
         if isinstance(value, dict):
             for key, child in value.items():
                 yield key, child
-                yield from walk(child)
+                yield from walk(child, key)
         elif isinstance(value, list):
             for child in value:
-                yield from walk(child)
+                yield parent, child
+                yield from walk(child, parent)
 
     camera_numbers = {"stream_w_px", "stream_h_px", "hfov_deg", "fps"}
     for key, child in walk(_catalogue_payload()):

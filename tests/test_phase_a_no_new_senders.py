@@ -8,14 +8,24 @@ live in ``flightrisk/fleet_protocol/`` (and the start-time report in
 ``flightrisk/params/`` and ``flightrisk/hardware/``), and nothing else uses
 them yet: A3 and C1 are the first senders.
 
-The guard is an AST scan of every other module under ``flightrisk/`` for:
+The guard is an AST scan of every module under ``flightrisk/`` except
+``fleet_protocol/`` (``params/`` and ``hardware/`` included) for:
 
 * a reference to a new builder, gate helper or type constant
   (``NEW_NAMES``), by name, attribute or import;
-* a string literal equal to a new type, key or reason (``NEW_STRINGS``),
-  which covers ``on_complete="return_home"`` and ``msg["rth"]``;
-* a keyword argument that adds a new key (``NEW_KEYWORDS`` anywhere, and the
-  ``assign_lanes`` return keys on ``make_assign_lanes``).
+* a string literal, or a constant string built with ``+``, ``"sep".join``
+  or an f-string, equal to a new type, key, reason or builder name
+  (``NEW_STRINGS``), which covers ``on_complete="return_home"``,
+  ``msg["rth"]`` and ``getattr(fp, "make_set_speed")``;
+* a keyword argument that adds a new key (``NEW_KEYWORDS`` anywhere);
+* the new ``assign_lanes`` keys as a dict key, a subscript key or a keyword
+  argument on any call, which covers an aliased builder,
+  ``functools.partial`` and ``**{...}``.
+
+``NOT_SENDERS`` lists, with reasons, the uses that send nothing. A static
+scan cannot see a name or key built from non-constant data (a variable,
+``chr``, a config file, ``dict(zip(...))``, ``setattr``, ``eval``); code
+review covers those.
 
 ``ALLOWED`` is the explicit allowlist, empty in A2. A later phase that
 starts sending one of these adds ``"path/relative/to/flightrisk.py":
@@ -38,7 +48,7 @@ from flightrisk import fleet_protocol as fp
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGE = ROOT / "flightrisk"
 #: Packages that define the A2 shapes; everything else is runtime code.
-DEFINING_PACKAGES = ("fleet_protocol", "params", "hardware")
+DEFINING_PACKAGES = ("fleet_protocol",)
 
 #: Builders, gate helpers and constants that only a sender of an A2 shape needs.
 #: ``QUERY_TYPES`` is left out on purpose: ``obs_comm.py`` uses it to classify
@@ -61,12 +71,34 @@ NEW_STRINGS = frozenset({
 }) | frozenset(fp.ACCEPT_NAMES)
 #: Keyword arguments that add a new key to any builder.
 NEW_KEYWORDS = frozenset({"unit_rev", "rth", "ap_link_loss", "accepts"})
-#: Keyword arguments that add a new key to ``make_assign_lanes``.
-NEW_ASSIGN_LANES_KEYWORDS = frozenset({"corridor", "landing", "no_entry", "speed_cm_s"})
+#: The new ``assign_lanes`` keys. They are flagged wherever they appear as a
+#: dict key, a subscript key or a keyword argument, whatever the call, so an
+#: aliased builder, ``functools.partial`` or ``**{...}`` is caught too.
+NEW_ASSIGN_LANES_KEYS = frozenset({"corridor", "landing", "no_entry", "speed_cm_s"})
+#: Calls whose own ``speed_cm_s`` keyword predates A2 and builds no message:
+#: the simulated drone's speed (``edge_device.py``).
+UNRELATED_CALLEES = frozenset({"FakeTelloController"})
+#: The builder names, also flagged as string literals so ``getattr(fp, "make_set_speed")`` is caught.
+NEW_STRINGS = NEW_STRINGS | frozenset(name for name in NEW_NAMES if name.startswith("make_"))
 
 #: The allowlist: {path relative to flightrisk/: {token, ...}}. Empty in A2;
 #: A3 and C1 add their senders here.
 ALLOWED: dict[str, frozenset[str]] = {}
+
+#: Uses that send nothing, each with its reason. Kept apart from ``ALLOWED``,
+#: which lists senders and stays empty in A2.
+NOT_SENDERS: dict[str, frozenset[str]] = {
+    # Maps an edge refusal to the older nack reason "landing" (a value, not
+    # the assign_lanes key), from before A2.
+    "drone/lane_executor.py": frozenset({"landing:"}),
+    # A flight-safety log event's own ``landing`` field (the orphan landing
+    # that was cleared), from before A2; it builds no protocol message.
+    "dashboard/manual_control.py": frozenset({"landing="}),
+    # The start-time report builds the describe_unit reply body and its
+    # unit_rev (data, not a send); the edge hello and the reply are built
+    # only by fleet_protocol builders, which the scan of senders covers.
+    "params/report.py": frozenset({"unit_rev", "unit_rev="}),
+}
 
 
 def _call_name(func: ast.expr) -> str | None:
@@ -77,10 +109,44 @@ def _call_name(func: ast.expr) -> str | None:
     return None
 
 
+def _folded(node: ast.expr) -> str | None:
+    """The string a constant expression builds (``+``, ``"sep".join(...)``, an f-string of constants), else None."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _folded(node.left), _folded(node.right)
+        return None if left is None or right is None else left + right
+    if isinstance(node, ast.JoinedStr):
+        parts = [_folded(value) for value in node.values]
+        return None if None in parts else "".join(parts)
+    if (
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "join"
+        and len(node.args) == 1 and isinstance(node.args[0], (ast.Tuple, ast.List))
+    ):
+        sep = _folded(node.func.value)
+        parts = [_folded(item) for item in node.args[0].elts]
+        return None if sep is None or None in parts else sep.join(parts)
+    return None
+
+
+def _key(node: ast.expr | None) -> str | None:
+    return None if node is None else _folded(node)
+
+
 def find_senders(source: str, filename: str = "<source>") -> Iterator[tuple[int, str]]:
     """Every ``(line, token)`` in *source* that uses an A2 wire shape."""
     tree = ast.parse(source, filename=filename)
     for node in ast.walk(tree):
+        if isinstance(node, (ast.BinOp, ast.JoinedStr, ast.Call)):
+            built = _folded(node)
+            if built is not None and built in NEW_STRINGS | NEW_ASSIGN_LANES_KEYS:
+                yield node.lineno, built
+        if isinstance(node, ast.Dict):
+            for key in node.keys:
+                if _key(key) in NEW_ASSIGN_LANES_KEYS:
+                    yield node.lineno, f"{_key(key)}:"
+        elif isinstance(node, ast.Subscript) and _key(node.slice) in NEW_ASSIGN_LANES_KEYS:
+            yield node.lineno, f"[{_key(node.slice)}]"
         if isinstance(node, ast.Name) and node.id in NEW_NAMES:
             yield node.lineno, node.id
         elif isinstance(node, ast.Attribute) and node.attr in NEW_NAMES:
@@ -92,10 +158,10 @@ def find_senders(source: str, filename: str = "<source>") -> Iterator[tuple[int,
                     yield node.lineno, alias.name
         elif isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in NEW_STRINGS:
             yield node.lineno, node.value
-        elif isinstance(node, ast.Call):
-            assign_lanes = _call_name(node.func) == "make_assign_lanes"
+        if isinstance(node, ast.Call):
+            unrelated = _call_name(node.func) in UNRELATED_CALLEES
             for keyword in node.keywords:
-                if keyword.arg in NEW_KEYWORDS or (assign_lanes and keyword.arg in NEW_ASSIGN_LANES_KEYWORDS):
+                if keyword.arg in NEW_KEYWORDS or (not unrelated and keyword.arg in NEW_ASSIGN_LANES_KEYS):
                     yield node.lineno, f"{keyword.arg}="
 
 
@@ -116,13 +182,13 @@ def _scan() -> dict[str, set[str]]:
     return found
 
 
+def _permitted(rel: str) -> frozenset[str]:
+    return ALLOWED.get(rel, frozenset()) | NOT_SENDERS.get(rel, frozenset())
+
+
 def test_no_runtime_module_uses_an_a2_wire_shape():
     found = _scan()
-    violations = {
-        rel: sorted(tokens - ALLOWED.get(rel, frozenset()))
-        for rel, tokens in found.items()
-        if tokens - ALLOWED.get(rel, frozenset())
-    }
+    violations = {rel: sorted(tokens - _permitted(rel)) for rel, tokens in found.items() if tokens - _permitted(rel)}
     assert violations == {}, (
         "runtime code uses an A2 wire shape (CMP-1); add the sender to ALLOWED only in the phase that ships it"
     )
@@ -130,7 +196,7 @@ def test_no_runtime_module_uses_an_a2_wire_shape():
 
 def test_every_allowlist_entry_is_still_used():
     found = _scan()
-    stale = {rel: sorted(tokens - found.get(rel, set())) for rel, tokens in ALLOWED.items()
+    stale = {rel: sorted(tokens - found.get(rel, set())) for rel, tokens in {**ALLOWED, **NOT_SENDERS}.items()
              if tokens - found.get(rel, set())}
     assert stale == {}
 
@@ -141,7 +207,8 @@ def test_the_allowlist_is_empty_in_phase_a2():
 
 def test_the_scan_covers_the_runtime_modules():
     rels = {path.relative_to(PACKAGE).as_posix() for path in _runtime_modules()}
-    assert {"edge_device.py", "transport.py", "fleet_authority.py", "fleet_ground_link.py"} <= rels
+    assert {"edge_device.py", "transport.py", "fleet_authority.py", "fleet_ground_link.py",
+            "params/report.py", "hardware/catalogue.py"} <= rels
     assert not any(rel.split("/")[0] in DEFINING_PACKAGES for rel in rels)
 
 
@@ -158,6 +225,20 @@ def test_the_scan_covers_the_runtime_modules():
     ("msg['rth'] = r", "rth"),
     ("send({'type': 'escort_setpoint'})", "escort_setpoint"),
     ("reason = 'straight_line_home'", "straight_line_home"),
+    # The forms a first scan missed (review of PR #228).
+    ("getattr(fp, 'make_' + 'return' + '_home')", "make_return_home"),
+    ("getattr(fp, 'make_set_speed')", "make_set_speed"),
+    ("getattr(fp, f'make_set_speed')", "make_set_speed"),
+    ("t = '_'.join(('return', 'home'))", "return_home"),
+    ("mal = fp.make_assign_lanes\nmal(d, 1, l, z, speed_cm_s=150)", "speed_cm_s="),
+    ("fp.make_assign_lanes(d, 1, l, z, **{'speed_cm_s': 150, 'landing': {}})", "speed_cm_s:"),
+    ("fp.make_assign_lanes(d, 1, l, z, **{'speed_cm_s': 150, 'landing': {}})", "landing:"),
+    ("functools.partial(fp.make_assign_lanes, no_entry=[])", "no_entry="),
+    ("msg['speed_cm_s'] = 150", "[speed_cm_s]"),
+    ("msg['landing'] = spot", "[landing]"),
+    ("msg.update(landing=spot)", "landing="),
+    ("msg['speed_' + 'cm_s'] = 150", "[speed_cm_s]"),
+    ("plan = dict(corridor=c)", "corridor="),
 ])
 def test_the_scanner_finds_each_kind_of_sender(source, token):
     assert token in {found for _, found in find_senders(source)}
@@ -166,6 +247,8 @@ def test_the_scanner_finds_each_kind_of_sender(source, token):
 @pytest.mark.parametrize("source", [
     "self._links.may_send(ws, msg)",
     "FakeTelloController(name=n, speed_cm_s=10)",
+    "reason = 'landing'",
+    "if refusal == 'landing': pass",
     "def f():\n    '''Return home when the battery is low.'''",
     "fp.make_assign_lanes(d, 1, l, z, on_complete='hover')",
 ])
