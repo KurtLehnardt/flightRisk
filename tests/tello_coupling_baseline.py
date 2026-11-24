@@ -202,9 +202,7 @@ COUPLING_BASELINE: dict[str, dict[tuple[str, str, str, str], int]] = {
         ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_TEMP_REFUSE_C'): 2,
         ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_TEMP_WARN_C'): 2,
         ('flightrisk/params/table.py', '', 'model_default', 'tello'): 1,
-    },
-    "A2": {
-        # flightrisk/hardware/inventory.py
+        # flightrisk/hardware/inventory.py: implicit inventory default required by INV-4; no phase shrinks it
         ('flightrisk/hardware/inventory.py', '', 'model_default', 'tello'): 1,
     },
 }
