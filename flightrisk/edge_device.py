@@ -114,7 +114,7 @@ import sys
 import threading
 import time
 from collections import deque
-from typing import Any, Callable, Iterable, TextIO
+from typing import Any, Callable, Iterable, Sequence, TextIO
 
 from flightrisk import fleet_protocol as fp
 from flightrisk.drone.flight_guards import (
@@ -2500,15 +2500,21 @@ def _run_flight_edge(
     log: StructuredLogger,
     stop_event: threading.Event | None = None,
     envelope: SafetyEnvelope | None = None,
+    argv: Sequence[str] | None = None,
+    parser: argparse.ArgumentParser | None = None,
 ) -> None:
     """Run a flying edge: drone, lane executor, safety controls and the edge loop.
 
-    Setting ``stop_event`` ends the edge loop; the drone lands first.
+    Setting ``stop_event`` ends the edge loop; the drone lands first. ``argv`` and ``parser`` are the
+    command line and parser ``main`` read, which give the resolution its command-line layer.
     """
     if envelope is None:
         envelope = _startup_envelope(args)
     temp_limits = _temp_limits(log, getattr(args, "drone_id", None))
     guards = _flight_guards(os.environ)
+    # After today's own start checks, so they keep refusing with today's messages, and before the
+    # drone is built or contacted (EDGE-1).
+    _resolve_edge_start(args, log, argv=argv, parser=parser)
     kind = _drone_kind(args)
     holder: dict[str, Any] = {}
     if kind == "mavlink":
@@ -2758,6 +2764,48 @@ def _resolve_model(args: argparse.Namespace, parser: argparse.ArgumentParser, en
         parser.error(str(exc))
 
 
+def _resolve_edge_start(
+    args: argparse.Namespace,
+    log: StructuredLogger,
+    *,
+    argv: Sequence[str] | None = None,
+    parser: argparse.ArgumentParser | None = None,
+    environ: Any = None,
+) -> None:
+    """Resolve a flying edge's unit before it contacts its drone (EDGE-1); ``SystemExit`` on a refusal.
+
+    Keeps the result in ``args.edge_resolution``, which the start log and the consumers rewired from
+    A3.3 on read; nothing reads it yet. Runs once: a second call returns at once. An edge that flies
+    nothing resolves nothing.
+    """
+    from flightrisk.edge_resolution import EdgeStartRefused, ModelRefused, resolve_edge, resolve_model
+
+    if getattr(args, "edge_resolution", None) is not None:
+        return
+    args.edge_resolution = None
+    drone = _drone_kind(args)
+    if drone is None:
+        return
+    environ = os.environ if environ is None else environ
+    drone_id = getattr(args, "drone_id", None)
+    try:
+        choice = getattr(args, "model_choice", None)
+        if choice is None:
+            frame_path = "drone_video" if getattr(args, "source", None) in _FLIGHT_SOURCES else "capture_source"
+            choice = resolve_model(
+                drone=drone, drone_id=drone_id, frame_path=frame_path, model_flag=getattr(args, "model", None),
+                airframe_flag=getattr(args, "airframe", None), environ=environ,
+            )
+        args.edge_resolution = resolve_edge(
+            choice=choice, drone=drone, drone_id=drone_id, source=getattr(args, "source", None),
+            environ=environ, argv=() if argv is None else argv, parser=parser,
+        )
+    except (EdgeStartRefused, ModelRefused) as exc:
+        text = str(exc) if isinstance(exc, EdgeStartRefused) else f"{exc} Refusing to start."
+        log.error("edge_start_refused", drone_id=drone_id, reason=text)
+        raise SystemExit(f"edge_device: {text}") from None
+
+
 def _init_edge_telemetry(log: StructuredLogger) -> bool:
     """Export this edge's logs and spans over OTLP, like the dashboard does.
 
@@ -2826,7 +2874,9 @@ def main(argv: list[str] | None = None) -> None:
         # Checked before anything connects, so a slot above the ceiling
         # limit stops the edge at once with the reason.
         envelope = _startup_envelope(args)
-        _run_flight_edge(args, log, envelope=envelope)
+        # ``_run_flight_edge`` resolves the unit with this command line before it builds the drone.
+        _run_flight_edge(args, log, envelope=envelope, argv=sys.argv[1:] if argv is None else list(argv),
+                         parser=parser)
         return
 
     source = _build_source(args, parser, log)

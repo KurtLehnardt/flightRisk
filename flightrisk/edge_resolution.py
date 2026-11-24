@@ -25,8 +25,15 @@ EDGE-4, RES-11): the profile (the chosen model), the params file
 inventory unit's feature switches (``FLIGHTRISK_INVENTORY_FILE``), the
 launcher layer (``FLIGHTRISK_LAUNCHER_PARAMS``, with its ``confirmed``
 object), a copy of the environment and the flight flags of the command line,
-plus the ``--confirm-less-safe`` confirmations. It only builds them: the edge
-does not resolve them yet, so building them changes no start.
+plus the ``--confirm-less-safe`` confirmations.
+
+``resolve_edge`` resolves them at start, before the edge contacts its drone
+(EDGE-1): it calls ``resolve_unit`` (``simulated`` only for the fake adapter,
+CAP-6), runs the static feature gates (``resolve_features``, FEA-7 static
+part, FEA-10) and builds the start report (``build_report``). Any refusal
+raises ``EdgeStartRefused``, whose text is the operator's exit message. The
+resolved values are kept in ``EdgeResolution``; nothing reads them yet, so a
+start that is not refused flies exactly as before.
 """
 
 from __future__ import annotations
@@ -475,3 +482,168 @@ def _ordered(layers: Mapping[Any, Any]) -> list:
     from flightrisk.params.resolver import CALLER_LAYERS
 
     return [s for s in CALLER_LAYERS if s in layers]
+
+
+#: The drone kind whose adapter is simulated (CAP-6, fake part). A real Tello and every MAVLink
+#: unit count as production until B1 verifies a SITL board identity.
+SIMULATED_DRONES = frozenset({"fake"})
+#: Today's ranges for the environment and flag layers at the edge. Every name today's code reads is
+#: open, because today's own readers still run at start and keep refusing exactly what they refuse
+#: today (resolver decision 1). A name today's code does not read is checked against its target bound.
+#: Runtime code cannot read the golden file under ``tests/``, which holds the recorded ranges.
+EDGE_TODAY_ACCEPTS: Mapping[str, Mapping[str, Any]] = MappingProxyType({})
+_REFUSING = "Refusing to start."
+_SENSING_MODE = "sensing.mode"
+_SENSING_REQUIRED = "required"
+
+
+class EdgeStartRefused(ValueError):
+    """The edge must not start; ``str()`` is the operator's exit message."""
+
+
+@dataclass(frozen=True)
+class EdgeResolution:
+    """What the edge resolved at start (EDGE-1): the layers, the values, the feature gates and the report.
+
+    ``values`` is the result of ``resolve_unit``; ``gates`` is that of ``resolve_features``; ``report``
+    is the ``UnitReport`` with its ``unit_rev``. The start log (S7) and the consumers rewired from A3.3
+    on read them from here.
+    """
+
+    layers: EdgeLayers
+    simulated: bool
+    values: Mapping[str, Any]
+    gates: Mapping[str, Mapping[str, Any]]
+    report: Any
+
+
+def _refusing(text: str) -> str:
+    text = text.strip()
+    return text if text.endswith(_REFUSING) else f"{text} {_REFUSING}"
+
+
+def check_launcher_unit(layers: EdgeLayers) -> None:
+    """Refuse a launcher layer written for another unit, so its values never apply to this one."""
+    launcher = layers.launcher
+    if launcher is None or launcher.unit_id is None or launcher.unit_id == layers.unit_id:
+        return
+    raise EdgeStartRefused(
+        f"{LAUNCHER_PARAMS_ENV_VAR} is for unit {launcher.unit_id}, but this edge is --drone-id "
+        f"{layers.unit_id}. Start the edge from the launcher again for {layers.unit_id}, or unset "
+        f"{LAUNCHER_PARAMS_ENV_VAR}. {_REFUSING}"
+    )
+
+
+def requested_features(layers: EdgeLayers) -> tuple[dict[str, bool], dict[str, str]]:
+    """The feature switches set for this unit and where each came from; the launcher wins over the inventory."""
+    requested: dict[str, bool] = {}
+    sources: dict[str, str] = {}
+    for where, switches in ((SOURCE_INVENTORY, layers.features),
+                            (SOURCE_LAUNCHER, layers.launcher.features if layers.launcher else {})):
+        for feature_id, on in switches.items():
+            requested[feature_id] = bool(on)
+            sources[feature_id] = where
+    return requested, sources
+
+
+def _capability(feature_id: str) -> str:
+    return feature_id.replace("_", " ")
+
+
+def static_feature_gates(layers: EdgeLayers, values: Mapping[str, Any], *, source: Optional[str]) -> dict:
+    """The unit's feature gates at start; raises ``EdgeStartRefused`` when a gate refuses the start.
+
+    A feature switched on that is statically unavailable refuses the start; on a MAVLink unit forward
+    obstacle sensing is available only with ``--source camera`` or ``url`` and a level mount (FEA-10).
+    Required obstacle sensing refuses the start when forward obstacle sensing is not on and the unit
+    can never declare onboard avoidance either (FEA-7, static part); a unit that can declare it is
+    checked at takeoff instead.
+    """
+    from flightrisk.hardware.features import (
+        CONFIRM_OFF_REASON,
+        FORWARD_OBSTACLE_SENSING,
+        ONBOARD_AVOIDANCE,
+        FeatureRefused,
+        resolve_features,
+    )
+    from flightrisk.params.messages import render_unavailable_capability
+
+    model = layers.choice.model
+    requested, sources = requested_features(layers)
+    try:
+        gates = resolve_features(model, requested, sources, source=source)
+    except FeatureRefused as exc:
+        if exc.reason == CONFIRM_OFF_REASON.format(feature=exc.feature):
+            raise EdgeStartRefused(_refusing(
+                f"{layers.unit_id}: {exc.reason}, which a feature switch from {sources.get(exc.feature)} "
+                "cannot give."
+            )) from None
+        raise EdgeStartRefused(_refusing(render_unavailable_capability(
+            layers.unit_id, _capability(exc.feature), model.name, f"does not have it here ({exc.reason})"
+        ))) from None
+    mode = values.get(_SENSING_MODE)
+    if (mode is not None and mode.value == _SENSING_REQUIRED and not gates[FORWARD_OBSTACLE_SENSING]["on"]
+            and not gates[ONBOARD_AVOIDANCE]["ok"]):
+        raise EdgeStartRefused(_refusing(render_unavailable_capability(
+            layers.unit_id, "required obstacle sensing", model.name,
+            "has neither forward obstacle sensing here "
+            f"({gates[FORWARD_OBSTACLE_SENSING]['why'] or 'switched off'}) nor onboard avoidance",
+        )))
+    return gates
+
+
+def _camera_roles(model: DroneModel) -> dict[str, str]:
+    from flightrisk.hardware.features import default_level_tolerance_deg, derive_role
+
+    tolerance = default_level_tolerance_deg(model.profile)
+    roles = {cam.id: derive_role(cam, None, tolerance) for cam in model.cameras}
+    return {cam_id: role for cam_id, role in roles.items() if role is not None}
+
+
+def resolve_edge(
+    *,
+    choice: ModelChoice,
+    drone: str,
+    drone_id: str,
+    source: Optional[str],
+    environ: Mapping[str, str],
+    argv: Iterable[str] = (),
+    parser: Any = None,
+    load_inventory: Optional[Callable[[], Any]] = None,
+    today_accepts: Optional[Mapping[str, Mapping[str, Any]]] = EDGE_TODAY_ACCEPTS,
+) -> EdgeResolution:
+    """Resolve the unit ``drone_id`` flying ``choice`` on edge drone kind ``drone``, before any contact.
+
+    Builds the layers (``build_layers``), refuses a launcher layer for another unit, resolves every
+    value with ``resolve_unit`` (``simulated`` only for the fake adapter), runs the static feature
+    gates and builds the start report. Raises ``EdgeStartRefused`` on any refusal; its text comes from
+    ``params/messages.py`` through the resolver and the gates, and never names a test-adapter fact.
+    """
+    from flightrisk.hardware.features import FeatureRefused
+    from flightrisk.params.report import build_report
+    from flightrisk.params.resolver import ParamRefused, resolve_unit
+
+    if drone not in BACKEND_DEFAULT_MODELS:
+        raise ValueError(f"unknown edge drone {drone!r}")
+    simulated = drone in SIMULATED_DRONES
+    try:
+        layers = build_layers(choice=choice, drone_id=drone_id, environ=environ, argv=argv, parser=parser,
+                              load_inventory=load_inventory)
+        check_launcher_unit(layers)
+        values = resolve_unit(
+            layers.profile, layers.unit_id, layers.layers, simulated=simulated,
+            confirmations=layers.confirmations, today_accepts=today_accepts, features=layers.features,
+        )
+        gates = static_feature_gates(layers, values, source=source)
+        # A built-in model is reported from its descriptor; a custom model carries its own.
+        report_model = choice.model if isinstance(layers.profile, str) else layers.profile
+        report = build_report(report_model, values, gates=gates, roles=_camera_roles(choice.model))
+    except (ParamRefused, ModelRefused, FeatureRefused) as exc:
+        raise EdgeStartRefused(_refusing(str(exc))) from None
+    return EdgeResolution(
+        layers=layers,
+        simulated=simulated,
+        values=MappingProxyType(dict(values)),
+        gates=MappingProxyType(gates),
+        report=report,
+    )
