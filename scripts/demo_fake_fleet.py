@@ -226,12 +226,13 @@ def _new_group_kwargs() -> dict:
 
 def _signal_group(proc: subprocess.Popen, sig: int | None) -> None:
     """Send ``sig`` to the child's group. ``None`` means SIGKILL, which Windows does not have."""
+    polite = sig is not None and sig == signal.SIGTERM
     if sig is None:
         sig = getattr(signal, "SIGKILL", signal.SIGTERM)
     try:
         if _is_windows():
             # Windows has no killpg and no real signals: terminate() for a polite stop, kill() otherwise.
-            if sig == signal.SIGTERM:
+            if polite:
                 proc.terminate()
             else:
                 proc.kill()

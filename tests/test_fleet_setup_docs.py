@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from tests.support.posix import posix_bash
 
 import pytest
 
@@ -42,7 +43,7 @@ def test_fleet_env_scripts_have_both_branches():
 def _source(net: str, extra: str = "") -> subprocess.CompletedProcess:
     script = f'unset FLIGHTRISK_GROUND_LOCAL; export FLIGHTRISK_FLEET_NET={net}; {extra} source scripts/fleet_env.sh && echo "$FLIGHTRISK_EDGE_HOST $FLIGHTRISK_EDGE_WS $FLIGHTRISK_TELLO_HOST"'
     env = {k: v for k, v in os.environ.items() if not k.startswith("FLIGHTRISK_")}
-    return subprocess.run(["bash", "-c", script], cwd=ROOT, env=env, capture_output=True, text=True, check=False)
+    return subprocess.run([posix_bash(), "-c", script], cwd=ROOT, env=env, capture_output=True, text=True, check=False)
 
 
 def test_fleet_env_sh_ap_and_station():
@@ -105,7 +106,7 @@ def test_unexported_ground_local_still_reaches_the_edge_launcher():
         "FLIGHTRISK_GROUND_LOCAL=1; source scripts/fleet_env.sh >/dev/null && "
         'echo "parent ws=$FLIGHTRISK_EDGE_WS" && DRONE_ID=1 ALT_CM=100 scripts/demo_edge.sh'
     )
-    result = subprocess.run(["bash", "-c", script], cwd=ROOT, env=env, capture_output=True, text=True, timeout=30, check=False)
+    result = subprocess.run([posix_bash(), "-c", script], cwd=ROOT, env=env, capture_output=True, text=True, timeout=30, check=False)
     assert result.returncode == 0, result.stderr
     lines = result.stdout.strip().splitlines()
     assert lines[0] == "parent ws=ws://127.0.0.1:9000"

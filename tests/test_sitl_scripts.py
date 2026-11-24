@@ -14,6 +14,7 @@ import sys
 import threading
 import types
 from pathlib import Path
+from tests.support.posix import posix_bash
 from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
@@ -281,12 +282,12 @@ def test_geolocate_detections_above_horizon_dropped():
 
 def test_start_sitl_script_syntax_and_argument_errors():
     script = str(ROOT / "scripts" / "start_sitl.sh")
-    assert subprocess.run(["bash", "-n", script]).returncode == 0
-    bad = subprocess.run(["bash", script, "--instance", "abc"], capture_output=True, text=True)
+    assert subprocess.run([posix_bash(), "-n", script]).returncode == 0
+    bad = subprocess.run([posix_bash(), script, "--instance", "abc"], capture_output=True, text=True)
     assert bad.returncode == 2
-    unknown = subprocess.run(["bash", script, "--nope"], capture_output=True, text=True)
+    unknown = subprocess.run([posix_bash(), script, "--nope"], capture_output=True, text=True)
     assert unknown.returncode == 2
-    helped = subprocess.run(["bash", script, "--help"], capture_output=True, text=True)
+    helped = subprocess.run([posix_bash(), script, "--help"], capture_output=True, text=True)
     assert helped.returncode == 0 and "--instance" in helped.stdout
 
 

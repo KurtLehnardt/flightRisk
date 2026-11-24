@@ -73,7 +73,7 @@ def test_windows_stops_children_with_terminate_and_kill(launcher, monkeypatch):
 def test_posix_kill_one_defaults_to_sigkill_on_the_group(launcher, monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
     killpg = MagicMock()
-    monkeypatch.setattr(launcher.os, "killpg", killpg)
+    monkeypatch.setattr(launcher.os, "killpg", killpg, raising=False)
     proc = MagicMock(pid=4242)
     proc.poll.return_value = None
     group = launcher.ProcessGroup()

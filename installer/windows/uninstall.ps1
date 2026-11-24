@@ -107,10 +107,10 @@ function Get-FlightRiskPids([string]$AppDir) {
             $executable[[int]$p.ProcessId] = [string]$p.ExecutablePath
         }
     } else {
-        foreach ($line in @(& ps -axo "pid=,ppid=" 2>$null)) {
+        foreach ($line in @(& /bin/ps -axo "pid=,ppid=" 2>$null)) {
             if ($line -match '^\s*(\d+)\s+(\d+)') { $parent[[int]$Matches[1]] = [int]$Matches[2] }
         }
-        foreach ($line in @(& ps -axww -o "pid=,args=" 2>$null)) {
+        foreach ($line in @(& /bin/ps -axww -o "pid=,args=" 2>$null)) {
             if ($line -match '^\s*(\d+)\s+(.*)$') { $command[[int]$Matches[1]] = $Matches[2] }
         }
         $cwdOrFile = @{}

@@ -28,6 +28,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
+      # Windows checks files out with CRLF by default; the tests compare bytes against LF fixtures.
+      - name: Keep LF line endings
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
       # Full history: tests/test_fleet_protocol_compat.py reads commit dab72db.
       - uses: actions/checkout@v4
         with:
@@ -62,6 +67,19 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install --require-hashes -r installer/locks/windows-x64-ground.txt
           python -m pip install -r requirements-dev.txt
+
+      # The installer tests read process lists with lsof, which the Linux image does not ship.
+      - name: Install lsof (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lsof
+          [ -e /usr/sbin/lsof ] || sudo ln -s "$(command -v lsof)" /usr/sbin/lsof
+
+      # The Windows ground lock leaves out the optional LLM client that the reasoning tests patch.
+      - name: Install ollama client (Windows)
+        if: runner.os == 'Windows'
+        run: python -m pip install "ollama>=0.4"
 
       # pytest.ini deselects the sitl and slow markers by default.
       - name: Run tests

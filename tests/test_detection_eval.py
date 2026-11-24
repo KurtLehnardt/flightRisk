@@ -6,6 +6,7 @@ import stat
 import subprocess
 import zipfile
 from pathlib import Path
+from tests.support.posix import posix_bash
 
 import pytest
 
@@ -32,7 +33,7 @@ def test_benchmark_doc_lists_candidates():
 
 
 def test_download_script_syntax():
-    assert subprocess.run(["bash", "-n", str(ROOT / "scripts" / "download_heridal.sh")]).returncode == 0
+    assert subprocess.run([posix_bash(), "-n", str(ROOT / "scripts" / "download_heridal.sh")]).returncode == 0
 
 
 def test_download_script_with_mocked_http(tmp_path):
@@ -50,7 +51,7 @@ def test_download_script_with_mocked_http(tmp_path):
     curl.chmod(curl.stat().st_mode | stat.S_IEXEC)
     env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", DATASETS_DIR=str(tmp_path / "ds"))
     proc = subprocess.run(
-        ["bash", str(ROOT / "scripts" / "download_heridal.sh")], env=env, capture_output=True, text=True
+        [posix_bash(), str(ROOT / "scripts" / "download_heridal.sh")], env=env, capture_output=True, text=True
     )
     assert proc.returncode == 0, proc.stderr
     assert (tmp_path / "ds" / "heridal" / "JPEGImages" / "a.jpg").exists()

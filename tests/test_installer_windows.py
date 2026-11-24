@@ -128,6 +128,9 @@ def test_install_lock_is_exclusive(tmp_path):
 
 class WinBox:
     def __init__(self, tmp_path: Path):
+        if sys.platform == "win32":
+            pytest.skip("this box harness is POSIX-hosted: it expects venv/bin, ':' in PATH and bash git shims, "
+                        "and runs the installer's non-Windows branch")
         self.repo = make_fixture_repo(tmp_path / "repo")
         self.home = tmp_path / "home"
         self.home.mkdir()

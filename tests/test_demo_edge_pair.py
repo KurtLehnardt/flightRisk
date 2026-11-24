@@ -7,6 +7,7 @@ dry-run and child modes only, so nothing is started and no packet is sent.
 from __future__ import annotations
 
 import os
+import sys
 import re
 import shutil
 import subprocess
@@ -18,7 +19,21 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "demo_edge_pair.ps1"
 TOKEN = "test-token-that-must-never-be-printed"
 
-pytestmark = pytest.mark.skipif(shutil.which("pwsh") is None, reason="PowerShell not installed")
+def _ip_is_assigned(ip: str) -> bool:
+    import socket
+
+    try:
+        return ip in socket.gethostbyname_ex(socket.gethostname())[2]
+    except OSError:
+        return False
+
+
+pytestmark = [
+    pytest.mark.skipif(shutil.which("pwsh") is None, reason="PowerShell not installed"),
+    # On Windows the script checks that each -LocalIp is assigned to an adapter, even for -DryRun.
+    pytest.mark.skipif(sys.platform == "win32" and not _ip_is_assigned("192.168.10.2"),
+                       reason="no adapter holds 192.168.10.2, which the script requires on Windows"),
+]
 
 
 def _run(*args: str, token: str | None = TOKEN) -> subprocess.CompletedProcess:
