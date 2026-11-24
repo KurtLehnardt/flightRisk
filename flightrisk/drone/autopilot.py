@@ -182,8 +182,8 @@ def autonomous_modes(autopilot: str | None) -> frozenset[str]:
 # Parameter meanings are taken from the parameter references:
 #   ArduCopter: https://ardupilot.org/copter/docs/parameters.html
 #     (FENCE_ENABLE, FENCE_TYPE, FENCE_ACTION, FENCE_RADIUS, FENCE_ALT_MAX,
-#     BATT_FS_LOW_ACT, BATT_FS_CRT_ACT, BATT_LOW_VOLT, BATT_LOW_MAH,
-#     BATT_ARM_VOLT, FS_THR_ENABLE, RTL_ALT, SYSID_THISMAV / MAV_SYSID)
+#     FENCE_ALT_MAX_TP, BATT_FS_LOW_ACT, BATT_FS_CRT_ACT, BATT_LOW_VOLT, BATT_LOW_MAH,
+#     BATT_ARM_VOLT, FS_THR_ENABLE, RTL_ALT_M / RTL_ALT, MAV_SYSID / SYSID_THISMAV)
 #   PX4: https://docs.px4.io/main/en/advanced_config/parameter_reference.html
 #     (GF_ACTION, GF_MAX_HOR_DIST, GF_MAX_VER_DIST, COM_LOW_BAT_ACT,
 #     NAV_RCL_ACT, NAV_DLL_ACT, RTL_RETURN_ALT, MAV_SYS_ID)
@@ -194,6 +194,12 @@ def autonomous_modes(autopilot: str | None) -> frozenset[str]:
 #: ArduCopter FENCE_TYPE bits: 1 max altitude, 2 circle, 4 polygon, 8 min altitude.
 _AP_FENCE_ALT_MAX_BIT = 1
 _AP_FENCE_CIRCLE_BIT = 2
+#: ArduCopter 4.7 FENCE_ALT_MAX_TP, the frame of FENCE_ALT_MAX: 0 above sea level, 1 above home (the
+#: default), 2 above the EKF origin, 3 above terrain. The check reads FENCE_ALT_MAX as metres above home,
+#: so only 1 is accepted. Copter 4.6 has no such parameter and its FENCE_ALT_MAX is always above home.
+#: Source, ArduPilot tag Copter-4.7.3: libraries/AC_Fence/AC_Fence.cpp lines 168-173
+#: (https://raw.githubusercontent.com/ArduPilot/ardupilot/Copter-4.7.3/libraries/AC_Fence/AC_Fence.cpp).
+_AP_FENCE_ALT_FRAME_ABOVE_HOME = 1
 #: ArduCopter FENCE_ACTION: 0 report only (refused); 1 RTL or land; 2 always
 #: land; 3 SmartRTL or RTL or land; 4 brake or land; 5 SmartRTL or land.
 _AP_FENCE_ACTIONS = frozenset({1, 2, 3, 4, 5})
@@ -223,12 +229,60 @@ MAX_FENCE_ALT_M = 120.0
 #: The system id every factory autopilot uses.
 DEFAULT_SYSID = 1
 
+#: ArduCopter parameters renamed in a firmware release, as (new name, new factor, old name, old factor).
+#: Each factor converts that parameter's unit to the unit the checks use (centimetres for altitudes).
+#: The new name is read first and the old name only when the new one cannot be read, so firmware from
+#: before and after the rename both pass; when neither can be read the value is unreadable and the
+#: check fails closed. A later rename is one more line here.
+#: Sources, ArduPilot tag Copter-4.7.3:
+#:   RTL_ALT (cm) became RTL_ALT_M (m): ArduCopter/mode_rtl.cpp lines 8-15 and 65
+#:   (https://raw.githubusercontent.com/ArduPilot/ardupilot/Copter-4.7.3/ArduCopter/mode_rtl.cpp).
+#:   SYSID_THISMAV became MAV_SYSID: ArduCopter/Parameters.cpp line 40 and
+#:   libraries/GCS_MAVLink/GCS.cpp line 43.
+_AP_RENAMED: tuple[tuple[str, float, str, float], ...] = (
+    ("RTL_ALT_M", 100.0, "RTL_ALT", 1.0),
+    ("MAV_SYSID", 1.0, "SYSID_THISMAV", 1.0),
+)
+
+
+def _ap_names(old: str) -> tuple[tuple[str, float], ...]:
+    """The (name, factor) pairs to read for the ArduCopter 4.6 parameter *old*: its new name first, then *old*."""
+    for new_name, new_factor, old_name, old_factor in _AP_RENAMED:
+        if old_name == old:
+            return ((new_name, new_factor), (old_name, old_factor))
+    return ((old, 1.0),)
+
+
+#: Where each autopilot keeps its return altitude, as (name, factor to centimetres) pairs in read order.
+_RETURN_ALTITUDE_PARAMS: dict[str, tuple[tuple[str, float], ...]] = {
+    ARDUPILOT: _ap_names("RTL_ALT"),
+    PX4: (("RTL_RETURN_ALT", 100.0),),
+}
+#: Where each autopilot keeps its MAVLink system id, as (name, factor) pairs in read order.
+_SYSTEM_ID_PARAMS: dict[str, tuple[tuple[str, float], ...]] = {
+    ARDUPILOT: _ap_names("SYSID_THISMAV"),
+    PX4: (("MAV_SYS_ID", 1.0),),
+}
+
+
+def _read_first(read: Callable[[str], float | None], names: tuple[tuple[str, float], ...]) -> tuple[float | None, str]:
+    """The first readable value among *names*, times its factor, and the name it was read from.
+
+    Returns (None, "NEW / OLD") when none can be read, so a message names every name tried.
+    """
+    for name, factor in names:
+        value = read(name)
+        if _finite(value):
+            return float(value) * factor, name
+    return None, " / ".join(name for name, _ in names)
+
+
 #: Every parameter the checks read, per autopilot (read once, then cached).
 FAILSAFE_PARAMS: dict[str, tuple[str, ...]] = {
     ARDUPILOT: (
-        "FENCE_ENABLE", "FENCE_TYPE", "FENCE_ACTION", "FENCE_RADIUS", "FENCE_ALT_MAX", "BATT_FS_LOW_ACT",
-        "BATT_FS_CRT_ACT", "BATT_LOW_VOLT", "BATT_LOW_MAH", "BATT_ARM_VOLT", "FS_THR_ENABLE", "RTL_ALT",
-        "SYSID_THISMAV", "MAV_SYSID",
+        "FENCE_ENABLE", "FENCE_TYPE", "FENCE_ACTION", "FENCE_RADIUS", "FENCE_ALT_MAX", "FENCE_ALT_MAX_TP",
+        "BATT_FS_LOW_ACT", "BATT_FS_CRT_ACT", "BATT_LOW_VOLT", "BATT_LOW_MAH", "BATT_ARM_VOLT", "FS_THR_ENABLE",
+        *(name for new_name, _, old_name, _ in _AP_RENAMED for name in (new_name, old_name)),
     ),
     PX4: (
         "GF_ACTION", "GF_MAX_HOR_DIST", "GF_MAX_VER_DIST", "COM_LOW_BAT_ACT", "NAV_RCL_ACT", "NAV_DLL_ACT",
@@ -307,6 +361,17 @@ def failsafe_problems(
         elif alt_max > MAX_FENCE_ALT_M or (ceiling_m is not None and alt_max <= ceiling_m):
             low = "" if ceiling_m is None else f"above the {ceiling_m:g} m ceiling and "
             problems.append(f"FENCE_ALT_MAX={alt_max:g} m; need {low}at most {MAX_FENCE_ALT_M:g} m")
+        # Copter 4.7 can make FENCE_ALT_MAX relative to sea level, the EKF origin or terrain. A missing
+        # FENCE_ALT_MAX_TP is accepted only when the vehicle answers to the 4.6 return-altitude name and not
+        # to the 4.7 one, so a 4.7 vehicle whose FENCE_ALT_MAX_TP cannot be read is refused.
+        alt_frame = read("FENCE_ALT_MAX_TP")
+        absent_on_46 = alt_frame is None and value("RTL_ALT_M") is None and value("RTL_ALT") is not None
+        if not absent_on_46 and (not _finite(alt_frame) or float(alt_frame) != _AP_FENCE_ALT_FRAME_ABOVE_HOME):
+            shown = "unreadable" if not _finite(alt_frame) else f"{float(alt_frame):g}"
+            problems.append(
+                f"FENCE_ALT_MAX_TP={shown}; FENCE_ALT_MAX_TP must be 1 (altitude above home), "
+                "because FENCE_ALT_MAX is checked as metres above home"
+            )
         need("BATT_FS_LOW_ACT", _AP_BATT_ACTIONS, "low battery must land or return; 5 terminates")
         need("BATT_FS_CRT_ACT", _AP_BATT_ACTIONS, "critical battery must land or return; 5 terminates")
         thresholds = [v for v in (value("BATT_LOW_VOLT"), value("BATT_LOW_MAH")) if v is not None]
@@ -318,8 +383,6 @@ def failsafe_problems(
             # half-empty pack reads 100%: arming must check the voltage.
             problems.append("need BATT_ARM_VOLT above 0 (a partly used pack reads 100% after boot)")
         need("FS_THR_ENABLE", _AP_RC_LOSS_ACTIONS, "RC loss must land or return")
-        rtl_name, rtl_factor = "RTL_ALT", 1.0
-        sysid_names = ("SYSID_THISMAV", "MAV_SYSID")
     else:
         need("GF_ACTION", _PX4_FENCE_ACTIONS, "a fence breach must hold, return or land")
         hor = value("GF_MAX_HOR_DIST")
@@ -335,22 +398,20 @@ def failsafe_problems(
         need("COM_LOW_BAT_ACT", _PX4_BATT_ACTIONS, "low battery must land or return")
         need("NAV_RCL_ACT", _PX4_LOSS_ACTIONS, "RC loss must return or land; 1 hovers, 5 and 6 stop the motors")
         need("NAV_DLL_ACT", _PX4_LOSS_ACTIONS, "data-link loss must return or land; 1 hovers, 5 and 6 stop the motors")
-        rtl_name, rtl_factor = "RTL_RETURN_ALT", 100.0
-        sysid_names = ("MAV_SYS_ID",)
 
-    rtl = value(rtl_name)
-    if rtl is None:
+    rtl_cm, rtl_name = _read_first(value, _RETURN_ALTITUDE_PARAMS[autopilot])
+    if rtl_cm is None:
         problems.append(f"cannot read {rtl_name} (return altitude)")
-    elif slot_cm is not None and rtl * rtl_factor > slot_cm + 1e-6:
+    elif slot_cm is not None and rtl_cm > slot_cm + 1e-6:
         problems.append(
-            f"{rtl_name} return altitude {rtl * rtl_factor / 100:g} m is above this drone's slot {slot_cm / 100:g} m; "
+            f"{rtl_name} return altitude {rtl_cm / 100:g} m is above this drone's slot {slot_cm / 100:g} m; "
             "the autopilot's own RC-loss or battery return would climb through other slots (set it at or below "
             "the slot; 0 returns at the current height)"
         )
     if sysid is not None:
-        found = next((v for v in (value(n) for n in sysid_names) if v is not None), None)
+        found, sysid_name = _read_first(value, _SYSTEM_ID_PARAMS[autopilot])
         if found is None:
-            problems.append(f"cannot read {' / '.join(sysid_names)} (system id)")
+            problems.append(f"cannot read {sysid_name} (system id)")
         elif int(found) != int(sysid):
             problems.append(f"autopilot system id is {found:g}, expected {sysid} (--mavlink-sysid)")
     return problems
@@ -444,13 +505,12 @@ def avoidance_problems(values: Mapping[str, float | None], autopilot: str | None
 
 
 def rtl_altitude_cm(autopilot: str | None, read: Callable[[str], float | None]) -> float | None:
-    """The autopilot's return-to-launch altitude in centimetres above home, or None if unreadable."""
-    entry = {ARDUPILOT: ("RTL_ALT", 1.0), PX4: ("RTL_RETURN_ALT", 100.0)}.get(autopilot or "")
-    if entry is None:
-        return None
-    name, factor = entry
-    value = read(name)
-    return float(value) * factor if _finite(value) else None
+    """The autopilot's return-to-launch altitude in centimetres above home, or None if unreadable.
+
+    ArduPilot reads ``RTL_ALT_M`` (metres, Copter 4.7 and later) first, then ``RTL_ALT`` (centimetres).
+    """
+    names = _RETURN_ALTITUDE_PARAMS.get(autopilot or "")
+    return None if names is None else _read_first(read, names)[0]
 
 
 # ---------------------------------------------------------------------------

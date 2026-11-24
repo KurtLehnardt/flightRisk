@@ -121,7 +121,7 @@ PATH="$PWD/../sitl-venv/bin:$PATH" ./waf configure --board sitl && PATH="$PWD/..
 
 On a Mac with a recent Xcode linker the build stops with `ld: pointer not aligned in '__ZN12AP_FWVersion5fwverE'`; making `PACKED` conditional on non-Apple builds in `libraries/AP_Common/AP_FWVersion.h` fixes it for SITL (a local patch, not upstream). The build takes about two minutes on four cores.
 
-Start instance N (MAVLink on TCP `5760 + 10 * N`). Each instance needs `SYSID_THISMAV 1`, or MAVSDK commands the wrong system id and GUIDED never engages. The stream-rate parameters make the telemetry arrive:
+Start instance N (MAVLink on TCP `5760 + 10 * N`). Each instance needs system id 1 (`SYSID_THISMAV 1`, or `MAV_SYSID 1` on Copter 4.7), or MAVSDK commands the wrong system id and GUIDED never engages. The stream-rate parameters make the telemetry arrive. This is the Copter 4.6 file; for 4.7 use the new names from "Parameter names by ArduCopter version" below:
 
 ```bash
 printf 'SR0_EXTRA1 4\nSR0_EXTRA2 4\nSR0_EXTRA3 2\nSR0_EXT_STAT 2\nSR0_POSITION 4\nSYSID_THISMAV 1\n' > sitl.parm
@@ -146,7 +146,7 @@ Invoke-WebRequest "$b/ArduCopter.elf" -OutFile ArduCopter.exe
 Invoke-WebRequest "$b/cygstdc%2B%2B-6.dll" -OutFile "cygstdc++-6.dll"
 ```
 
-- Parameters: `copter.parm` is required. Fetch the `copter.parm` of the same ArduPilot version as the SITL build, from `https://raw.githubusercontent.com/ArduPilot/ardupilot/<tag>/Tools/autotest/default_params/copter.parm` (the `master` branch may be newer than the build, so use the tag that matches). Read the firmware version from the SITL banner that `ArduCopter.exe` prints at start-up, and use the matching `Copter-x.y.z` tag. Save it as `copter.parm` in the `sitl` folder. Also save a `sitl.parm` there with the stream rates plus `SYSID_THISMAV 1` from the native section above, and with the failsafe parameters listed in "Run the tests and the CLI path" below for the CLI path.
+- Parameters: `copter.parm` is required. Fetch the `copter.parm` of the same ArduPilot version as the SITL build, from `https://raw.githubusercontent.com/ArduPilot/ardupilot/<tag>/Tools/autotest/default_params/copter.parm` (the `master` branch may be newer than the build, so use the tag that matches). Read the firmware version from the SITL banner that `ArduCopter.exe` prints at start-up, and use the matching `Copter-x.y.z` tag. Save it as `copter.parm` in the `sitl` folder. Also save a `sitl.parm` there with the stream rates plus the system id from the native section above, using the names for the build's version (see "Parameter names by ArduCopter version"), and with the failsafe parameters listed in "Run the tests and the CLI path" below for the CLI path.
 - Command: make one folder per instance under `sitl`, so that each instance keeps its own `eeprom.bin` and logs, and run SITL from inside it. For instance 0:
 
 ```powershell
@@ -172,6 +172,21 @@ A leftover server keeps heartbeating to the autopilot and holds its port, so a r
 
 MAVSDK 2 and later dropped `udp://` for listening. Use `udpin://0.0.0.0:14540` (listen for an autopilot or router sending to that port) in place of the old `udp://:14540`; `tests/integration/test_sitl.py` uses the new form.
 
+### Parameter names by ArduCopter version
+
+ArduCopter 4.7 renamed some parameters FlightRisk reads or sets, and converts the old values when it first boots with them. A parameter file that uses an old name on 4.7 sets nothing, so use the names for the build's version. Sources are the `Copter-4.7.3` tag of `https://github.com/ArduPilot/ardupilot`.
+
+| Copter 4.6 name (unit) | Copter 4.7 name (unit) | Conversion | Source (Copter-4.7.3) |
+|---|---|---|---|
+| `RTL_ALT` (cm) | `RTL_ALT_M` (m) | m = cm / 100 | `ArduCopter/mode_rtl.cpp` lines 8-15 and 65 |
+| `RTL_ALT_FINAL` (cm) | `RTL_ALT_FINAL_M` (m) | m = cm / 100 | `ArduCopter/mode_rtl.cpp` lines 17-24 and 67 |
+| `RTL_CLIMB_MIN` (cm) | `RTL_CLIMB_MIN_M` (m) | m = cm / 100 | `ArduCopter/mode_rtl.cpp` lines 26-33 and 68 |
+| `RTL_SPEED` (cm/s) | `RTL_SPEED_MS` (m/s) | m/s = cm/s / 100 | `ArduCopter/mode_rtl.cpp` lines 35-42 and 66 |
+| `SYSID_THISMAV` | `MAV_SYSID` | none | `ArduCopter/Parameters.cpp` line 40, `libraries/GCS_MAVLink/GCS.cpp` line 43 |
+| `SR0_*` stream rates (Hz) | `MAV1_*` (Hz) | none | `ArduCopter/Parameters.cpp` line 389, `libraries/GCS_MAVLink/GCS.cpp` line 80 |
+
+The failsafe check and the return-altitude check read the 4.7 name first and fall back to the 4.6 name, so both versions pass; when neither name can be read the takeoff is refused and the message names both. The integration tests set whichever return-altitude name the vehicle has, and `scripts/sitl_fly_coverage.py` tries `MAV1_*` before `SR0_*`. The other parameters the code checks today keep their names and units on 4.7: `FENCE_ENABLE`, `FENCE_TYPE`, `FENCE_ACTION`, `FENCE_RADIUS` (m), `FENCE_ALT_MAX` (m), `BATT_FS_LOW_ACT`, `BATT_FS_CRT_ACT`, `BATT_LOW_VOLT` (V), `BATT_LOW_MAH` (mAh), `BATT_ARM_VOLT` (V), `FS_THR_ENABLE`, and the avoidance set `OA_TYPE`, `OA_MARGIN_MAX` (m), `OA_BR_LOOKAHEAD` (m) and `PRX1_TYPE`. ArduCopter 4.7 also added `FENCE_ALT_MAX_TP`, the frame of `FENCE_ALT_MAX` (0 above sea level, 1 above home, 2 above the EKF origin, 3 above terrain; `libraries/AC_Fence/AC_Fence.cpp` lines 168-173). The check needs 1, because it reads `FENCE_ALT_MAX` as metres above home; any other value is refused, and so is an unreadable one unless the vehicle reports only the 4.6 name `RTL_ALT`. `FS_GCS_ENABLE`, `FS_EKF_THRESH`, `FS_DR_ENABLE`, `RTL_LOIT_TIME` (ms) and the other `RTL_*` rows of the table keep their names or are renamed as shown, but the code does not check them yet; those checks are planned (design B4, `docs/design/hardware-profiles/design.md` section 27 item 6). A Copter 4.7.3 SITL reported `RTL_ALT_M` and `MAV_SYSID` and had no `RTL_ALT` or `SYSID_THISMAV`.
+
 ### Run the tests and the CLI path
 
 ```bash
@@ -182,7 +197,7 @@ FLIGHTRISK_SITL_ADDRESS=tcpout://127.0.0.1:5760 FLIGHTRISK_SITL_ADDRESS_2=tcpout
     python -m pytest tests/integration/test_sitl_fleet.py -m sitl -s -p no:cacheprovider -k two
 ```
 
-The tests set the failsafe parameters the edge requires on the simulated autopilot. For the CLI path, put them in the SITL defaults instead (`FENCE_ENABLE 1`, `FENCE_TYPE 3`, `FENCE_ACTION 1`, `FENCE_RADIUS 150`, `FENCE_ALT_MAX 40`, `BATT_FS_LOW_ACT 2`, `BATT_FS_CRT_ACT 1`, `BATT_LOW_VOLT 10.5`, `BATT_ARM_VOLT 11.0`, `FS_THR_ENABLE 1`, `RTL_ALT 0`), then (in SITL only, `--sitl --yes` skips the typed confirmation):
+The tests set the failsafe parameters the edge requires on the simulated autopilot. For the CLI path, put them in the SITL defaults instead (`FENCE_ENABLE 1`, `FENCE_TYPE 3`, `FENCE_ACTION 1`, `FENCE_RADIUS 150`, `FENCE_ALT_MAX 40`, `BATT_FS_LOW_ACT 2`, `BATT_FS_CRT_ACT 1`, `BATT_LOW_VOLT 10.5`, `BATT_ARM_VOLT 11.0`, `FS_THR_ENABLE 1`, and `RTL_ALT_M 0` on Copter 4.7 or `RTL_ALT 0` on 4.6), then (in SITL only, `--sitl --yes` skips the typed confirmation):
 
 ```bash
 export FLIGHTRISK_EDGE_TOKEN=$(python3 -c "import secrets; print(secrets.token_hex(16))")
