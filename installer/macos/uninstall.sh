@@ -11,8 +11,9 @@
 # with its virtual environment); the files the installer and the app wrote next
 # to it (status, lock, run files, an unfinished first download), each by name;
 # FlightRisk.app in ~/Applications and in /Applications when it is FlightRisk's
-# (same bundle id; one in /Applications that you cannot delete is named, so you
-# can drag it to the Trash); and the app's log files in ~/Library/Logs/FlightRisk.
+# (same bundle id or the earlier io.github.<owner>.flightrisk.launcher form; one in
+# /Applications that you cannot delete is named, so you can drag it to the Trash);
+# and the app's log files in ~/Library/Logs/FlightRisk.
 # Folders are removed only when they are then empty.
 #
 # What it keeps: ~/.flightrisk (launcher presets, the saved ceiling),
@@ -53,7 +54,9 @@ SYSTEM_APPLICATIONS_DIR="${FLIGHTRISK_SYSTEM_APPLICATIONS_DIR:-/Applications}"
 LOG_DIR="${FLIGHTRISK_LOG_DIR:-$HOME/Library/Logs/FlightRisk}"
 LOG_DIR="${LOG_DIR%/}"
 KEEP_ROOT="$HOME/Library/Application Support/FlightRisk data"
-BUNDLE_ID="io.github.kurtlehnardt.flightrisk.launcher"
+BUNDLE_ID="org.flightrisk.launcher"
+# Launcher apps built before the bundle id changed carry io.github.<owner>.flightrisk.launcher.
+LEGACY_BUNDLE_ID_PATTERN='io.github.*.flightrisk.launcher'
 KEEP_ITEMS=(logs captures recordings models flightrisk_sessions.db flightrisk_sessions.db-wal flightrisk_sessions.db-shm)
 RUN_FILES=(launcher.pid launcher.url open-launcher.html install.sh install-flightrisk.command)
 LOG_FILES=(app.log launcher.log launcher.previous.log)
@@ -254,7 +257,8 @@ is_our_bundle() {
   local id
   [ -f "$1/Contents/Info.plist" ] && [ ! -L "$1" ] || return 1
   id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$1/Contents/Info.plist" 2>/dev/null || true)"
-  [ "$id" = "$BUNDLE_ID" ]
+  # shellcheck disable=SC2053 # the right side is a glob pattern on purpose
+  [ "$id" = "$BUNDLE_ID" ] || [[ "$id" == $LEGACY_BUNDLE_ID_PATTERN ]]
 }
 
 our_bundles() {

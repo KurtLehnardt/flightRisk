@@ -77,7 +77,7 @@ The edge token comes from `FLIGHTRISK_EDGE_TOKEN` in the environment, else from
 
 | You want | This computer runs | Edge link | Drones |
 | --- | --- | --- | --- |
-| Layout A, ground computer (the Mac) | ground station and dashboard | loopback plus cable address | each drone's edge runs on "other computer" (or "here" for a drone flown from this computer too) |
+| Layout A, ground computer (the ground-station laptop) | ground station and dashboard | loopback plus cable address | each drone's edge runs on "other computer" (or "here" for a drone flown from this computer too) |
 | Layout A, edge computer (the Windows laptop) | edges only, ground host `10.42.0.1`, port `9000` | | all drones here, each with its adapter's local IP and, on Windows, interface index |
 | Layout B, everything on one computer | ground station and dashboard | loopback only | all drones here; two real Tellos need one Wi-Fi adapter each |
 | Single drone | ground station and dashboard | loopback only | one drone here |
@@ -215,7 +215,7 @@ All checks are read-only; any FAIL blocks Start.
 | Network adapters | lists the adapters with their IPv4 addresses and indexes |
 | Adapter for each drone | its local IP is on exactly one adapter, with the interface index given. A real drone with no local IP fails ("choose the adapter") when more than one adapter has an address in its Tello host's network, because a packet sent from all addresses could reach another drone; that drone is then not probed. Any other real drone with no local IP, a single Tello included, fails while obstacle sensing is required (`FLIGHTRISK_OBSTACLE_SENSING` unset or `required`), because its edge would refuse to start: without a local IP its video frames carry no capture stamps. The row names an adapter only when exactly one real Tello runs on this computer, exactly one adapter has an address in that Tello's network, that address is not another drone's configured local IP, and the adapter is not the default (internet) route; when the default route cannot be read, no adapter is named. With two or more real Tellos here the row names none and says each Tello needs its own Wi-Fi adapter's local IP (`docs/two-tellos-one-pc.md`). With sensing `off` the same drone is only a warning |
 | Ceiling | the dashboard's saved ceiling and margin match the launcher's (otherwise a warning that Start will write the launcher's values) |
-| Takeoff battery minimum | `FLIGHTRISK_MIN_TAKEOFF_BATTERY` (30 % by default) is a number from 15 to 100, which is what the edges and the ground accept; otherwise a FAIL, because they refuse to start with it. Shown once for the whole start |
+| Takeoff battery minimum | `FLIGHTRISK_MIN_TAKEOFF_BATTERY` (30 % by default) is a number from 15 to 100; otherwise a FAIL, because the edges and the ground refuse to start with it. A Tello edge also refuses a minimum from 15 to 25 %, at or under the Tello's 25 % return floor (constraint K-3), so set more than 25 for a Tello. This check still passes 15 to 25 until A4 aligns it with the edge. Shown once for the whole start |
 | Drone (each real Tello here) | it answers `command`, `battery?` and `temp?`; its battery and temperature are shown. A battery below the takeoff minimum (30 % unless `FLIGHTRISK_MIN_TAKEOFF_BATTERY` is set) is a warning, and so is a temperature at or above the edges' warn level (`FLIGHTRISK_TELLO_TEMP_WARN_C`, default 92 C): power that drone on last or set it on a fan |
 
 The drone check sends only `command` (the SDK handshake), `battery?` and `temp?`, from one UDP socket
@@ -286,7 +286,7 @@ The launcher never signals a process it did not start, for example a ground stat
 ## Design decisions
 
 - **A web page served by the standard library, not Tkinter.** Tkinter is not usable with the project's
-  virtual environment on the Mac: its Python 3.13 (pyenv) is built without `_tkinter`, and the macOS
+  virtual environment on the macOS development laptop: its Python 3.13 (pyenv) is built without `_tkinter`, and the macOS
   system Python ships an old, broken Tk. A page served by `http.server` on 127.0.0.1 needs no extra
   package, runs the same on macOS and Windows, and opens in the browser that is already used for the
   dashboard.

@@ -287,3 +287,29 @@ def test_the_fleet_drone_declares_onboard_avoidance_only_with_an_empty_problem_l
         assert declared == (ctrl.avoidance_status() == [])
     finally:
         subject.teardown(ctrl)
+
+
+@pytest.mark.parametrize("capability", [Capability.SETTLED_HEIGHT, Capability.LINK_HEALTH])
+def test_a_fake_declaring_an_inferred_member_without_its_method_fails(capability):
+    make = _declaring(lambda: FakeDrone(name="conf-1"), add=[capability])
+    with pytest.raises(AssertionError, match=f"declares {capability} without"):
+        CHECKS["capabilities_honest"](_fake_subject(make, "bare"))
+
+
+def test_a_fake_declaring_takeoff_abort_needs_an_abort_keyword():
+    class NoAbort(FakeDrone):
+        def takeoff(self):
+            return super().takeoff()
+
+    make = _declaring(lambda: NoAbort(name="conf-1"), add=[Capability.TAKEOFF_ABORT])
+    with pytest.raises(AssertionError, match="takes no abort keyword"):
+        CHECKS["capabilities_honest"](_fake_subject(make, "no-abort"))
+
+
+def test_a_fake_declaring_takeoff_abort_without_takeoff_fails_with_a_message():
+    class NoTakeoff(FakeDrone):
+        takeoff = None
+
+    make = _declaring(lambda: NoTakeoff(name="conf-1"), add=[Capability.TAKEOFF_ABORT], remove=[Capability.TAKEOFF_LAND])
+    with pytest.raises(AssertionError, match="declares Capability.TAKEOFF_ABORT without takeoff"):
+        CHECKS["capabilities_honest"](_fake_subject(make, "no-takeoff"))

@@ -26,6 +26,12 @@ OWNED = (
 CHECKER_PATHS = (
     "tests/test_param_literals.py",
     "tests/test_param_change_control.py",
+    "tests/param_adopters.py",
+    "tests/tello_coupling_baseline.py",
+    "tests/test_tello_coupling.py",
+    "tests/fixtures/edge_start_baseline.json",
+    "tests/test_edge_start_baseline.py",
+    "tests/tools/make_edge_baseline.py",
     "docs/design/hardware-profiles/safety-value-changes.md",
 )
 # The A1 baseline entry. Editing it needs an edit here too, which CODEOWNERS makes owned (F6, F7).
@@ -222,45 +228,116 @@ def test_adopted_set_equals_the_a3_ownership_list():
         assert (ROOT / rel).is_file(), rel
 
 
-def runtime_param_importers(root: Path, allowed: frozenset[str] = A3_ADOPTED) -> list[str]:
-    """Every run-time import of params or hardware under ``root/flightrisk`` outside params, hardware and ``allowed``.
+def _runtime_param_imports(tree):
+    """The names a parsed module imports from params or hardware at run time.
 
     An import inside ``if TYPE_CHECKING:`` never runs, and the drone id pattern holds no registry or
     catalogue value, so neither counts.
+    """
+    skipped = _type_checking_nodes(tree)
+    found = []
+    for node in ast.walk(tree):
+        if node in skipped:
+            continue
+        names = []
+        if isinstance(node, ast.Import):
+            names = [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            base = node.module or ""
+            names = [base] + [f"{base}.{a.name}" for a in node.names]
+            if node.level:
+                names = [("." * node.level) + n for n in names]
+        for n in names:
+            bare = n.lstrip(".")
+            if bare in LEAF_IMPORTS_ALLOWED:
+                continue
+            if re.match(r"(flightrisk\.)?(params|hardware)(\.|$)", bare) and (
+                not n.startswith(".") or bare.split(".")[0] in ("params", "hardware")
+            ):
+                found.append(n)
+    return found
+
+
+def runtime_param_importers(root: Path, allowed: frozenset[str]) -> list[str]:
+    """Every run-time import of params or hardware under ``root/flightrisk`` outside params, hardware and ``allowed``.
+
+    The exemptions of ``_runtime_param_imports`` apply.
     """
     offenders = []
     for path in sorted((root / "flightrisk").rglob("*.py")):
         rel = path.relative_to(root).parts
         if rel[1] in ("params", "hardware") or "/".join(rel) in allowed:
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        skipped = _type_checking_nodes(tree)
-        for node in ast.walk(tree):
-            if node in skipped:
-                continue
-            names = []
-            if isinstance(node, ast.Import):
-                names = [a.name for a in node.names]
-            elif isinstance(node, ast.ImportFrom):
-                base = node.module or ""
-                names = [base] + [f"{base}.{a.name}" for a in node.names]
-                if node.level:
-                    names = [("." * node.level) + n for n in names]
-            for n in names:
-                bare = n.lstrip(".")
-                if bare in LEAF_IMPORTS_ALLOWED:
-                    continue
-                if re.match(r"(flightrisk\.)?(params|hardware)(\.|$)", bare) and (
-                    not n.startswith(".") or bare.split(".")[0] in ("params", "hardware")
-                ):
-                    offenders.append(f"{'/'.join(rel)}: {n}")
+        for n in _runtime_param_imports(ast.parse(path.read_text(encoding="utf-8"))):
+            offenders.append(f"{'/'.join(rel)}: {n}")
     return offenders
 
 
-def test_only_adopted_modules_import_params_or_hardware():
-    """CMP-1: outside params, hardware and tests, only the modules A3 adopts import them at run time."""
-    offenders = runtime_param_importers(ROOT)
+def _ledger_paths() -> frozenset[str]:
+    """Every path that ``tests/param_adopters.py`` names, in any section."""
+    from tests.param_adopters import PARAM_ADOPTERS
+
+    return frozenset().union(*PARAM_ADOPTERS.values())
+
+
+def test_no_runtime_module_imports_params_or_hardware():
+    """CMP-1 and AM-3: fails on any runtime import of params or hardware from a path that
+    ``tests/param_adopters.py`` names in no section.
+
+    Modules inside params and hardware are skipped, and the exemptions of ``_runtime_param_imports`` apply.
+    """
+    offenders = runtime_param_importers(ROOT, _ledger_paths())
     assert not offenders, offenders
+
+
+def test_only_adopted_modules_import_params_or_hardware():
+    """CMP-1 scope: outside params, hardware and tests, only the modules A3 adopts import them at run time.
+
+    The guard above lets a module import params or hardware only when the ledger names it, so keeping every
+    ledger path inside ``A3_ADOPTED`` keeps every runtime importer inside it too. A path in any section of the
+    ledger that ``A3_ADOPTED`` does not hold fails here, until the phase that adopts it widens the allowance.
+    """
+    outside = sorted(_ledger_paths() - A3_ADOPTED)
+    assert not outside, f"named in tests/param_adopters.py but outside A3_ADOPTED: {outside}"
+
+
+def test_every_param_adopter_exists_and_imports_params_or_hardware():
+    """No dead ledger entries: each named path exists and still imports one of the two packages."""
+    from tests.param_adopters import PARAM_ADOPTERS
+
+    assert list(PARAM_ADOPTERS) == [
+        "X-core", "X-legacy", "A3", "A4", "A5", "B1", "B2", "B3", "B4", "D4",
+    ]
+    seen = set()
+    for section, paths in PARAM_ADOPTERS.items():
+        assert isinstance(paths, frozenset), section
+        for rel in paths:
+            assert rel.startswith("flightrisk/") and rel.endswith(".py"), rel
+            assert not rel.startswith(("flightrisk/params/", "flightrisk/hardware/")), rel
+            assert rel not in seen, f"{rel} sits in two sections"
+            seen.add(rel)
+            path = ROOT / rel
+            assert path.is_file(), f"{section}: {rel} does not exist"
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            assert _runtime_param_imports(tree), f"{section}: {rel} no longer imports params or hardware"
+
+
+def test_adopter_import_rule_flags_runtime_and_ignores_type_checking(tmp_path):
+    """The shared rule behind the guard and the dead-entry test, exercised while the ledger is empty."""
+    runtime = tmp_path / "runtime.py"
+    runtime.write_text("from flightrisk.params import TABLE\nimport flightrisk.hardware.profiles\n", encoding="utf-8")
+    assert _runtime_param_imports(ast.parse(runtime.read_text(encoding="utf-8"))) == [
+        "flightrisk.params",
+        "flightrisk.params.TABLE",
+        "flightrisk.hardware.profiles",
+    ]
+    typing_only = tmp_path / "typing_only.py"
+    typing_only.write_text(
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from flightrisk.params import TABLE\n"
+        "from flightrisk.hardware.ids import DRONE_ID\n",
+        encoding="utf-8",
+    )
+    assert _runtime_param_imports(ast.parse(typing_only.read_text(encoding="utf-8"))) == []
 
 
 # --- Coupling (plan step S3): the MAVLink build path never loads the Tello driver. ---

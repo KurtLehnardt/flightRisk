@@ -32,8 +32,10 @@ so ("incident" is #207, "sensing" is #198).
   stay only as developer overrides for test-adapter bring-up (logged at start and shown with source
   `env`), so today's tests and scripts keep working (`design.md` section 26, decision R-5). They are
   honoured only on test-adapter units and verified simulated units; a production unit ignores them
-  with a log line naming the variable (N-10). Exceptions: rows 38 and 39 are safety switches, so their
-  off value is `less_safe` and is listed and confirmed at Start; row 33 (hover-only test) keeps #207's
+  with a log line naming the variable (N-10). Exceptions: rows 38 and 39 are safety switches. Their
+  off value must be listed and confirmed at Start (FACT-4, C5), selected by `safety_switch` and
+  `off_value`, not by `less_safe`: the resolver never marks a fact row less safe, so that no fact is
+  shown or logged as a setting to tune (A3); row 33 (hover-only test) keeps #207's
   launcher warning about an inherited `FLIGHTRISK_HOVER_TEST` (N-16).
 - **Applies:** `next_start`, `on_ground` (changed between flights by the ground), `plan`, or `in_flight` (a
   mission setting that may change during the flight, spec 10.1(5)).
@@ -251,3 +253,8 @@ Each entry is allowlisted in the guard test with its category.
 | test doubles | `fake.py:61-64,143-145`, `template_backend.py:67-69,102,135-136`, `edge_device.py:267` `_FAKE_SPEED_CM_S`, `FLIGHTRISK_FAKE_OBSTACLE_Y_CM` (`obstacle_sensor.py:111`) | 1 group | Simulation only. The fake drone takes its move range from the `tello` profile in A3. |
 
 Totals: 65 constant entries, of which 19 are protocol, MAVLink or regulatory facts. The 24 Tello SDK and driver facts of the first draft are now rows 87 to 110.
+
+Rows 73 and 74 are unchanged. The wire caps of `flightrisk/fleet_protocol/manual.py:123-133` are the effective
+limit: a manual step is 20 to 100 cm (`MANUAL_STEP_MIN_CM`, `MANUAL_STEP_MAX_CM`) and a rotation is 5 to 45
+degrees (`MANUAL_ROTATE_MIN_DEG`, `MANUAL_ROTATE_MAX_DEG`), so the wider row bounds (20 to 1000 cm for
+`generic_multirotor` step, 5 to 90 degrees for rotation) cannot be reached while the wire stays frozen (XC-05).

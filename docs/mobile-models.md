@@ -180,7 +180,7 @@ release build's guard.
    are the bytes that are loaded; checkpoints are read with
    `weights_only=True`, and every weight or config download is refused while
    the embedder is built), and writes `build/mobile_models/out` and
-   `build.json`. About 3 minutes on an M1 Max.
+   `build.json`. About 3 minutes on a 10-core Apple silicon laptop.
 3. `verify` runs every output and PyTorch on the same inputs, checks the
    tolerances below and the model interfaces, runs the licence guard over the
    outputs (without the allowlist: they are not installed yet), writes the
@@ -668,7 +668,7 @@ pairs whose PyTorch similarity is within 0.05 of 0.55, where a change can flip
 a match decision (`similarity_near_threshold_max_abs`, measured 0.0059 over
 134 such pairs; `PERSON_TOLERANCES`).
 
-Measured on macOS 27, Apple M1 Max, with the locked tools. Detector (score
+Measured on macOS 27, Apple silicon, with the locked tools. Detector (score
 diff, box diff, smallest matched IoU; 21 general and 29 person detections
 matched, none missing or extra on gated runs):
 

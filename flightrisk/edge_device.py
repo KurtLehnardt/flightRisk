@@ -114,7 +114,7 @@ import sys
 import threading
 import time
 from collections import deque
-from typing import Any, Callable, Iterable, TextIO
+from typing import Any, Callable, Iterable, Sequence, TextIO
 
 from flightrisk import fleet_protocol as fp
 from flightrisk.drone.flight_guards import (
@@ -286,7 +286,7 @@ _FAILSAFE_ACTION_ENV_VAR = "FLIGHTRISK_FAILSAFE_ACTION"
 _FRAME_STRIDE_ENV_VAR = "FLIGHTRISK_EDGE_FRAME_STRIDE"
 # The stride is applied by time (``DroneFrameSource``): a detection every N times the longer of the
 # frame time and the time one frame takes to process. A fast detector at stride 30 gets one frame a
-# second at 30 fps; the ZBook's 330 ms detector at stride 30 would get one every 10 s without the
+# second at 30 fps; the edge laptop's 330 ms detector at stride 30 would get one every 10 s without the
 # skip cap below (one every 1.3 s with it). Above this the video tile and the search are nearly blind.
 MAX_FRAME_STRIDE = 30
 # Longest time frames are dropped after a processed frame, however slow it was. Without a cap a
@@ -296,7 +296,7 @@ _STRIDE_MAX_SKIP_ENV_VAR = "FLIGHTRISK_EDGE_STRIDE_MAX_SKIP_S"
 DEFAULT_STRIDE_MAX_SKIP_S = 1.0
 STRIDE_MAX_SKIP_RANGE_S = (0.0, 5.0)
 # Torch threads per edge process (intra-op; inter-op is set to 1). Each edge runs YOLO and MiDaS,
-# so on the 4-core ZBook two edges with torch's default of one thread per core each, plus the
+# so on the 4-core Windows laptop (Layout B) two edges with torch's default of one thread per core each, plus the
 # ground, oversubscribe the CPU and the video decoder falls behind. 2 per edge fits two edges and
 # the ground on 4 cores. 0 leaves torch's own default.
 _TORCH_THREADS_ENV_VAR = "FLIGHTRISK_EDGE_TORCH_THREADS"
@@ -1529,6 +1529,16 @@ def _parse_drone_id(raw: str) -> str:
     return raw
 
 
+def _parse_confirm_less_safe(raw: str) -> tuple[str, str]:
+    """Parse one ``--confirm-less-safe id=value``: a parameter id and the exact value it confirms."""
+    key, sep, value = raw.partition("=")
+    key, value = key.strip(), value.strip()
+    if not sep or not key or not value:
+        raise argparse.ArgumentTypeError("--confirm-less-safe takes id=value: a parameter id and the exact "
+                                         "value it confirms, both non-empty")
+    return key, value
+
+
 def _parse_frame_stride(raw: str) -> int:
     """Parse ``--frame-stride``: a whole number from 1 to ``MAX_FRAME_STRIDE``."""
     try:
@@ -1575,6 +1585,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="The drone this edge flies: tello, fake (simulated Tello) or mavlink (a PX4 or ArduPilot "
              "autopilot; run the edge on the drone's companion computer). Default: --source tello or fake "
              "picks the drone as before; camera, file and url fly nothing",
+    )
+    parser.add_argument(
+        "--model", type=str, default=None,
+        help="The drone model this edge flies, a built-in model or one defined in the inventory (default: $"
+             "FLIGHTRISK_MODEL, else --airframe, else the inventory unit for --drone-id, else the launcher's "
+             "model, else the backend's default: tello for --drone tello and fake, generic_multirotor for "
+             "--drone mavlink). The edge refuses to start when the model's scale, adapter or frame path "
+             "differs from the backend's",
+    )
+    parser.add_argument(
+        "--airframe", type=str, default=None,
+        help="The drone model, when neither --model nor $FLIGHTRISK_MODEL names one (default $FLIGHTRISK_AIRFRAME)",
+    )
+    parser.add_argument(
+        "--confirm-less-safe", type=_parse_confirm_less_safe, action="append", default=None, metavar="ID=VALUE",
+        help="Confirm one less-safe value, as the parameter id and the exact value; repeat for each value",
     )
     mav = parser.add_argument_group("MAVLink drone (--drone mavlink)", "See docs/open-drone-support.md")
     mav.add_argument(
@@ -2474,15 +2500,21 @@ def _run_flight_edge(
     log: StructuredLogger,
     stop_event: threading.Event | None = None,
     envelope: SafetyEnvelope | None = None,
+    argv: Sequence[str] | None = None,
+    parser: argparse.ArgumentParser | None = None,
 ) -> None:
     """Run a flying edge: drone, lane executor, safety controls and the edge loop.
 
-    Setting ``stop_event`` ends the edge loop; the drone lands first.
+    Setting ``stop_event`` ends the edge loop; the drone lands first. ``argv`` and ``parser`` are the
+    command line and parser ``main`` read, which give the resolution its command-line layer.
     """
     if envelope is None:
         envelope = _startup_envelope(args)
     temp_limits = _temp_limits(log, getattr(args, "drone_id", None))
     guards = _flight_guards(os.environ)
+    # After today's own start checks, so they keep refusing with today's messages, and before the
+    # drone is built or contacted (EDGE-1).
+    _resolve_edge_start(args, log, argv=argv, parser=parser)
     kind = _drone_kind(args)
     holder: dict[str, Any] = {}
     if kind == "mavlink":
@@ -2648,7 +2680,9 @@ def _resolve_drone_and_source(args: argparse.Namespace, parser: argparse.Argumen
     same name and may not be another). ``--drone mavlink`` needs
     ``--source`` camera, file or url (default camera) and the outdoor
     settings in metres; the indoor ``--alt-slot`` (centimetres) and the Tello
-    options do not apply to it.
+    options do not apply to it. Once they are settled, the edge chooses its
+    model and checks it against the backend (``_resolve_model``), still before
+    it contacts any drone.
     """
     drone = args.drone
     explicit_source = not isinstance(args.source, _Default)
@@ -2667,11 +2701,13 @@ def _resolve_drone_and_source(args: argparse.Namespace, parser: argparse.Argumen
         parser.error(f"{', '.join(mavlink_only)} only apply to --drone mavlink")
     if drone is None:
         args.source = str(args.source)
+        _resolve_model(args, parser)
         return
     if drone in ("tello", "fake"):
         if explicit_source and args.source != drone:
             parser.error(f"--drone {drone} takes its frames from the drone; use --source {drone} or leave it out")
         args.source = drone
+        _resolve_model(args, parser)
         return
     # --drone mavlink
     if explicit_source and args.source not in _CAPTURE_SOURCES:
@@ -2701,6 +2737,80 @@ def _resolve_drone_and_source(args: argparse.Namespace, parser: argparse.Argumen
         )
     except ValueError as exc:
         parser.error(str(exc))
+    _resolve_model(args, parser)
+
+
+def _resolve_model(args: argparse.Namespace, parser: argparse.ArgumentParser, environ: Any = None) -> None:
+    """Choose the model of a flying edge and check it against its backend; ``parser.error`` on a mismatch.
+
+    Runs before the edge contacts any drone. An edge that flies nothing has no
+    backend to check, so it chooses no model. Without ``--model``,
+    ``FLIGHTRISK_MODEL``, ``--airframe``, an inventory unit or a launcher model,
+    the model is the backend's default, which always matches.
+    """
+    from flightrisk.edge_resolution import ModelRefused, resolve_model
+
+    args.model_choice = None
+    drone = _drone_kind(args)
+    if drone is None:
+        return
+    frame_path = "drone_video" if args.source in _FLIGHT_SOURCES else "capture_source"
+    try:
+        args.model_choice = resolve_model(
+            drone=drone, drone_id=args.drone_id, frame_path=frame_path, model_flag=getattr(args, "model", None),
+            airframe_flag=getattr(args, "airframe", None), environ=os.environ if environ is None else environ,
+        )
+    except ModelRefused as exc:
+        parser.error(str(exc))
+
+
+def _resolve_edge_start(
+    args: argparse.Namespace,
+    log: StructuredLogger,
+    *,
+    argv: Sequence[str] | None = None,
+    parser: argparse.ArgumentParser | None = None,
+    environ: Any = None,
+) -> None:
+    """Resolve a flying edge's unit before it contacts its drone (EDGE-1); ``SystemExit`` on a refusal.
+
+    Keeps the result in ``args.edge_resolution``, which the start log and the consumers rewired from
+    A3.3 on read; nothing reads it yet. Runs once: a second call returns at once. An edge that flies
+    nothing resolves nothing.
+    """
+    from flightrisk.edge_resolution import (
+        EdgeStartRefused,
+        ModelRefused,
+        log_edge_start,
+        resolve_edge,
+        resolve_model,
+    )
+
+    if getattr(args, "edge_resolution", None) is not None:
+        return
+    args.edge_resolution = None
+    drone = _drone_kind(args)
+    if drone is None:
+        return
+    environ = os.environ if environ is None else environ
+    drone_id = getattr(args, "drone_id", None)
+    try:
+        choice = getattr(args, "model_choice", None)
+        if choice is None:
+            frame_path = "drone_video" if getattr(args, "source", None) in _FLIGHT_SOURCES else "capture_source"
+            choice = resolve_model(
+                drone=drone, drone_id=drone_id, frame_path=frame_path, model_flag=getattr(args, "model", None),
+                airframe_flag=getattr(args, "airframe", None), environ=environ,
+            )
+        args.edge_resolution = resolve_edge(
+            choice=choice, drone=drone, drone_id=drone_id, source=getattr(args, "source", None),
+            environ=environ, argv=() if argv is None else argv, parser=parser,
+        )
+        log_edge_start(args.edge_resolution, log, drone_id=drone_id)
+    except (EdgeStartRefused, ModelRefused) as exc:
+        text = str(exc) if isinstance(exc, EdgeStartRefused) else f"{exc} Refusing to start."
+        log.error("edge_start_refused", drone_id=drone_id, reason=text)
+        raise SystemExit(f"edge_device: {text}") from None
 
 
 def _init_edge_telemetry(log: StructuredLogger) -> bool:
@@ -2771,7 +2881,9 @@ def main(argv: list[str] | None = None) -> None:
         # Checked before anything connects, so a slot above the ceiling
         # limit stops the edge at once with the reason.
         envelope = _startup_envelope(args)
-        _run_flight_edge(args, log, envelope=envelope)
+        # ``_run_flight_edge`` resolves the unit with this command line before it builds the drone.
+        _run_flight_edge(args, log, envelope=envelope, argv=sys.argv[1:] if argv is None else list(argv),
+                         parser=parser)
         return
 
     source = _build_source(args, parser, log)
