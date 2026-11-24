@@ -1052,6 +1052,14 @@ scope adds `flightrisk/mission/`, `flightrisk/drone/rth/` and `flightrisk/drone/
 they exist. Measured on `82ec697` with the 160 ids of `parameters.md`: 524 findings with 514 distinct keys
 in 57 of the 76 files in scope (`guard_main.txt`, regenerated with this revision).
 
+The Tello coupling test (`tests/test_tello_coupling.py`, XCP) is the SEAM-6 extension: no code under
+`flightrisk/` or `scripts/` outside `flightrisk/drone/tello*.py`, `registry.py` and `backends.py` imports a Tello module, compares against a
+Tello adapter or model name, or uses a Tello-only constant, except the permanent exemptions
+`flightrisk/main.py`, `flightrisk/drone/mavlink.py`, `scripts/demo_edge.sh`, `scripts/demo_edge.ps1`,
+`scripts/demo_edge_pair.ps1` and `tests/test_demo_smoke.py` (owner decision). Today's other violations are a
+checked-in baseline that may only shrink; each phase deletes the entries it fixes. The runtime-import guard
+becomes a named-adopter allowlist in the same pull request.
+
 ## 23. Migration notes for operators
 
 These go into `docs/launcher.md`, `docs/fleet-setup.md` and `docs/open-drone-support.md` with the PR that
@@ -1177,9 +1185,37 @@ lines there before work starts, and any other failing assertion stops the PR. Th
 (`tests/test_param_parity.py`) fails on any acceptance difference not listed here, and a test checks that
 every "from <PR>" tag in `parameters.md` matches an item below naming that PR and that row.
 
-- **A1, A2, A3, B1:** none.
+- **A1, A2, B1:** none.
+- **A3, A4, A5:** 47. Each adopter of `resolve_unit` refuses at its own start the combinations pinned in
+  `ACCEPTED_TODAY_REFUSED_BY_RESOLVE_UNIT` (`tests/test_param_parity.py`) for the names it reads (cross-value
+  constraints K-3, K-6, K-8, K-12 and the test-adapter temperature pair), and a production (not simulated)
+  MAVLink unit ignores the test-adapter fact overrides pinned in `IGNORED_ON_PRODUCTION_UNIT`, with one log
+  line naming each variable (N-10, FACT-3). Environment and flag ranges stay today's (SEAM-10). Assertions:
+  any existing test that starts an edge, a ground or a launcher with one of the pinned combinations, named in
+  the description. For A5 the assertions are `tests/test_launcher_commands.py:67` and `:119-121`.
+- **A3:** 53. A MAVLink `generic_multirotor` no longer declares an airframe maximum altitude:
+  `MavlinkFleetDrone` drops its 120 m declaration (`int(FIELD_LIMITS.max_alt_slot_cm / 100)` in
+  `flightrisk/drone/mavlink_fleet.py`), and row 8 (`envelope.max_altitude_cm`) of `generic_multirotor` records
+  no airframe limit, changed in the same PR with a `safety-value-changes.md` entry. Height stays bounded,
+  unchanged, by the operator's mission ceiling (row 2, at most 12000 cm), the altitude slot range (row 4, at
+  most 12000 cm), the `FENCE_ALT_MAX` check of section 13 and, from B3 on, the uploaded autopilot fence; the
+  FlightRisk geofence is horizontal and does not bound height.
+  Every consumer of the declared maximum altitude must handle 'no limit' without crashing and without falling back to a lower or default cap.
+  `MavlinkFleetDrone` explicitly declares no limit (None), and the `DroneCapabilities` default of 120 m
+  (`flightrisk/drone/controller.py`) does not apply to it. A3d also corrects the stale "5 m" note at
+  `scripts/make_param_golden.py:178`. Phase: A3d.
+  Assertions: the tests that pin that declaration or row 8's 12000 cm for `generic_multirotor`, named in its
+  description.
 - **A4:** 1. A fleet mixing indoor and field units is refused at Plan (nitpick 12).
-- **A5:** none. Assertions: `tests/test_launcher_commands.py:67`, `:119-121`.
+  48. The dashboard's default MAVLink address becomes `udpin://0.0.0.0:14540` (today `udp://:14540`, the
+  listen form MAVSDK 2 and later reject). Assertions: `tests/test_config.py:107`.
+  49. Without `inventory.json`, an edge-reported model that the catalogue does not know no longer becomes a
+  `tello` unit; Plan refuses that unit, naming the reported model (CAP-2, INV-5). Fleets of known models are
+  unchanged. Assertions: `tests/test_inventory.py:265`.
+- **X0, XCa, XCb, XL:** none.
+- **XCP:** none. Assertions: `tests/test_param_change_control.py:167`
+  (`test_no_runtime_module_imports_params_or_hardware` becomes the named-adopter allowlist of
+  `tests/param_adopters.py`; the coupling test `tests/test_tello_coupling.py` is added beside it).
 - **B2:** 2. Field Start is refused without a 3D fix, with too few satellites, with receiver accuracy above
   `home.accuracy_cm`, with the autopilot's home beyond `home.max_offset_cm`, or outside the mission fence.
   3. A home that changes in flight lands with `no_known_home`. 4. Positioning uncertainty is reported as
@@ -1200,6 +1236,17 @@ every "from <PR>" tag in `parameters.md` matches an item below naming that PR an
   8. On a MAVLink unit the critical battery is the autopilot's critical action, not the edge's 15 %.
   40. A field takeoff is refused unless `mavsdk_server` is tied to the edge, and a control loop that stalls
   longer than the autopilot's GCS timeout kills the server (N-1). 41. The edge reports `ap_link_loss`.
+  50. `--allow-unverified-failsafes` and `link.require_failsafes = false` are refused unless the unit is a
+  verified simulated unit (CAP-6); today they skip every failsafe check on any vehicle (MAV-14).
+  Assertions: the MAVLink start-path tests that pass the flag with a fake vehicle that is not verified
+  simulated, named in the description.
+  51. A field takeoff is also refused while another process holds the autopilot's serial device (a leftover
+  `mavsdk_server`); the launcher and the edge show the preflight row "serial port free" (extends item 40,
+  N-1). Assertions: none expected; any found are named in the description.
+  52. The MAVLink adapter turns in place through MAVSDK (`MAV_CMD_CONDITION_YAW` sent with
+  `mavlink_passthrough`, no pymavlink), so stepped camera sensing no longer cuts a lane the drone does not
+  already face. B4f builds this only if the B1b SITL acceptance scenario shows lanes cut because the drone
+  cannot yaw in place. Assertions: tests that pin such a cut for a MAVLink drone, named in the description.
 - **D1:** 9. Field base separation becomes 500 cm. 10. Bands are enforced at Plan. 11. A field mission
   needs an obstacle top per area, and slots below it plus the margin are refused. 12. Homes closer than the
   base separation (plus both accuracies in the field) are refused; a shared landing area gets an order.
