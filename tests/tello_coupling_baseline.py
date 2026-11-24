@@ -26,10 +26,6 @@ from __future__ import annotations
 
 COUPLING_BASELINE: dict[str, dict[tuple[str, str, str, str], int]] = {
     "X-core": {
-        # flightrisk/hardware/features.py
-        ('flightrisk/hardware/features.py', '', 'model_default', 'tello_sdk_udp'): 1,
-        ('flightrisk/hardware/features.py', '_is_tello', 'compare', 'TELLO_ADAPTER'): 1,
-        ('flightrisk/hardware/features.py', 'feature_reason', 'name', '_is_tello'): 3,
         # flightrisk/params/docs.py
         ('flightrisk/params/docs.py', '', 'literal', 'tello'): 1,
         ('flightrisk/params/docs.py', '_fact_table', 'literal', 'tello'): 1,
@@ -221,7 +217,7 @@ COUPLING_BASELINE: dict[str, dict[tuple[str, str, str, str], int]] = {
         ('flightrisk/hardware/catalogue.py', '', 'literal', 'tello'): 1,
         ('flightrisk/hardware/catalogue.py', '', 'literal', 'tello_edu'): 1,
         ('flightrisk/hardware/catalogue.py', '', 'literal', 'tello_sdk_udp'): 3,
-        ('flightrisk/hardware/catalogue.py', '', 'model_default', 'Tello'): 2,
+        ('flightrisk/hardware/catalogue.py', '', 'model_default', 'Tello'): 3,
         ('flightrisk/hardware/catalogue.py', '', 'model_default', 'tello'): 3,
         ('flightrisk/hardware/catalogue.py', '', 'model_default', 'tello_edu'): 1,
         ('flightrisk/hardware/catalogue.py', '', 'model_default', 'tello_sdk_udp'): 2,
