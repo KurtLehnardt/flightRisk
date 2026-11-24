@@ -33,7 +33,7 @@ The edge used to decide both with `--source`. They are now separate, and every o
 |---|---|---|
 | `--source camera` (default), `--source file`, `--source url` | none | camera, video file, stream URL |
 | `--source tello`, `--drone tello` | Tello | Tello video |
-| `--source fake`, `--drone fake` | simulated Tello | blank frames |
+| `--source fake`, `--drone fake` | simulated drone | blank frames |
 | `--drone mavlink` (`--source camera` by default, or `file` or `url`) | PX4 or ArduPilot over MAVLink | the companion computer's camera, a file (looped) or a stream URL |
 
 `--drone tello --source camera` and `--drone mavlink --source tello` are refused at startup with the reason, as are the MAVLink options without `--drone mavlink` and `--alt-slot` (centimetres, indoor) with it. `--drone mavlink` also needs `--frame-heading-deg` (the same value on every drone of the fleet) and refuses a `--mavlink-address` whose scheme is not `serial`, `udpin`, `udpout`, `tcpin` or `tcpout` or that starts with `-`.
