@@ -140,12 +140,29 @@ from __future__ import annotations
 import logging
 import math
 import re
+import dataclasses
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Optional, Union
 
 from flightrisk.hardware.catalogue import BUILTIN_MODELS, SCALES, DroneModel
 from flightrisk.params.constraints import FILE_SOURCES, check_constraints, stored_feature_off, stored_switch_off
-from flightrisk.params.messages import render_refused_input, render_unavailable_capability
+from flightrisk.params.altitude import (
+    AIRFRAME_MAX_ID,
+    CAP_BOUND_ROWS,
+    CAP_ID,
+    CAP_ON_ID,
+    acknowledgement_problem,
+    airframe_max_cm,
+    altitude_limit_cm,
+)
+from flightrisk.params.messages import (
+    render_cap_off_unknown_maximum,
+    render_confirm_flag_not_allowed,
+    render_incomplete_acknowledgement,
+    render_inventory_only,
+    render_refused_input,
+    render_unavailable_capability,
+)
 from flightrisk.params.spec import Bound, Confirm, EffectiveValue, Edit, Kind, ParamSpec, Safer, Source, Unit
 from flightrisk.params.table import (
     LAUNCHER_CONFIRMED_ONLY,
@@ -670,6 +687,60 @@ IGNORED_WHERE_NOT_APPLICABLE = frozenset({
 })
 
 
+#: Rows only the inventory may set: the airframe maximum altitude is a fact about the airframe, so a
+#: params file or the launcher is refused (design section 27 item 53). A custom model states it as its
+#: default. The row has no environment name or flag. Pinned by a test.
+INVENTORY_ONLY = frozenset({AIRFRAME_MAX_ID})
+
+#: The layers whose ceiling or slot value may pass the cap's bound when the cap is off (item 53).
+_CAP_RAISE_SOURCES = (Source.INVENTORY, Source.LAUNCHER)
+
+
+def _cap_bound(spec: ParamSpec, profile: str, scale: str, result: Mapping[str, EffectiveValue]) -> Optional[Bound]:
+    """The row's bound when its upper end is the regulatory cap at field scale, else None (item 53)."""
+    bound = spec.bounds.get(profile)
+    cap = result.get(CAP_ID)
+    if spec.id not in CAP_BOUND_ROWS or scale != "field" or bound is None or cap is None:
+        return None
+    return bound if bound.hi == cap.value else None
+
+
+def _cap_off_limit(result: Mapping[str, EffectiveValue]) -> Optional[int]:
+    """The airframe maximum when the cap is off and the maximum is known, else None (item 53)."""
+    cap_on = result.get(CAP_ON_ID)
+    if cap_on is None or cap_on.value is not False:
+        return None
+    try:
+        return altitude_limit_cm(result)
+    except ValueError:
+        return None
+
+
+def _raise_cap_bounds(result: dict[str, EffectiveValue], specs: Mapping[str, ParamSpec], drone: DroneModel,
+                      unit_id: str, scale: str, raised: Mapping[str, tuple[Any, str, Source]]) -> None:
+    """Check the ceiling and slot values above the cap's bound, and raise those rows' bound (item 53).
+
+    A value above the bound from the inventory or the launcher stands only when the cap is off and the
+    unit's known airframe maximum allows it. The environment, flags and the params file keep the bound.
+    """
+    limit = _cap_off_limit(result)
+    for param_id, (value, detail, source) in raised.items():
+        if result[param_id].source is not source:
+            continue  # A later layer set the row, and its value was checked against the bound.
+        spec = specs[param_id]
+        bound = spec.bounds[drone.profile]
+        hi = limit if limit is not None and limit > bound.hi else bound.hi
+        if value > hi:
+            raise _refusal(spec, drone, unit_id, value, detail, (bound.lo, hi), source)
+    if limit is None:
+        return
+    for param_id in CAP_BOUND_ROWS:
+        effective = result.get(param_id)
+        bound = _cap_bound(specs[param_id], drone.profile, scale, result) if effective is not None else None
+        if bound is not None and limit > bound.hi:
+            result[param_id] = dataclasses.replace(effective, hi=limit)
+
+
 def _new_name_without_bound(spec: ParamSpec, profile: str, name: str) -> bool:
     """True for a number from a name today's code does not read, on a row with no target bound."""
     return not read_today(name) and spec.kind in _NUMERIC_KINDS and spec.bounds.get(profile) is None
@@ -716,6 +787,9 @@ def parse_confirm_flags(items: Iterable[str]) -> dict[str, str]:
         param_id, sep, value = item.partition("=")
         if not sep or not param_id.strip() or not value.strip():
             raise ParamRefused(f"--confirm-less-safe {item} is not of the form id=value. Refusing to start.",
+                               source=Source.CLI)
+        if param_id.strip() in LAUNCHER_CONFIRMED_ONLY:
+            raise ParamRefused(render_confirm_flag_not_allowed(param_id.strip()), param_id=param_id.strip(),
                                source=Source.CLI)
         out[param_id.strip()] = value.strip()
     return out
@@ -788,6 +862,7 @@ def resolve(
     specs: dict[str, ParamSpec] = {}
     bases: dict[str, Any] = {}
     result: dict[str, EffectiveValue] = {}
+    raised: dict[str, tuple[Any, str, Source]] = {}
     for base_spec in TABLE:
         spec = narrowing.narrow(base_spec) if narrowing is not None else base_spec
         default = spec.defaults.get(profile)
@@ -818,6 +893,8 @@ def resolve(
                 if edit is Edit.FACT:
                     raise ParamRefused(FACT_NOT_SETTABLE.format(detail=detail), source=source)
                 raise _refusal(spec, drone, unit_id, raw, detail, None, source)
+            if source in _ID_LAYERS and param_id in INVENTORY_ONLY and source is not Source.INVENTORY:
+                raise ParamRefused(render_inventory_only(param_id, detail), param_id=param_id, source=source)
             if edit is Edit.READ_ONLY:
                 log.warning("%s is ignored: %s is read-only for %s", detail, param_id, drone.id)
                 continue
@@ -844,11 +921,15 @@ def resolve(
                 raise _refusal(spec, drone, unit_id, raw, detail, None, source) from None
             if is_off and spec.safety_switch and source in FILE_SOURCES:
                 raise ParamRefused(stored_switch_off(param_id, value, detail), param_id=param_id, source=source)
-            if not is_off:
+            cap_bound = _cap_bound(spec, profile, scale, result) if source in _CAP_RAISE_SOURCES else None
+            if not is_off and cap_bound is not None and _is_number(value) and value > cap_bound.hi:
+                raised[param_id] = (value, detail, source)  # Checked once the cap switch is resolved.
+            elif not is_off:
                 value = _check_bound(spec, drone, unit_id, value, detail, source,
                                      name.name if name else None, today_accepts, narrowing is not None)
             result[param_id] = _effective(spec, drone, value, bases[param_id], source, detail, is_off)
 
+    _raise_cap_bounds(result, specs, drone, unit_id, scale, raised)
     return result
 
 
@@ -903,8 +984,10 @@ def check_resolved(
             continue
         if not needs_confirmation(spec, effective):
             continue
-        launcher_only = param_id in LAUNCHER_CONFIRMED_ONLY and effective.source is Source.LAUNCHER
-        if effective.source in FILE_SOURCES or launcher_only:
+        if param_id in LAUNCHER_CONFIRMED_ONLY and effective.source is Source.LAUNCHER:
+            confirmation = confirmed.get(param_id) if launcher_present else None
+            _check_acknowledged(spec, model, effective, confirmation, result, unit_id, launcher_present)
+        elif effective.source in FILE_SOURCES:
             if not _confirmed(spec, confirmed.get(param_id), effective.value):
                 raise _unconfirmed(spec, model, effective, effective.base_default, launcher_present)
         elif effective.source in _NAME_LAYERS:
@@ -912,6 +995,28 @@ def check_resolved(
     violation = check_constraints(result, model.name, profile=model.profile)
     if violation is not None:
         raise ParamRefused(violation.message)
+
+
+def _check_acknowledged(spec: ParamSpec, model: DroneModel, effective: EffectiveValue, record: Any,
+                        result: Mapping[str, EffectiveValue], unit_id: str, launcher_present: bool) -> None:
+    """Take the altitude cap off only with a complete acknowledgement and a known airframe maximum (item 53).
+
+    Logs the accepted acknowledgement at warning level with the unit, the cap and the airframe maximum.
+    """
+    if record is None:
+        raise _unconfirmed(spec, model, effective, effective.base_default, launcher_present)
+    problem = acknowledgement_problem(record)
+    if problem is not None:
+        raise ParamRefused(render_incomplete_acknowledgement(unit_id, spec.id, problem), param_id=spec.id,
+                           source=Source.LAUNCHER)
+    airframe = airframe_max_cm(result)
+    if airframe is None:
+        raise ParamRefused(render_cap_off_unknown_maximum(unit_id, model.name), param_id=spec.id,
+                           source=Source.LAUNCHER)
+    ack = record["ack"]
+    log.warning("altitude cap off on %s: cap %s cm, airframe maximum %s cm, acknowledgement %s "
+                "text_version %s at %s by %s", unit_id, _whole(result[CAP_ID].value), airframe, ack["id"],
+                ack["text_version"], ack["at"], ack["by"])
 
 
 def _unconfirmed(spec: ParamSpec, model: DroneModel, effective: EffectiveValue, base: Any,

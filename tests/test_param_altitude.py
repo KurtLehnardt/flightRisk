@@ -19,6 +19,10 @@ G = "generic_multirotor"
 BY_ID = {row.id: row for row in TABLE}
 
 
+ACK = {"value": False, "ack": {"id": "outside_faa_jurisdiction", "text_version": "1",
+                               "at": "2026-11-24T18:00:00Z", "by": "operator"}}
+
+
 def _values(cap_on=True, cap=12000, airframe=UNSET):
     return {CAP_ON_ID: cap_on, CAP_ID: cap, AIRFRAME_MAX_ID: airframe}
 
@@ -75,7 +79,7 @@ def test_helper_takes_resolved_values():
     stated = resolve(G, "g1", {Source.INVENTORY: {AIRFRAME_MAX_ID: 50000}})
     assert altitude_limit_cm(stated) == 12000
     off = resolve_unit(G, "g1", {Source.INVENTORY: {AIRFRAME_MAX_ID: 50000},
-                                 Source.LAUNCHER: {CAP_ON_ID: False, LAUNCHER_CONFIRMED: {CAP_ON_ID: False}}})
+                                 Source.LAUNCHER: {CAP_ON_ID: False, LAUNCHER_CONFIRMED: {CAP_ON_ID: ACK}}})
     assert off[CAP_ON_ID].value is False
     assert altitude_limit_cm(off) == 50000
 
@@ -143,7 +147,8 @@ def test_cap_off_from_the_launcher_without_confirmation_is_refused():
 
 
 def test_cap_off_from_the_launcher_with_confirmation_is_accepted():
-    result = resolve_unit(G, "g1", {Source.LAUNCHER: {CAP_ON_ID: False, LAUNCHER_CONFIRMED: {CAP_ON_ID: False}}})
+    result = resolve_unit(G, "g1", {Source.INVENTORY: {AIRFRAME_MAX_ID: 50000},
+                                    Source.LAUNCHER: {CAP_ON_ID: False, LAUNCHER_CONFIRMED: {CAP_ON_ID: ACK}}})
     assert result[CAP_ON_ID].value is False and result[CAP_ON_ID].source is Source.LAUNCHER
 
 
