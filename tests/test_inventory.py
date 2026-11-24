@@ -272,3 +272,55 @@ def test_drone_id_rule_matches_the_launcher():
     from flightrisk.launcher import settings
     assert settings._DRONE_ID is DRONE_ID
     assert DRONE_ID.pattern == r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+
+
+def _gimbal_model(monkeypatch, pmin=-30, pmax=0):
+    import dataclasses
+    from flightrisk.hardware import inventory as inv
+    from flightrisk.hardware.catalogue import BUILTIN_MODELS, CameraSpec
+    cam = CameraSpec(id="rgb", mount="gimbal", mount_kind="gimbal", orientation=None, pitch_min_deg=pmin,
+                     pitch_max_deg=pmax, pitch_measured=True, stream_w_px=1920, stream_h_px=1080,
+                     hfov_deg=82, fps=30)
+    model = dataclasses.replace(BUILTIN_MODELS["generic_multirotor"], cameras=(cam,))
+    monkeypatch.setattr(inv, "BUILTIN_MODELS", {**BUILTIN_MODELS, "gimbal30": model})
+    return {**unit(), "model": "gimbal30"}
+
+
+def test_mission_pitch_must_lie_in_the_mounts_catalogue_range(monkeypatch):
+    base = _gimbal_model(monkeypatch)
+    with pytest.raises(InventoryRefused, match="between -30 and 0"):
+        parse_inventory(doc(units=[{**base, "mounts": {"gimbal": {"mission_pitch_deg": -90}}}]))
+    parse_inventory(doc(units=[{**base, "mounts": {"gimbal": {"mission_pitch_deg": -30}}}]))
+
+
+def test_fixed_mount_accepts_only_its_fixed_pitch():
+    with pytest.raises(InventoryRefused, match="fixed"):
+        parse_inventory(doc(units=[unit(mounts={"front": {"mission_pitch_deg": -90}})]))
+    parse_inventory(doc(units=[unit(mounts={"front": {"mission_pitch_deg": 0}})]))
+
+
+HUGE = 10 ** 400
+
+
+@pytest.mark.parametrize("make", [
+    lambda v: doc(units=[unit(mounts={"front": {"mission_pitch_deg": v}})]),
+    lambda v: doc(rev=v),
+    lambda v: doc(version=v),
+    lambda v: doc(units=[unit(name=v)]),
+    lambda v: doc(units=[unit(serial=v)]),
+    lambda v: doc(units=[unit(available=v)]),
+    lambda v: doc(units=[unit(features={"birdseye_search": v})]),
+    lambda v: doc(units=[unit(link={"kind": "wifi_ap", "ssid": v})]),
+    lambda v: doc(units=[unit(unit_id=v)]),
+    lambda v: doc(units=[unit(model=v)]),
+    lambda v: doc(models={"site_hex": {**HEX, "param_defaults": {"envelope.ceiling_cm": v}}}),
+    lambda v: doc(models={"site_hex": {**HEX, "param_bounds": {"envelope.ceiling_cm": {"lo": v, "hi": v}}}}),
+    lambda v: doc(models={"site_hex": {**HEX, "name": v}}),
+    lambda v: doc(models={"site_hex": {**HEX, "cameras": v}}),
+])
+@pytest.mark.parametrize("value", [HUGE, -HUGE, float("inf"), float("nan")])
+def test_a_huge_number_in_any_field_is_refused_not_crashed(make, value):
+    try:
+        parse_inventory(make(value))
+    except InventoryRefused:
+        pass

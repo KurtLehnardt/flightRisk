@@ -190,3 +190,12 @@ def test_safety_switch_off_needs_confirmation():
         resolve_features(TELLO, {FORWARD_OBSTACLE_SENSING: False})
     gates = resolve_features(TELLO, {FORWARD_OBSTACLE_SENSING: False}, confirmed_off=True)
     assert gates[FORWARD_OBSTACLE_SENSING]["on"] is False
+
+
+def test_level_search_conflict_names_the_mount_and_the_feature_requested():
+    one_gimbal = _with(GENERIC, _cam(id="rgb", mount="gimbal", sensor="rgb"))
+    with pytest.raises(FeatureRefused) as err:
+        resolve_features(one_gimbal, {"level_search": True, "birdseye_search": True},
+                         mission_pitch_deg={"gimbal": 0}, source="camera")
+    assert str(err.value) == ("camera mount `gimbal` cannot look level for level search and down for "
+                              "bird's-eye search at once")

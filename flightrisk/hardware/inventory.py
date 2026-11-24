@@ -143,8 +143,29 @@ def _walk_facts(value: Any, profile: str, unit_id: str) -> None:
             _walk_facts(item, profile, unit_id)
 
 
+MAX_REV = 2**53
+
+
 def _finite_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:  # an integer too large for a float
+        return False
+
+
+def _check_pitch(unit_id: str, mount: str, pitch: float, model) -> None:
+    """A declared mission pitch lies within the catalogue's pitch range of every camera on the mount."""
+    for camera in (c for c in model.cameras if c.mount == mount):
+        if camera.mount_kind == "fixed" or camera.pitch_min_deg is None or camera.pitch_max_deg is None:
+            fixed = -90 if camera.orientation == "downward" else 0
+            if pitch != fixed:
+                raise InventoryRefused(f"unit {unit_id}: mount {mount!r} is fixed and looks at {fixed} degrees; "
+                                       "its `mission_pitch_deg` must match.")
+        elif not camera.pitch_min_deg <= pitch <= camera.pitch_max_deg:
+            raise InventoryRefused(f"unit {unit_id}: mount {mount!r} `mission_pitch_deg` must be between "
+                                   f"{camera.pitch_min_deg} and {camera.pitch_max_deg} degrees.")
 
 
 def _unit_model(unit_id: str, model_id: Any, models: Mapping[str, CustomModel]):
@@ -199,6 +220,7 @@ def _check_unit(record: Any, models: Mapping[str, CustomModel]) -> dict:
         _check_keys(unit_id, f"mounts.{mount}", entry, MOUNT_FIELDS)
         if not _finite_number(entry.get("mission_pitch_deg")):
             raise InventoryRefused(f"unit {unit_id}: mount {mount!r} needs a numeric `mission_pitch_deg`.")
+        _check_pitch(unit_id, mount, entry["mission_pitch_deg"], model)
     return dict(record)
 
 
@@ -212,7 +234,7 @@ def parse_inventory(data: Any, *, edge_token: Optional[str] = None) -> Inventory
     if data.get("version") != VERSION or isinstance(data.get("version"), bool):
         raise InventoryRefused(f"the inventory version must be {VERSION}.")
     rev = data.get("rev", 0)
-    if not isinstance(rev, int) or isinstance(rev, bool) or rev < 0:
+    if not isinstance(rev, int) or isinstance(rev, bool) or rev < 0 or rev > MAX_REV:
         raise InventoryRefused("the inventory `rev` must be a whole number, 0 or more.")
     _walk_secrets(data, edge_token)
     raw_models = data.get("models") or {}
@@ -227,7 +249,7 @@ def parse_inventory(data: Any, *, edge_token: Optional[str] = None) -> Inventory
             models[model_id] = custom_model(model_id, record)
         except ParamRefused as exc:
             raise InventoryRefused(str(exc)) from exc
-        except (AttributeError, TypeError, KeyError) as exc:  # a hand-edited field of the wrong type
+        except (AttributeError, TypeError, KeyError, OverflowError, ValueError) as exc:  # a hand-edited field of the wrong type
             raise InventoryRefused(f"model {_shown(model_id)} has a field of the wrong type; "
                                    "see the inventory format.") from exc
     units, seen = [], set()

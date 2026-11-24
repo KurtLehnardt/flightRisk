@@ -81,13 +81,13 @@ def mount_roles(cameras: Iterable[CameraSpec], mission_pitch_deg: Mapping[str, f
     return roles
 
 
-def role_conflict(mount: str, needed_roles: Sequence[str]) -> Optional[str]:
+def role_conflict(mount: str, needed_roles: Sequence[str], level_purpose: str = "obstacle sensing") -> Optional[str]:
     """Refusal text when features switched on need more than one role of one mount, else None."""
     distinct = sorted(set(needed_roles))
     if len(distinct) < 2:
         return None
     if set(distinct) == {ROLE_LEVEL, ROLE_NADIR}:
-        return (f"camera mount `{mount}` cannot look level for obstacle sensing and down for "
+        return (f"camera mount `{mount}` cannot look level for {level_purpose} and down for "
                 "bird's-eye search at once")
     return f"camera mount `{mount}` cannot serve the roles {', '.join(distinct)} at once"
 
@@ -265,7 +265,9 @@ def requested_role_conflict(model: DroneModel, wanted: Iterable[str]) -> Optiona
     needed = sorted({FEATURE_ROLES[f] for f in wanted if f in FEATURE_ROLES} - fixed_roles)
     if len(gimbals) != 1:
         return None
-    return role_conflict(gimbals[0], needed)
+    wanted = set(wanted)
+    purpose = "obstacle sensing" if FORWARD_OBSTACLE_SENSING in wanted else "level search"
+    return role_conflict(gimbals[0], needed, purpose)
 
 
 #: Refusal when a safety switch is switched off without the operator's confirmation (FEA-6, C5).
