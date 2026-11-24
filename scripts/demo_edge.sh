@@ -12,7 +12,7 @@
 # when ALT_CM is above the ceiling limit, FLIGHTRISK_CEILING_CM minus
 # FLIGHTRISK_CEILING_MARGIN_CM (200 - 60 = 140 cm by default); see docs/ceiling-and-altitude.md.
 # The Tello address and ground URL come from scripts/fleet_env.sh. In ap mode, set
-# export FLIGHTRISK_GROUND_LOCAL=1 on the ground-station laptop (which runs the ground station) so edge-1 connects to
+# export FLIGHTRISK_GROUND_LOCAL=1 on the laptop that runs the ground station so edge-1 connects to
 # ws://127.0.0.1:9000 and keeps flying if the wired cable is pulled; without it the edge
 # dials ws://10.42.0.1:9000, which is what the Windows laptop must do.
 # With obstacle sensing required (the default) the edge needs capture stamps on its video, so set

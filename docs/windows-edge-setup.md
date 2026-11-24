@@ -45,7 +45,7 @@ Use `setx FLIGHTRISK_EDGE_TOKEN "<secret>"` to persist it for future terminals.
 
 ## 5. Check the link
 
-With the ground station side started on the ground-station laptop, run on this laptop:
+With the ground station already running on the other laptop, run on this laptop:
 
 ```powershell
 venv\Scripts\python.exe scripts\check_fleet_link.py --help
@@ -59,11 +59,11 @@ Then run `scripts\check_fleet_link.py` with the options shown in the help text t
 powershell -ExecutionPolicy Bypass -File scripts\demo_edge.ps1
 ```
 
-`scripts\demo_edge.ps1` starts the drone 2 edge process against `ws://10.42.0.1:9000` (leave `FLIGHTRISK_GROUND_LOCAL` unset here, because the ground station is on the ground-station laptop) using the token from step 4.
+`scripts\demo_edge.ps1` starts the drone 2 edge process against `ws://10.42.0.1:9000` (leave `FLIGHTRISK_GROUND_LOCAL` unset here, because the ground station is on the other laptop) using the token from step 4.
 
 ## 7. Thunderbolt link to the ground-station laptop (optional, replaces the Ethernet cable in step 3)
 
-This is Path 3 in `docs/fleet-setup.md`, which has the validation checklist and the fallback ladder. It is UNVERIFIED on this laptop. Windows 11 has built-in Ethernet over USB4 that works with a Thunderbolt peer (Microsoft documentation), but Mac to Windows on this hardware has not been tested. Windows 10 is not supported for this path. The address plan is the same as step 3: Mac 10.42.0.1, this laptop 10.42.0.2, subnet 10.42.0.0/24, no gateway.
+This is Path 3 in `docs/fleet-setup.md`, which has the validation checklist and the fallback ladder. It is UNVERIFIED on this laptop. Windows 11 has built-in Ethernet over USB4 that works with a Thunderbolt peer (Microsoft documentation), but macOS to Windows on this hardware has not been tested. Windows 10 is not supported for this path. The address plan is the same as step 3: ground-station laptop 10.42.0.1, this laptop 10.42.0.2, subnet 10.42.0.0/24, no gateway.
 
 1. Check that the laptop has a USB4 or Thunderbolt port, and note the Windows version. In PowerShell:
 

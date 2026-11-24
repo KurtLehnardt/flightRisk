@@ -1,6 +1,6 @@
 # Two standard Tellos from one Windows laptop
 
-This note describes how one Windows laptop (the edge laptop) flies two standard (non-EDU) Tello drones, one per Wi-Fi adapter, as two FlightRisk edge processes: edge-1 for drone-1 and edge-2 for drone-2. Both edges dial the ground station on the ground-station laptop over the Thunderbolt cable (`ws://10.42.0.1:9000`). The two-local-IPs layout has passed a two-Tello hardware test on the edge laptop; the [hardware checklist](#hardware-verification-checklist) at the end is the full verification plan.
+This note describes how one Windows laptop (the edge laptop) flies two standard (non-EDU) Tello drones, one per Wi-Fi adapter, as two FlightRisk edge processes: edge-1 for drone-1 and edge-2 for drone-2. Both edges dial the ground station over the Thunderbolt cable (`ws://10.42.0.1:9000`). The two-local-IPs layout has passed a two-Tello hardware test on the edge laptop; the [hardware checklist](#hardware-verification-checklist) at the end is the full verification plan.
 
 When the new option is not given, an edge behaves exactly as before: it uses the djitellopy client unchanged and binds the usual wildcard sockets.
 

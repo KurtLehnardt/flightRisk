@@ -223,7 +223,7 @@ Pick one network path. Both use the same shared secret, which must be the same o
 export FLIGHTRISK_EDGE_TOKEN="choose-a-long-random-string"
 
 # Path 1, station mode: the drones and both laptops join one router or hotspot.
-export FLIGHTRISK_FLEET_NET=station FLIGHTRISK_GROUND_IP=<mac lan ip> FLIGHTRISK_TELLO_HOST=<drone 1 ip>
+export FLIGHTRISK_FLEET_NET=station FLIGHTRISK_GROUND_IP=<ground-station LAN IP> FLIGHTRISK_TELLO_HOST=<drone 1 ip>
 source scripts/fleet_env.sh && scripts/demo_ground.sh        # second terminal: DRONE_ID=1 ALT_CM=100 scripts/demo_edge.sh
 
 # Path 2, AP mode: each laptop joins one drone's own Wi-Fi, the laptops share a cable (10.42.0.0/24).

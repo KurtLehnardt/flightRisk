@@ -286,7 +286,7 @@ The launcher never signals a process it did not start, for example a ground stat
 ## Design decisions
 
 - **A web page served by the standard library, not Tkinter.** Tkinter is not usable with the project's
-  virtual environment on the ground-station laptop: its Python 3.13 (pyenv) is built without `_tkinter`, and the macOS
+  virtual environment on the macOS development laptop: its Python 3.13 (pyenv) is built without `_tkinter`, and the macOS
   system Python ships an old, broken Tk. A page served by `http.server` on 127.0.0.1 needs no extra
   package, runs the same on macOS and Windows, and opens in the browser that is already used for the
   dashboard.
