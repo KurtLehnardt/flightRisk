@@ -108,6 +108,8 @@ CATALOGUE_DATA_FILES = frozenset(
         "flightrisk/hardware/inventory.py",
         "flightrisk/params/constraints.py",
         "flightrisk/params/table.py",
+        # Generated from the golden file; per-model registry data, not runtime coupling.
+        "flightrisk/params/today.py",
     }
 )
 

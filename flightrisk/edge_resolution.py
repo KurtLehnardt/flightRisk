@@ -8,8 +8,8 @@ first of these that names one:
 2. ``--airframe``, else ``FLIGHTRISK_AIRFRAME``;
 3. the inventory unit for ``--drone-id`` (``FLIGHTRISK_INVENTORY_FILE``);
 4. the launcher layer's ``model`` (``FLIGHTRISK_LAUNCHER_PARAMS``);
-5. the backend's default: ``tello`` and ``fake`` give ``tello``, ``mavlink``
-   gives ``generic_multirotor``.
+5. the backend's default: the first model its registered backend declares
+   (``BackendSpec.models``). ``fake`` runs the registry's default backend.
 
 The edge refuses to start when the model's scale, adapter or frame path
 differs from its backend's, so a Tello can never fly with outdoor bounds. With
@@ -58,20 +58,10 @@ DEFAULT_PARAMS_FILE = Path("~/.flightrisk/params.json")
 LAUNCHER_KEYS = ("unit_id", "model", "values", "features", "confirmed")
 CONFIRM_FLAG = "--confirm-less-safe"
 
-#: The model each edge drone kind (``--drone``) flies when nothing names one.
-BACKEND_DEFAULT_MODELS: Mapping[str, str] = {
-    "tello": "tello",
-    "fake": "tello",
-    "mavlink": "generic_multirotor",
-}
-
-#: The registered backend each edge drone kind runs. ``fake`` flies the
-#: in-process simulated Tello, so it speaks the Tello backend's adapter.
-_BACKEND_NAMES: Mapping[str, str] = {
-    "tello": "tello",
-    "fake": "tello",
-    "mavlink": "mavlink",
-}
+#: The edge drone kind (``--drone fake``) that flies an in-process simulation.
+#: It names no backend, so it runs the registry's default backend and speaks
+#: that backend's adapter.
+FAKE_DRONE = "fake"
 
 # Where the chosen model came from, in the order the edge looks.
 SOURCE_MODEL_FLAG = "--model"
@@ -106,16 +96,37 @@ class ModelChoice:
     model: DroneModel
 
 
+def _backend_spec(drone: str) -> Any:
+    """The registered backend that edge drone kind ``drone`` runs.
+
+    ``fake`` runs the registry's default backend. Any other kind is the name
+    of a registered backend that declares the catalogue models it flies.
+    Raises ``ValueError`` for any other kind.
+    """
+    from flightrisk.drone import registry  # Lazy: the registry bootstraps every backend.
+
+    name = registry.DEFAULT_BACKEND if drone == FAKE_DRONE else drone
+    if not registry.is_registered(name) or not registry.get(name).models:
+        raise ValueError(f"unknown edge drone {drone!r}")
+    return registry.get(name)
+
+
+def backend_default_model(drone: str) -> str:
+    """The model edge drone kind ``drone`` flies when nothing names one.
+
+    It is the first model the drone's registered backend declares.
+    """
+    return _backend_spec(drone).models[0]
+
+
 def backend_profile(drone: str, frame_path: str) -> BackendProfile:
     """The profile of edge drone kind ``drone`` taking its frames through ``frame_path``.
 
     The adapter is the registered backend's; the scale is that of the
     backend's default model.
     """
-    from flightrisk.drone import registry  # Lazy: the registry bootstraps every backend.
-
-    spec = registry.get(_BACKEND_NAMES[drone])
-    default = BUILTIN_MODELS[BACKEND_DEFAULT_MODELS[drone]]
+    spec = _backend_spec(drone)
+    default = BUILTIN_MODELS[spec.models[0]]
     return BackendProfile(drone=drone, adapter=spec.adapter, scale=default.scale, frame_path=frame_path)
 
 
@@ -181,8 +192,7 @@ def choose_model(
     only when a step needs it. Raises ``ModelRefused`` when the named model is
     neither built in nor defined in the inventory, or when a layer is refused.
     """
-    if drone not in BACKEND_DEFAULT_MODELS:
-        raise ValueError(f"unknown edge drone {drone!r}")
+    default_model_id = backend_default_model(drone)  # Raises ValueError for an unknown edge drone.
     loader = load_inventory or (lambda: _load_inventory(environ))
     loaded: list = []
 
@@ -211,7 +221,7 @@ def choose_model(
         if named is not None:
             model_id, source = named, SOURCE_LAUNCHER
     if model_id is None:
-        model_id, source = BACKEND_DEFAULT_MODELS[drone], SOURCE_BACKEND_DEFAULT
+        model_id, source = default_model_id, SOURCE_BACKEND_DEFAULT
 
     model = BUILTIN_MODELS.get(model_id)
     if model is None:
@@ -495,7 +505,7 @@ def _ordered(layers: Mapping[Any, Any]) -> list:
 
 #: The drone kind whose adapter is simulated (CAP-6, fake part). A real Tello and every MAVLink
 #: unit count as production until B1 verifies a SITL board identity.
-SIMULATED_DRONES = frozenset({"fake"})
+SIMULATED_DRONES = frozenset({FAKE_DRONE})
 _REFUSING = "Refusing to start."
 _SENSING_MODE = "sensing.mode"
 _SENSING_REQUIRED = "required"
@@ -630,8 +640,7 @@ def resolve_edge(
         # None or an empty map would check environment and flag values against the target bounds,
         # which accepts inputs today's edge refuses (SEAM-10).
         raise ValueError("today_accepts must be today's accepted ranges, not None or an empty map")
-    if drone not in BACKEND_DEFAULT_MODELS:
-        raise ValueError(f"unknown edge drone {drone!r}")
+    _backend_spec(drone)  # Raises ValueError for an unknown edge drone.
     simulated = drone in SIMULATED_DRONES
     try:
         layers = build_layers(choice=choice, drone_id=drone_id, environ=environ, argv=argv, parser=parser,
