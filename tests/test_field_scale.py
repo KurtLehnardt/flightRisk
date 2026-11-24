@@ -168,11 +168,13 @@ def test_field_plans_refuse_unsafe_or_impossible_settings(kwargs, message):
 class FieldEdge:
     """In-process ``EdgeLink``: a real LaneExecutor on a MavlinkFleetDrone on a simulated autopilot."""
 
-    def __init__(self, monkeypatch, drone_id: str, autopilot: str, slot_cm: float, geofence_cm: float):
+    def __init__(self, monkeypatch, drone_id: str, autopilot: str, slot_cm: float, geofence_cm: float,
+                 takeoff_stop_m: float | None = None):
         self.drone_id = drone_id
         self.on_message = None
         self.replies: list[dict] = []
         self.vehicle = SimVehicle(autopilot, time_scale=20.0)
+        self.vehicle.takeoff_stop_m = takeoff_stop_m
         install(monkeypatch, self.vehicle)
         self.envelope = SafetyEnvelope.for_field(alt_slot_cm=slot_cm, geofence_cm=geofence_cm)
         self.drone = MavlinkFleetDrone(drone_id, MavsdkAutopilotLink("tcpout://127.0.0.1:1"),
@@ -199,14 +201,18 @@ class FieldEdge:
         self.drone.disconnect()
 
 
-def test_two_mavlink_drones_fly_a_field_plan_end_to_end(monkeypatch):
+# None: the takeoff reaches its 5 m altitude. 4.30: it stops 0.7 m short, the
+# lowest height at which MavlinkFleetDrone.takeoff returns (the slot climb must
+# still end at the slot).
+@pytest.mark.parametrize("takeoff_stop_m", [None, 4.30])
+def test_two_mavlink_drones_fly_a_field_plan_end_to_end(monkeypatch, takeoff_stop_m):
     scale = field_scale(2, area_m=(70, 30), alt_slots_m=(15, 20))
     settings = scale.edge_settings(2)
     edges = {
         "drone-1": FieldEdge(monkeypatch, "drone-1", ARDUPILOT, settings[0]["alt_slot_m"] * 100,
-                             settings[0]["geofence_m"] * 100),
+                             settings[0]["geofence_m"] * 100, takeoff_stop_m),
         "drone-2": FieldEdge(monkeypatch, "drone-2", PX4, settings[1]["alt_slot_m"] * 100,
-                             settings[1]["geofence_m"] * 100),
+                             settings[1]["geofence_m"] * 100, takeoff_stop_m),
     }
     try:
         for edge in edges.values():

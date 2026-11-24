@@ -398,10 +398,12 @@ Pillow (and, for the detector, the pinned OpenCV) exactly. Core Graphics on iOS
 will add a small, separate difference that the iOS PR should measure.
 
 The phone's resize matches Pillow 13.0.0 (bicubic, including its pass order)
-and OpenCV 5.1.0 (bilinear) exactly. The ground's venv currently has Pillow
-12.3.0, so the ground's and the phone's embeddings of large crops that are
-shrunk a long way can differ slightly. Pinning Pillow 13 on the ground is a
-follow-up.
+and OpenCV 5.1.0 (bilinear) exactly. The ground requires Pillow 13
+(`Pillow>=13.0,<14` in `requirements.txt` and `requirements-ground.txt`, and the
+installer locks pin 13.0.0), so its resize matches the phone's. A venv created
+before that change may still hold an older Pillow, which resizes horizontally
+first and can differ slightly on crops shrunk a long way. Reinstall from the
+requirements to bring it to Pillow 13.
 
 ### Golden fixtures for the apps' unit tests
 
@@ -503,10 +505,10 @@ no Core ML, so `swift test` checks them on a Mac:
   (`Resample.c`, fixed point), so the embedder input is the ground's bit for
   bit: its SHA-256 equals `embedder_input.f32`'s. It matches Pillow 13.0.0,
   including its pass order: vertical first when `(h - th) > 0 && (h - th) > 2 *
-  (w - tw)`. `requirements.lock` pins Pillow 13.0.0, but a ground venv installed
-  from `requirements-ground.txt` (`Pillow>=10.4`) may have an older Pillow, for
-  example 12.3.0, which always resizes horizontally first. Pinning the ground
-  is a follow-up.
+  (w - tw)`. `requirements.lock` and the ground's requirements
+  (`Pillow>=13.0,<14`) both give Pillow 13. A venv created before that change
+  may still have an older Pillow, for example 12.3.0, which always resizes
+  horizontally first; reinstall to fix it.
 - `PersonBoxFilter`: which person boxes are kept (below).
 
 The app's `PersonDetector` letterboxes each camera frame, hands the canvas to
@@ -787,8 +789,6 @@ ground's dependencies:
 - **Recalibrate the ReID threshold.** The 0.55 match threshold was set for the
   ground's earlier embedder. It must be recalibrated for ViT-B-16, using
   separate target photos, before field use.
-- **Pin Pillow 13 on the ground.** See "From a detection to the embedder's
-  crop": the phone matches Pillow 13.0.0 exactly, the ground venv has 12.3.0.
 - **On-device checks.** The Android fp16 detector and every model's speed and
   memory on real phones are unmeasured, and the Android app has not run its
   camera search on a phone. The detector's score threshold is still the
