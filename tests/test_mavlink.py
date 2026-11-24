@@ -174,6 +174,12 @@ def _make_controller(system: _FakeSystem | None = None) -> MavlinkController:
             target=ctrl._loop.run_forever, daemon=True
         )
         ctrl._loop_thread.start()
+        # Thread.start() returns before run_forever() has set the loop to
+        # running. AsyncBridge.run() refuses a loop that is not running yet,
+        # so block until the loop has really processed a callback.
+        started = threading.Event()
+        ctrl._loop.call_soon_threadsafe(started.set)
+        assert started.wait(timeout=10.0), "event loop thread never started"
     return ctrl
 
 
