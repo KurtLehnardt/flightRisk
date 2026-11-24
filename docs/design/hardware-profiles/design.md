@@ -1202,7 +1202,7 @@ every "from <PR>" tag in `parameters.md` matches an item below naming that PR an
   8 (`envelope.max_altitude_cm`). For `generic_multirotor` it becomes unknown unless the inventory states
   it. The 120 m values that stand in for it today stop counting as a known maximum: row 8's 12000 cm for
   `generic_multirotor`, the catalogue's `max_height_m` of 120 for the generic models, MavlinkFleetDrone's
-  declared 120 m, and the `DroneCapabilities` default of 120 m, and the legacy controller's 120 m
+  declared 120 m, the `DroneCapabilities` default of 120 m and the legacy controller's 120 m
   (`flightrisk/drone/mavlink.py`, the dashboard's MavlinkController). Every consumer of the airframe maximum
   must handle an unknown value without crashing and without falling back to a lower or default cap. With the
   cap off, only the bounds that are 120 m because of the cap rise to the unit's known airframe maximum: the
