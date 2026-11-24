@@ -1,6 +1,6 @@
 """The edge refuses to take off when it cannot talk to its Tello, and says so.
 
-Incident (Mac edge-1, 2026-10-28): the Mac was not on the Tello Wi-Fi. The
+Incident (ground-station laptop edge-1, 2026-10-28): the ground-station laptop was not on the Tello Wi-Fi. The
 state stream had stopped, the keepalive and stream recovery failed with
 ``OSError(51)`` (network unreachable), and the telemetry sent to the ground
 still carried the last cached battery, so the ground scheduled a start. The

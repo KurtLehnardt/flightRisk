@@ -51,7 +51,7 @@ def test_a_leaked_socket_is_found():
     sock = socket.socket()
     if sys.platform == "win32":
         # psutil reads the TCP table, which holds only listening and connected sockets: a TCP socket that is
-        # merely bound (as the ZBook showed) is not listed. Listening puts it in the table.
+        # merely bound (as the edge laptop showed) is not listed. Listening puts it in the table.
         sock.bind(("127.0.0.1", 0))
         sock.listen(1)
     try:

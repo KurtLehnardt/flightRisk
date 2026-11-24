@@ -15,6 +15,9 @@ and the implicit inventory's Tello default (INV-4) from ``flightrisk/hardware/in
 asked to shrink it, because those files describe the Tello as one catalogued model and INV-4 keeps the
 default by design.
 
+The parameter documentation generator ``flightrisk/params/docs.py`` is not catalogue data. Its Tello entries belong
+to the ``"X-core"`` section, which now holds docs.py, because the planned parameter-profile work removes them.
+
 The ``"permanent"`` section holds the findings in the permanently exempt files named by
 ``PERMANENT_EXEMPTIONS`` in the test module. It is pinned, never shrunk, and never in ``CLOSED_PHASES``.
 """
@@ -27,6 +30,10 @@ COUPLING_BASELINE: dict[str, dict[tuple[str, str, str, str], int]] = {
         ('flightrisk/hardware/features.py', '', 'model_default', 'tello_sdk_udp'): 1,
         ('flightrisk/hardware/features.py', '_is_tello', 'compare', 'TELLO_ADAPTER'): 1,
         ('flightrisk/hardware/features.py', 'feature_reason', 'name', '_is_tello'): 3,
+        # flightrisk/params/docs.py
+        ('flightrisk/params/docs.py', '', 'literal', 'tello'): 1,
+        ('flightrisk/params/docs.py', '_fact_table', 'literal', 'tello'): 1,
+        ('flightrisk/params/docs.py', '_settings_table', 'literal', 'tello'): 2,
     },
     "X-legacy": {
         # flightrisk/drone/fleet.py
@@ -63,9 +70,9 @@ COUPLING_BASELINE: dict[str, dict[tuple[str, str, str, str], int]] = {
         ('flightrisk/edge_device.py', '_build_drone', 'name', 'FakeTelloController'): 1,
         ('flightrisk/edge_device.py', '_build_drone', 'name', 'TelloBindingError'): 1,
         ('flightrisk/edge_device.py', '_build_drone', 'name', 'TelloController'): 2,
-        ('flightrisk/edge_device.py', '_build_drone', 'name', 'tello_host'): 4,
-        ('flightrisk/edge_device.py', '_build_drone', 'name', 'tello_ifindex'): 1,
-        ('flightrisk/edge_device.py', '_build_drone', 'name', 'tello_local_ip'): 1,
+        ('flightrisk/edge_device.py', '_build_drone', 'name', 'tello_host'): 6,
+        ('flightrisk/edge_device.py', '_build_drone', 'name', 'tello_ifindex'): 2,
+        ('flightrisk/edge_device.py', '_build_drone', 'name', 'tello_local_ip'): 3,
         ('flightrisk/edge_device.py', '_build_parser', 'literal', 'tello'): 1,
         ('flightrisk/edge_device.py', '_build_parser', 'name', '_TELLO_IFINDEX_ENV_VAR'): 1,
         ('flightrisk/edge_device.py', '_build_parser', 'name', '_TELLO_LOCAL_IP_ENV_VAR'): 1,
@@ -145,7 +152,7 @@ COUPLING_BASELINE: dict[str, dict[tuple[str, str, str, str], int]] = {
         ('flightrisk/launcher/settings.py', '', 'literal', 'tello'): 1,
         ('flightrisk/launcher/settings.py', 'DroneSettings', 'model_default', 'tello'): 1,
         ('flightrisk/launcher/settings.py', 'DroneSettings', 'name', 'DEFAULT_TELLO_HOST'): 1,
-        ('flightrisk/launcher/settings.py', '_drone_from_json', 'name', 'tello_host'): 1,
+        ('flightrisk/launcher/settings.py', '_drone_from_json', 'name', 'tello_host'): 2,
         ('flightrisk/launcher/settings.py', '_validate_adapters', 'compare', 'tello'): 1,
         ('flightrisk/launcher/settings.py', '_validate_adapters', 'name', 'local_tellos'): 5,
         ('flightrisk/launcher/settings.py', '_validate_drones', 'compare', 'tello'): 1,
@@ -181,7 +188,9 @@ COUPLING_BASELINE: dict[str, dict[tuple[str, str, str, str], int]] = {
         # scripts/make_param_golden.py
         ('scripts/make_param_golden.py', '', 'import', 'flightrisk.drone.tello'): 1,
         ('scripts/make_param_golden.py', '', 'import', 'flightrisk.drone.tello_bound'): 1,
-        ('scripts/make_param_golden.py', '', 'literal', 'tello'): 5,
+        ('scripts/make_param_golden.py', '', 'literal', 'tello'): 21,
+        ('scripts/make_param_golden.py', 'build', 'literal', 'tello'): 2,
+        ('scripts/make_param_golden.py', 'parse_edit', 'literal', 'tello'): 2,
         # scripts/obstacle_record.py
         ('scripts/obstacle_record.py', 'main', 'import', 'flightrisk.drone.tello'): 1,
         ('scripts/obstacle_record.py', 'main', 'import', 'flightrisk.drone.tello_bound'): 1,
@@ -209,7 +218,9 @@ COUPLING_BASELINE: dict[str, dict[tuple[str, str, str, str], int]] = {
     },
     "catalogue-data": {
         # flightrisk/hardware/catalogue.py
-        ('flightrisk/hardware/catalogue.py', '', 'literal', 'tello_sdk_udp'): 2,
+        ('flightrisk/hardware/catalogue.py', '', 'literal', 'tello'): 1,
+        ('flightrisk/hardware/catalogue.py', '', 'literal', 'tello_edu'): 1,
+        ('flightrisk/hardware/catalogue.py', '', 'literal', 'tello_sdk_udp'): 3,
         ('flightrisk/hardware/catalogue.py', '', 'model_default', 'Tello'): 2,
         ('flightrisk/hardware/catalogue.py', '', 'model_default', 'tello'): 3,
         ('flightrisk/hardware/catalogue.py', '', 'model_default', 'tello_edu'): 1,
@@ -230,18 +241,16 @@ COUPLING_BASELINE: dict[str, dict[tuple[str, str, str, str], int]] = {
         ('flightrisk/hardware/inventory.py', '', 'model_default', 'tello'): 1,
         # flightrisk/params/constraints.py
         ('flightrisk/params/constraints.py', '', 'literal', 'tello'): 1,
-        # flightrisk/params/docs.py
-        ('flightrisk/params/docs.py', '_fact_table', 'literal', 'tello'): 1,
         # flightrisk/params/table.py
-        ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT'): 1,
-        ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_REFUSAL_HOLD_S'): 1,
-        ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_REFUSAL_RETRIES'): 1,
-        ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_SETTLE_SAMPLES'): 1,
-        ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S'): 1,
-        ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM'): 1,
-        ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_TAKEOFF_LATE_S'): 1,
-        ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_TEMP_REFUSE_C'): 1,
-        ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_TEMP_WARN_C'): 1,
+        ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT'): 2,
+        ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_REFUSAL_HOLD_S'): 2,
+        ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_REFUSAL_RETRIES'): 2,
+        ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_SETTLE_SAMPLES'): 2,
+        ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S'): 2,
+        ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM'): 2,
+        ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_TAKEOFF_LATE_S'): 2,
+        ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_TEMP_REFUSE_C'): 2,
+        ('flightrisk/params/table.py', '', 'literal', 'FLIGHTRISK_TELLO_TEMP_WARN_C'): 2,
         ('flightrisk/params/table.py', '', 'model_default', 'tello'): 1,
     },
     "permanent": {
