@@ -121,7 +121,7 @@ ALLOWED_SECTIONS = frozenset(
 #: Files that stay coupled on purpose, with the reason.
 PERMANENT_EXEMPTIONS: dict[str, str] = {
     "flightrisk/main.py": "XK-01: the single-process app imports the Tello controller directly and defaults its source to a Tello; kept by owner decision.",
-    "flightrisk/drone/mavlink.py": "XK-02, XK-03: the legacy MAVLink controller is kept unchanged by owner decision.",
+    "flightrisk/drone/mavlink.py": "XK-02, XK-03: the legacy MAVLink controller stays coupled by owner decision; XL moved only its own move and altitude limits into flightrisk/params/legacy.py, values unchanged.",
     "scripts/demo_edge.sh": "XK-04: the edge demo script is a Tello demo, pinned by tests/test_demo_smoke.py.",
     "scripts/demo_edge.ps1": "XK-04: the edge demo script is a Tello demo, pinned by tests/test_demo_smoke.py.",
     "scripts/demo_edge_pair.ps1": "XK-04: the edge demo script is a Tello demo, pinned by tests/test_demo_smoke.py.",

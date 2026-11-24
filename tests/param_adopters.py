@@ -11,7 +11,7 @@ from __future__ import annotations
 
 PARAM_ADOPTERS: dict[str, frozenset[str]] = {
     "X-core": frozenset(),
-    "X-legacy": frozenset(),
+    "X-legacy": frozenset({"flightrisk/drone/mavlink.py"}),
     "A3": frozenset({
         "flightrisk/edge_resolution.py",
         "flightrisk/drone/safety.py",
