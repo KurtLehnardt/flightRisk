@@ -160,7 +160,17 @@ class DroneCapabilities:
     has_rtsp: bool = False
     min_move_cm: int = 20
     max_move_cm: int = 500
-    max_altitude_m: int = 120
+    #: The airframe's maximum altitude in metres. ``None`` means the airframe
+    #: maximum is unknown; it never means "no limit". No consumer may
+    #: substitute 120 or any other default for ``None``. With the regulatory
+    #: 120 m cap on, the effective limit is at most the cap, and lower when the
+    #: airframe is lower (a Tello declares 10 m). A unit with an unknown
+    #: airframe maximum cannot turn the cap off (design section 27 item 53).
+    #: The default of 120 is a legacy placeholder, not a known airframe
+    #: maximum. A known maximum comes from the resolved
+    #: ``envelope.max_altitude_cm`` row, so no code may use this default to
+    #: allow turning the regulatory cap off.
+    max_altitude_m: int | None = 120
     supports_missions: bool = False
     #: Optional roles this backend implements. Callers ask
     #: ``supports(Capability.X)`` rather than probing for methods.
