@@ -1247,7 +1247,10 @@ every "from <PR>" tag in `parameters.md` matches an item below naming that PR an
   cannot turn the cap off. `regulatory.altitude_cap_on` is read-only to every generic path: the edge refuses
   an off value from a parameter file, the environment, a flag, `--confirm-less-safe` or a ground message,
   and takes it only from the launcher layer's confirmation with a complete acknowledgement. It refuses an
-  incomplete acknowledgement. Owners: A3 for the rows listed in tasks.md, the catalogue value, the stale
+  incomplete acknowledgement. The resolver's `check_resolved` validates the record
+  (`flightrisk/params/altitude.py` `acknowledgement_problem`) and refuses `--confirm-less-safe` for the
+  switch; no wire message carries a parameter value to the edge. Only the inventory may set
+  `envelope.max_altitude_cm` (the resolver's `INVENTORY_ONLY`): a params file or launcher value is refused. Owners: A3 for the rows listed in tasks.md, the catalogue value, the stale
   note at `scripts/make_param_golden.py:178`, and the edge's enforcement and refusal; A5 for the launcher
   control, the acknowledgement text and its record; A4 for the ground's display of the cap state and of an
   unknown maximum; B4 for the `FENCE_ALT_MAX` bound. The `DroneCapabilities` type change that allows an
