@@ -37,8 +37,10 @@ FLIGHT_TIMEOUT_S = 600.0
 ARDUPILOT_SETUP = {
     "FENCE_ENABLE": 1, "FENCE_ACTION": 1, "FENCE_TYPE": 3, "FENCE_RADIUS": 150, "FENCE_ALT_MAX": 40,
     "BATT_FS_LOW_ACT": 2, "BATT_FS_CRT_ACT": 1, "BATT_LOW_VOLT": 10.5, "BATT_ARM_VOLT": 11.0, "FS_THR_ENABLE": 1,
-    "RTL_ALT": 0,
 }
+#: Return altitude 0 (return at the current height), as (name, value) pairs in the order tried: Copter 4.7
+#: and later name it RTL_ALT_M (metres), Copter 4.6 RTL_ALT (centimetres). Only the name the vehicle has is set.
+ARDUPILOT_RTL_ALT = (("RTL_ALT_M", 0.0), ("RTL_ALT", 0))
 PX4_SETUP = {
     "GF_ACTION": 2, "GF_MAX_HOR_DIST": 150.0, "GF_MAX_VER_DIST": 40.0, "COM_LOW_BAT_ACT": 3, "NAV_RCL_ACT": 2,
     "NAV_DLL_ACT": 2, "RTL_RETURN_ALT": 0.0,
@@ -79,6 +81,10 @@ def _connect(address: str, drone_id: str, slot_cm: float, envelope=None):
     setup = ARDUPILOT_SETUP if link.state().autopilot == ARDUPILOT else PX4_SETUP
     for name, value in setup.items():
         link.set_param(name, value)
+    if link.state().autopilot == ARDUPILOT:
+        rtl = next(((n, v) for n, v in ARDUPILOT_RTL_ALT if link.get_param(n) is not None), None)
+        assert rtl is not None, "SITL has neither RTL_ALT_M nor RTL_ALT"
+        link.set_param(*rtl)
     drone.refresh_params()
     ready = wait_for(lambda: drone.link_status().ok, READY_TIMEOUT_S, 1.0)
     assert ready, f"SITL never became ready: {drone.link_status()}"
