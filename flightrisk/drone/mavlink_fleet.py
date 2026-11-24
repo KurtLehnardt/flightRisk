@@ -380,7 +380,8 @@ class MavlinkFleetDrone:
             has_rtsp=False,
             min_move_cm=int(FIELD_LIMITS.min_move_cm),
             max_move_cm=int(FIELD_LIMITS.max_move_cm),
-            max_altitude_m=int(FIELD_LIMITS.max_alt_slot_cm / 100),
+            # Unknown: the airframe maximum comes from the inventory (design section 27 item 53).
+            max_altitude_m=None,
             supports_missions=False,
             features=frozenset({Capability.TAKEOFF_LAND, Capability.HOVER, Capability.RELATIVE_MOVE,
                                 Capability.ROTATE}),
