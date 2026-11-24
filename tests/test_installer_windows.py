@@ -280,7 +280,11 @@ def test_uninstall_check_refusals_and_removal(winbox: WinBox):
 @pytest.mark.parametrize("how", ["venv-python", "renamed-in-folder"])
 def test_uninstall_and_update_refuse_while_flightrisk_runs(winbox: WinBox, how):
     if how == "venv-python":
-        proc = subprocess.Popen([str(winbox.app_dir / "venv" / "bin" / "python"), "-c", "import time; time.sleep(60)"])
+        # Started like scripts/launcher.command does, with the install as cwd. A python.org or Homebrew
+        # Python (the GitHub macOS runner has one) re-runs itself as Python.app, so its command line does
+        # not name the venv; the macOS check then finds it by its cwd, as it finds a real launcher.
+        proc = subprocess.Popen([str(winbox.app_dir / "venv" / "bin" / "python"), "-c", "import time; time.sleep(60)"],
+                                cwd=winbox.app_dir)
     else:
         # A Python whose command line does not name the install, started in the install folder.
         proc = subprocess.Popen(["/bin/bash", "-c", "exec -a /x/Python.app/Contents/MacOS/Python sleep 60"],
