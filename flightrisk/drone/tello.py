@@ -38,6 +38,7 @@ from flightrisk.drone.controller import (
     FrameFreshness,
     SettledHeight,
 )
+from flightrisk.drone.obstacle_sensor import CHANNEL_ORDER_RGB
 from flightrisk.drone.snapshot import (
     CELSIUS,
     DEGREE,
@@ -49,9 +50,8 @@ from flightrisk.drone.snapshot import (
     Reading,
     TelemetrySnapshot,
 )
-from flightrisk.drone.obstacle_sensor import CHANNEL_ORDER_RGB
-from flightrisk.drone.temp_preflight import TempSample, reading_from
 from flightrisk.drone.snapshot import reading as _reading
+from flightrisk.drone.temp_preflight import TempSample, reading_from
 from flightrisk.obs_log import Throttle, log_event, notice
 from flightrisk.params import table as _registry
 from flightrisk.params.defaults import model_default
@@ -2738,7 +2738,7 @@ class FakeTelloController:
             has_rtsp=False,
             min_move_cm=model_default("move.min_cm", _registry.T),
             max_move_cm=model_default("move.max_cm", _registry.T),
-            max_altitude_m=10,
+            max_altitude_m=model_default("envelope.max_altitude_cm", _registry.T) // 100,
             supports_missions=False,
             features=BASIC_FLIGHT | {Capability.STEPPED_SENSING},
         )

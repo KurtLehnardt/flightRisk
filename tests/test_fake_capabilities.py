@@ -45,17 +45,33 @@ def test_declaring_no_return_to_home_changes_the_return_method():
 
 
 def _flight_scale_readers() -> list[str]:
-    """Each place under ``flightrisk/`` that reads a ``flight_scale`` attribute (declaring one is not a read)."""
+    """Each place under ``flightrisk/`` that reads ``flight_scale``: an attribute load, a ``getattr`` with the
+    literal name, or a ``case DroneCapabilities(flight_scale=...)`` pattern. Declaring one is not a read."""
+    files = sorted((ROOT / "flightrisk").rglob("*.py"))
+    assert files, "scan root flightrisk/ holds no Python files"
     readers = []
-    for path in sorted((ROOT / "flightrisk").rglob("*.py")):
+    for path in files:
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            if isinstance(node, ast.Attribute) and node.attr == "flight_scale" and isinstance(node.ctx, ast.Load):
+            read = (
+                (isinstance(node, ast.Attribute) and node.attr == "flight_scale" and isinstance(node.ctx, ast.Load))
+                or (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "getattr"
+                    and len(node.args) >= 2
+                    and isinstance(node.args[1], ast.Constant)
+                    and node.args[1].value == "flight_scale"
+                )
+                or (isinstance(node, ast.MatchClass) and "flight_scale" in node.kwd_attrs)
+            )
+            if read:
                 readers.append(f"{path.relative_to(ROOT)}:{node.lineno}")
     return readers
 
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason="no production code reads declared capabilities for separation yet; CAP-4 separation lands with the reader",
 )
 def test_declaring_a_field_scale_changes_the_separation():

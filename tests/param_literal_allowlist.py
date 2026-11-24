@@ -351,8 +351,6 @@ ALLOWLIST: dict[str, dict[tuple, dict]] = {
             "reason": 'Flight parameter duplicate; A3 moves it into the registry.'},
     },
     "flightrisk/drone/fake.py": {
-        ('flightrisk/drone/fake.py', '<module>.FakeDrone.__init__', 'kwarg', 'DroneCapabilities', 'max_altitude_m', 10): {"count": 1, "category": "test_double",
-            "reason": 'Simulation only value for the fake drone.'},
         ('flightrisk/drone/fake.py', '<module>.FakeDroneConfig', 'assign', 'battery_pct', 'battery_pct', 100.0): {"count": 1, "category": "test_double",
             "reason": 'Simulation only value for the fake drone.'},
         ('flightrisk/drone/fake.py', '<module>.FakeDroneConfig', 'assign', 'takeoff_height_m', 'takeoff_height_m', 1.0): {"count": 1, "category": "test_double",
@@ -850,8 +848,8 @@ ALLOWLIST: dict[str, dict[tuple, dict]] = {
     "flightrisk/drone/tello.py": {
         ('flightrisk/drone/tello.py', '<module>', 'assign', '_FAILURE_LOG_INTERVAL_S', '_FAILURE_LOG_INTERVAL_S', 10.0): {"count": 1, "category": "internal",
             "reason": 'Internal loop, join, poll or log timing, not a flight parameter.'},
-        ('flightrisk/drone/tello.py', '<module>', 'assign', '_LAND_STALL_PACKETS', '_LAND_STALL_PACKETS', 2): {"count": 1, "category": "sdk",
-            "reason": 'Count of Tello SDK state packets used as FlightRisk\'s own guard against a stale packet: a land resend needs this many new packets in a row with no descent; not the Tello\'s packet rate, no registry row.'},
+        ('flightrisk/drone/tello.py', '<module>', 'assign', '_LAND_STALL_PACKETS', '_LAND_STALL_PACKETS', 2): {"count": 1, "category": "deferred",
+            "reason": 'FlightRisk land-resend threshold (new state packets in a row with no descent); A3 leaves it, because phase C1, the return and landing state machine that owns terminal landing, moves it into the registry.'},
         ('flightrisk/drone/tello.py', '<module>', 'assign', '_POST_LAND_FLIGHT_POLLS', '_POST_LAND_FLIGHT_POLLS', 2): {"count": 1, "category": "internal",
             "reason": 'Internal loop, join, poll or log timing, not a flight parameter.'},
         ('flightrisk/drone/tello.py', '<module>', 'assign', '_REPLY_POLL_S', '_REPLY_POLL_S', 0.01): {"count": 1, "category": "internal",
@@ -875,8 +873,6 @@ ALLOWLIST: dict[str, dict[tuple, dict]] = {
         ('flightrisk/drone/tello.py', '<module>', 'assign', '_ZERO_HEIGHT_POLLS', '_ZERO_HEIGHT_POLLS', 3): {"count": 1, "category": "internal",
             "reason": 'Internal loop, join, poll or log timing, not a flight parameter.'},
         ('flightrisk/drone/tello.py', '<module>.FakeTelloController', 'default', '__init__', 'battery', 100): {"count": 1, "category": "test_double",
-            "reason": 'Simulation only value for the fake Tello.'},
-        ('flightrisk/drone/tello.py', '<module>.FakeTelloController.__init__', 'kwarg', 'DroneCapabilities', 'max_altitude_m', 10): {"count": 1, "category": "test_double",
             "reason": 'Simulation only value for the fake Tello.'},
         ('flightrisk/drone/tello.py', '<module>.TelloController.__init__', 'kwarg', 'Tello', 'retry_count', 1): {"count": 1, "category": "internal",
             "reason": 'Internal loop, join, poll or log timing, not a flight parameter.'},

@@ -37,8 +37,6 @@ from typing import Any, NamedTuple
 from flightrisk.params import table as _registry
 from flightrisk.params.defaults import model_default, model_range
 
-
-
 #: Environment variables read at the edge's start (``edge_device``) and checked by the launcher.
 ENV_TELLO_TEMP_WARN_C = "FLIGHTRISK_TELLO_TEMP_WARN_C"
 ENV_TELLO_TEMP_REFUSE_C = "FLIGHTRISK_TELLO_TEMP_REFUSE_C"

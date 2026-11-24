@@ -145,7 +145,7 @@ class FakeDrone:
             has_rtsp=False,
             min_move_cm=model_default("move.min_cm", _registry.T),
             max_move_cm=model_default("move.max_cm", _registry.T),
-            max_altitude_m=10,
+            max_altitude_m=model_default("envelope.max_altitude_cm", _registry.T) // 100,
             supports_missions=False,
             features=frozenset(features),
         )
