@@ -304,3 +304,12 @@ def test_a_fake_declaring_takeoff_abort_needs_an_abort_keyword():
     make = _declaring(lambda: NoAbort(name="conf-1"), add=[Capability.TAKEOFF_ABORT])
     with pytest.raises(AssertionError, match="takes no abort keyword"):
         CHECKS["capabilities_honest"](_fake_subject(make, "no-abort"))
+
+
+def test_a_fake_declaring_takeoff_abort_without_takeoff_fails_with_a_message():
+    class NoTakeoff(FakeDrone):
+        takeoff = None
+
+    make = _declaring(lambda: NoTakeoff(name="conf-1"), add=[Capability.TAKEOFF_ABORT], remove=[Capability.TAKEOFF_LAND])
+    with pytest.raises(AssertionError, match="declares Capability.TAKEOFF_ABORT without takeoff"):
+        CHECKS["capabilities_honest"](_fake_subject(make, "no-takeoff"))
