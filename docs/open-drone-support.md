@@ -8,8 +8,8 @@ Read the "Verification status" section before flying anything. Nothing on this p
 
 | Stack | Vehicle | Route into FlightRisk | Status |
 |---|---|---|---|
-| ArduPilot ArduCopter | Multirotor (Holybro S500 V2 class) | MAVLink through MAVSDK, `--drone mavlink` on the companion computer | Phase 1, built. Unit tests against a simulated MAVSDK, and ArduCopter 4.6.3 SITL: one and two drones flew field plans, link loss returned to launch. Never flown on hardware. |
-| PX4 | Multirotor | Same (`--drone mavlink`) | Phase 1, built. Unit tests only, including PX4-specific mode handling; no PX4 SITL run. Never flown on hardware. |
+| ArduPilot ArduCopter | Multirotor (Holybro S500 V2 class) | MAVLink through MAVSDK, `--drone mavlink` on the companion computer | Supported in simulation. Unit tests against a simulated MAVSDK, and ArduCopter 4.6.3 SITL: one and two drones flew field plans, link loss returned to launch. Never flown on hardware. |
+| PX4 | Multirotor | Same (`--drone mavlink`) | Supported in simulation. Unit tests only, including PX4-specific mode handling; PX4 v1.17.0 SIH SITL runs are recorded in docs/sitl-demo.md. Never flown on hardware. |
 | ArduPilot ArduPlane, PX4 fixed-wing, VTOL in plane mode | Fixed-wing | MAVLink, but a plane cannot hover, stop at the end of a move or take off in place | Not supported. Needs a mission-upload backend (lanes as a MAVLink mission with loiters and a landing sequence). A VTOL in multicopter mode should behave like a multirotor; untested. |
 | ArduPilot Rover, PX4 rover, boats | Ground or water | MAVLink `goto_location` with the altitude ignored | Not supported in phase 1: the envelope, slots and ceiling assume flight. Possible later with a "surface" envelope profile. |
 | Bitcraze Crazyflie | Nano quad, indoor | `cflib` (MotionCommander or the high-level commander with a Flow, Loco or Lighthouse deck) | Not implemented. Good fit for the `room` profile (centimetre moves, like the Tello). A backend wraps `cflib`; see "Add your drone in 5 steps" in `docs/drone-interface.md`. |
@@ -18,7 +18,7 @@ Read the "Verification status" section before flying anything. Nothing on this p
 | Paparazzi UAV | Multirotor and fixed-wing | PPRZLINK (Ivy bus), not MAVLink | Not implemented. A backend would use the `pprzlink` Python bindings and Paparazzi's flight-plan blocks or guided mode. |
 | ROS 2 drones | Any (usually PX4 or ArduPilot underneath) | MAVROS, or PX4's uXRCE-DDS bridge | Not implemented as a separate backend. When the autopilot is PX4 or ArduPilot, run `--drone mavlink` against the same MAVLink endpoint (a MAVLink router can share it with ROS). A native ROS 2 backend would wrap action clients through `rclpy`. |
 | Parrot ANAFI (Olympe) | Multirotor | Olympe SDK (open source, BSD-3) | Not implemented. Olympe is open but the drone firmware is closed, so it is "open SDK, closed aircraft". A backend could use Olympe's `moveBy` and `moveTo`. |
-| DJI Tello, RoboMaster TT | Indoor quad | `djitellopy` | Supported (the existing backend). Closed firmware with an open, documented SDK. |
+| DJI Tello, RoboMaster TT | Indoor quad | `djitellopy` | Supported (the first backend, flown on hardware). Closed firmware with an open, documented SDK. |
 | Other DJI (Mini, Mavic, Air, Matrice), Skydio, Autel | Multirotor | Vendor mobile or onboard SDKs | Out of scope: closed firmware, closed or licensed SDKs that run on a phone or a vendor computer, and no open autopilot to configure failsafes on. |
 
 PX4 and ArduPilot through MAVLink cover most open-source drones in use: the Holybro, CUAV, Matek and ArduPilot-compatible boards, the Pixhawk standard, and many commercial airframes built on them.
@@ -34,7 +34,7 @@ The edge used to decide both with `--source`. They are now separate, and every o
 | `--source camera` (default), `--source file`, `--source url` | none | camera, video file, stream URL |
 | `--source tello`, `--drone tello` | Tello | Tello video |
 | `--source fake`, `--drone fake` | simulated drone | blank frames |
-| `--drone mavlink` (`--source camera` by default, or `file` or `url`) | PX4 or ArduPilot over MAVLink | the companion computer's camera, a file (looped) or a stream URL |
+| `--drone mavlink` (`--source camera` by default, or `file` or `url`) | PX4 or ArduPilot over MAVLink (supported in simulation, never flown on hardware) | the companion computer's camera, a file (looped) or a stream URL |
 
 `--drone tello --source camera` and `--drone mavlink --source tello` are refused at startup with the reason, as are the MAVLink options without `--drone mavlink` and `--alt-slot` (centimetres, indoor) with it. `--drone mavlink` also needs `--frame-heading-deg` (the same value on every drone of the fleet) and refuses a `--mavlink-address` whose scheme is not `serial`, `udpin`, `udpout`, `tcpin` or `tcpout` or that starts with `-`.
 
