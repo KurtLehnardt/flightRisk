@@ -12,9 +12,20 @@ Three planners are covered for drone ids ``d1`` to ``d4``:
 
 * ``coordinator_plan``: ``FleetCoordinator.plan()`` with its own defaults;
 * ``map_<pattern>``: ``plan_edit.build_plan`` for each map pattern, installed
-  with ``plan_zones()`` the way the dashboard does it;
+  with ``plan_zones()`` the way the dashboard does it. These drawn-path traces
+  are large, so they are not stored: ``map_digests.json`` maps each snapshot
+  name (``tellos_<n>_map_<pattern>.json``) to the SHA-256 hex digest of the
+  exact ASCII bytes of the text this module renders for it, the same text the
+  other fixtures hold. The test renders the text again and compares digests;
+  the writer regenerates the digest file;
 * ``patterns_<kind>``: ``fleet_patterns.plan_search`` for each pattern kind
   with the Tello forward camera model, with its ``check_plan`` result.
+
+A fourth set, ``field_scale_<n>_coordinator_plan``, covers one to four open
+field drones: ``FleetCoordinator`` built from ``fleet_scale.field_scale(n)``
+(a 120 m by 60 m area and slots at 15, 20, 25 and 30 m), its ``plan()`` and the
+``assign_lanes`` messages. It was captured at the unmodified base commit
+a003f55, before any per-unit limit change.
 
 A combination that is refused today is recorded as a refusal, not skipped.
 Every link is an in-process recording link and the ground clock is fixed, so
@@ -32,6 +43,7 @@ import contextlib
 import dataclasses
 import enum
 import functools
+import hashlib
 import json
 import math
 import os
@@ -46,6 +58,7 @@ from flightrisk.drone import plan_edit
 from flightrisk.drone import plan_paths as pp
 from flightrisk.drone.coordinator import DEFAULT_ZONE_GAP_CM, FleetCoordinator
 from flightrisk.drone.coverage import tello_sweep_model
+from flightrisk.drone.fleet_scale import field_scale
 from flightrisk.drone.safety import DEFAULT_GEOFENCE_CM
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "plan_snapshots"
@@ -59,6 +72,10 @@ ROOM_CAMERA = tello_sweep_model(max_range_m=4.0)
 # Two search areas for the pattern builders: the demo room and a larger field.
 PATTERN_AREAS = {"room_400x400": (400, 400), "field_1200x800": (1200, 800)}
 PATTERN_LKP_FRACTION = (1, 2)
+# The open-field scale: a 120 m by 60 m area, one altitude slot per drone.
+FIELD_AREA_M = (120.0, 60.0)
+FIELD_ALT_SLOTS_M = (15.0, 20.0, 25.0, 30.0)
+DIGEST_FILE = "map_digests.json"
 
 
 class RecordingLink:
@@ -212,18 +229,48 @@ def _pattern_snapshot(n: int, kind: fp.PatternKind) -> dict:
     return out
 
 
+def _field_snapshot(n: int) -> dict:
+    scale = field_scale(n, area_m=FIELD_AREA_M, alt_slots_m=FIELD_ALT_SLOTS_M)
+    links = {drone_id: RecordingLink() for drone_id in _drone_ids(n)}
+    coordinator = FleetCoordinator(links, clock=lambda: GROUND_NOW_S, **scale.coordinator_kwargs())
+    out: dict[str, Any] = {
+        "drone_ids": _drone_ids(n),
+        "scale": _plain(scale),
+        "edge_settings": _plain(scale.edge_settings(n)),
+    }
+    try:
+        plan = coordinator.plan()
+    except ValueError as exc:
+        out.update(_refusal(exc))
+    else:
+        out["plan"] = _plain(plan.to_dict())
+    out["assign_lanes"] = _sent(links)
+    return out
+
+
 def _text(snapshot: dict) -> str:
     return json.dumps(snapshot, indent=2, sort_keys=True) + "\n"
 
 
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode("ascii")).hexdigest()
+
+
 def render_snapshots() -> dict[str, str]:
-    """Every snapshot as file name to exact file text, built from the current code."""
+    """Every stored snapshot as file name to exact file text, built from the current code.
+
+    The map traces are not stored: ``map_digests.json`` holds the SHA-256 of each one's text.
+    """
     files: dict[str, str] = {}
+    digests: dict[str, str] = {}
     with _clean_environment():
         for n in FLEET_SIZES:
             files[f"tellos_{n}_coordinator_plan.json"] = _text(_coordinator_snapshot(n))
+            files[f"field_scale_{n}_coordinator_plan.json"] = _text(_field_snapshot(n))
             for pattern in pp.PATTERNS:
-                files[f"tellos_{n}_map_{pattern}.json"] = _text(_map_snapshot(n, pattern))
+                name = f"tellos_{n}_map_{pattern}.json"
+                digests[name] = _digest(_text(_map_snapshot(n, pattern)))
+        files[DIGEST_FILE] = _text(digests)
         for n in FLEET_SIZES:
             files[f"tellos_{n}_patterns_{fp.PatternKind.PARALLEL_SPLIT.value}.json"] = _text(
                 _pattern_snapshot(n, fp.PatternKind.PARALLEL_SPLIT))
