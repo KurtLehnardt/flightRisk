@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 import hashlib
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 from flightrisk.params.docs import (
@@ -164,16 +166,72 @@ def test_the_allowed_leaf_imports_hold_no_registry_or_catalogue_value():
     assert not [n for n in ast.walk(package) if isinstance(n, (ast.Import, ast.ImportFrom))]
 
 
-def test_no_runtime_module_imports_params_or_hardware():
-    """CMP-1: nothing outside params, hardware and tests imports them at run time yet.
+#: CMP-1 scope (plan step S3, risk R3): the only modules outside params and hardware that may import them at
+#: run time. Exactly the files PR A3 owns in tasks.md, plus the plan's new ``edge_resolution.py``. A4 and A5
+#: widen this set in their own PRs, when they adopt; every other module stays forbidden.
+A3_ADOPTED = frozenset({
+    "flightrisk/edge_device.py",
+    "flightrisk/edge.py",
+    "flightrisk/edge_profiles.py",
+    "flightrisk/edge_uplink.py",
+    "flightrisk/fleet_authority.py",
+    "flightrisk/fleet_authority_types.py",
+    "flightrisk/drone/safety.py",
+    "flightrisk/drone/obstacle_sensor.py",
+    "flightrisk/drone/obstacle.py",
+    "flightrisk/drone/flight_guards.py",
+    "flightrisk/drone/temp_preflight.py",
+    "flightrisk/drone/tello.py",
+    "flightrisk/drone/tello_bound.py",
+    "flightrisk/drone/fake.py",
+    "flightrisk/drone/lane_flight.py",
+    "flightrisk/drone/lane_executor.py",
+    "flightrisk/drone/lane_monitor.py",
+    "flightrisk/drone/lane_avoid.py",
+    "flightrisk/drone/mavlink_fleet.py",
+    "flightrisk/drone/autopilot.py",
+    "flightrisk/drone/mavsdk_link.py",
+    "flightrisk/drone/autopilot_fence.py",
+    "flightrisk/edge_resolution.py",
+})
+#: New files A3 creates; they need not exist before the PR that adds them.
+A3_NEW_FILES = frozenset({"flightrisk/drone/autopilot_fence.py", "flightrisk/edge_resolution.py"})
+TASKS = ROOT / "docs" / "design" / "hardware-profiles" / "tasks.md"
+
+
+def _a3_ownership_list() -> set[str]:
+    """The ``flightrisk/*.py`` paths of the tasks.md ownership rows whose first owner is A3, braces expanded."""
+    paths = set()
+    for line in TASKS.read_text(encoding="utf-8").splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if not line.startswith("|") or len(cells) < 2 or not re.match(r"A3\b", cells[1]):
+            continue
+        for item in re.findall(r"`([^`]+)`", cells[0]):
+            brace = re.fullmatch(r"(.*)\{([^}]*)\}(.*)", item)
+            names = [brace.group(1) + n + brace.group(3) for n in brace.group(2).split(",")] if brace else [item]
+            paths.update(n for n in names if n.startswith("flightrisk/") and n.endswith(".py"))
+    return paths
+
+
+def test_adopted_set_equals_the_a3_ownership_list():
+    """The allowance cannot quietly grow: it is exactly tasks.md's A3 rows plus the plan's edge_resolution.py."""
+    listed = _a3_ownership_list()
+    assert len([p for p in listed if p.startswith("flightrisk/drone/") and p not in A3_NEW_FILES]) == 15
+    assert A3_ADOPTED == listed | {"flightrisk/edge_resolution.py"}
+    for rel in A3_ADOPTED - A3_NEW_FILES:
+        assert (ROOT / rel).is_file(), rel
+
+
+def runtime_param_importers(root: Path, allowed: frozenset[str] = A3_ADOPTED) -> list[str]:
+    """Every run-time import of params or hardware under ``root/flightrisk`` outside params, hardware and ``allowed``.
 
     An import inside ``if TYPE_CHECKING:`` never runs, and the drone id pattern holds no registry or
     catalogue value, so neither counts.
     """
     offenders = []
-    for path in (ROOT / "flightrisk").rglob("*.py"):
-        rel = path.relative_to(ROOT).parts
-        if rel[1] in ("params", "hardware"):
+    for path in sorted((root / "flightrisk").rglob("*.py")):
+        rel = path.relative_to(root).parts
+        if rel[1] in ("params", "hardware") or "/".join(rel) in allowed:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         skipped = _type_checking_nodes(tree)
@@ -196,4 +254,191 @@ def test_no_runtime_module_imports_params_or_hardware():
                     not n.startswith(".") or bare.split(".")[0] in ("params", "hardware")
                 ):
                     offenders.append(f"{'/'.join(rel)}: {n}")
+    return offenders
+
+
+def test_only_adopted_modules_import_params_or_hardware():
+    """CMP-1: outside params, hardware and tests, only the modules A3 adopts import them at run time."""
+    offenders = runtime_param_importers(ROOT)
     assert not offenders, offenders
+
+
+# --- Coupling (plan step S3): the MAVLink build path never loads the Tello driver. ---
+
+TELLO = "flightrisk.drone.tello"
+
+
+def _module_file(root: Path, module: str) -> Path | None:
+    base = root.joinpath(*module.split("."))
+    for candidate in (base.with_suffix(".py"), base / "__init__.py"):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _module_name(root: Path, path: Path) -> str:
+    parts = list(path.relative_to(root).with_suffix("").parts)
+    return ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
+
+
+def _string_import(node) -> str | None:
+    """The module a call ``importlib.import_module("x")``, ``import_module("x")`` or ``__import__("x")`` loads.
+
+    Only a string literal first argument counts; a relative name is resolved against a literal ``package``.
+    """
+    if not isinstance(node, ast.Call) or not node.args:
+        return None
+    func = node.func
+    name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else None
+    first = node.args[0]
+    if name not in ("import_module", "__import__") or not (isinstance(first, ast.Constant) and isinstance(first.value, str)):
+        return None
+    target = first.value
+    if name == "import_module" and target.startswith("."):
+        package = node.args[1] if len(node.args) > 1 else next((k.value for k in node.keywords if k.arg == "package"), None)
+        if not (isinstance(package, ast.Constant) and isinstance(package.value, str)):
+            return None
+        level = len(target) - len(target.lstrip("."))
+        base = package.value.split(".")
+        base = base[: len(base) - (level - 1)]
+        target = ".".join(base + ([target.lstrip(".")] if target.lstrip(".") else []))
+    return target
+
+
+def _imports_in(nodes, module: str, is_package: bool, root: Path, skipped=frozenset()) -> set[str]:
+    """The ``flightrisk`` modules the import statements and string imports among ``nodes`` load.
+
+    Relative imports are resolved. A call of ``importlib.import_module`` or ``__import__`` with a string literal
+    counts as an import of that module (``_string_import``).
+    """
+    found = set()
+    for node in nodes:
+        if node in skipped:
+            continue
+        targets = []
+        string_target = _string_import(node)
+        if string_target:
+            targets = [string_target]
+        elif isinstance(node, ast.Import):
+            targets = [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                package = module.split(".") if is_package else module.split(".")[:-1]
+                package = package[: len(package) - (node.level - 1)]
+                base = ".".join(package + ([node.module] if node.module else []))
+            else:
+                base = node.module or ""
+            targets = [base] + [f"{base}.{a.name}" for a in node.names]
+        for target in targets:
+            if target.split(".")[0] == "flightrisk" and _module_file(root, target):
+                found.add(target)
+    return found
+
+
+def _module_level_nodes(tree):
+    """Every node that runs when the module is imported: not inside a function, a lambda or ``if TYPE_CHECKING:``."""
+    lazy = set(_type_checking_nodes(tree))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            for child in ast.iter_child_nodes(node):
+                if not isinstance(child, (ast.arguments, ast.expr)) or isinstance(node, ast.Lambda):
+                    lazy.update(ast.walk(child))
+    return [n for n in ast.walk(tree) if n not in lazy]
+
+
+def import_closure(root: Path, start: set[str]) -> dict[str, str]:
+    """Every module loaded by importing ``start``, mapped to the module that first imported it.
+
+    Edges are module-level imports only (parent packages included): an import inside a function runs only
+    when that function is called, so a Tello-only helper's lazy import does not count.
+    """
+    parent = {m: "<_build_mavlink_drone>" for m in start}
+    queue = sorted(start)
+    while queue:
+        module = queue.pop()
+        path = _module_file(root, module)
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        loads = _imports_in(_module_level_nodes(tree), module, path.name == "__init__.py", root)
+        pieces = module.split(".")
+        loads.update(".".join(pieces[:i]) for i in range(1, len(pieces)))
+        for dep in sorted(loads - parent.keys()):
+            parent[dep] = module
+            queue.append(dep)
+    return parent
+
+
+def mavlink_build_path_modules(root: Path) -> dict[str, str]:
+    """The modules ``edge_device._build_mavlink_drone`` reaches: edge_device's module-level imports plus the
+    imports inside that function, followed transitively."""
+    path = root / "flightrisk" / "edge_device.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    build = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_build_mavlink_drone")
+    start = {"flightrisk.edge_device"} | _imports_in(ast.walk(build), "flightrisk.edge_device", False, root)
+    return import_closure(root, start)
+
+
+def _chain(parent: dict[str, str], module: str) -> str:
+    chain = [module]
+    while chain[-1] in parent:
+        chain.append(parent[chain[-1]])
+    return " <- ".join(chain)
+
+
+def test_mavlink_build_path_never_imports_tello():
+    """SEAM-6: no module that ``edge_device._build_mavlink_drone`` reaches imports ``flightrisk.drone.tello``."""
+    reached = mavlink_build_path_modules(ROOT)
+    assert "flightrisk.drone.mavlink_fleet" in reached and "flightrisk.drone.mavsdk_link" in reached
+    assert TELLO not in reached, _chain(reached, TELLO)
+
+
+def test_coupling_walk_sees_a_module_level_tello_import_but_not_a_lazy_one(tmp_path):
+    pkg = tmp_path / "flightrisk"
+    (pkg / "drone").mkdir(parents=True)
+    for name in ("__init__.py", "drone/__init__.py", "drone/tello.py", "drone/helper.py"):
+        (pkg / name).write_text("")
+    (pkg / "edge_device.py").write_text(
+        "def _build_mavlink_drone(args, log):\n    from flightrisk.drone import mavlink_fleet\n\n"
+        "def _build_tello(args):\n    from flightrisk.drone.tello import TelloController\n"
+    )
+    (pkg / "drone" / "mavlink_fleet.py").write_text(
+        "from . import helper\n\ndef later():\n    from flightrisk.drone import tello\n"
+    )
+    assert TELLO not in mavlink_build_path_modules(tmp_path)
+    (pkg / "drone" / "helper.py").write_text("from .tello import TelloController\n")
+    reached = mavlink_build_path_modules(tmp_path)
+    assert _chain(reached, TELLO).startswith(
+        "flightrisk.drone.tello <- flightrisk.drone.helper <- flightrisk.drone.mavlink_fleet"
+    )
+
+
+def test_coupling_walk_counts_a_module_level_string_import(tmp_path):
+    pkg = tmp_path / "flightrisk"
+    (pkg / "drone").mkdir(parents=True)
+    for name in ("__init__.py", "drone/__init__.py", "drone/tello.py", "drone/helper.py"):
+        (pkg / name).write_text("")
+    (pkg / "edge_device.py").write_text("def _build_mavlink_drone(args, log):\n    from flightrisk.drone import helper\n")
+    (pkg / "drone" / "helper.py").write_text(
+        "import importlib\n\ndef later():\n    importlib.import_module('flightrisk.drone.tello')\n"
+    )
+    assert TELLO not in mavlink_build_path_modules(tmp_path)
+    for line in (
+        "import importlib\n_T = importlib.import_module('flightrisk.drone.tello')\n",
+        "from importlib import import_module\n_T = import_module('.tello', 'flightrisk.drone')\n",
+        "_T = __import__('flightrisk.drone.tello')\n",
+        "class Holder:\n    T = __import__('flightrisk.drone.tello')\n",
+    ):
+        (pkg / "drone" / "helper.py").write_text(line)
+        reached = mavlink_build_path_modules(tmp_path)
+        assert _chain(reached, TELLO).startswith("flightrisk.drone.tello <- flightrisk.drone.helper"), line
+
+
+def test_mavlink_build_path_leaves_tello_unloaded_in_a_fresh_interpreter():
+    """SEAM-6, run for real: importing the MAVLink build path's modules never loads ``flightrisk.drone.tello``."""
+    code = (
+        "import sys\n"
+        "import flightrisk.edge_device, flightrisk.drone.mavlink_fleet, flightrisk.drone.mavsdk_link\n"
+        "print('flightrisk.drone.tello' in sys.modules)\n"
+    )
+    result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert result.stdout.strip().splitlines()[-1] == "False", result.stdout[-2000:]
