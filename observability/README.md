@@ -69,14 +69,14 @@ One stack on the ground station collects from both laptops, and one Grafana show
 
 | Laptop | Role | Cable address | `service.instance.id` |
 | --- | --- | --- | --- |
-| MacBook (runs this stack) | ground station | `10.42.0.1` (`bridge0`) | `mac-ground` |
-| HP ZBook (PLEXBOX) | edge-2 | `10.42.0.2` | `edge-2` |
+| Ground-station laptop, macOS (runs this stack) | ground station | `10.42.0.1` (`bridge0`) | `ground` |
+| Windows edge laptop | edge-2 | `10.42.0.2` | `edge-2` |
 
 The OTLP ports (4317 gRPC, 4318 HTTP) listen on the cable address only, so the
-ZBook can reach them and nothing on Wi-Fi can. Grafana, Prometheus, Tempo and Loki
+edge laptop can reach them and nothing on Wi-Fi can. Grafana, Prometheus, Tempo and Loki
 stay on `127.0.0.1`.
 
-Start the stack on the Mac. First check the value: `scripts/check_otlp_bind.sh` accepts
+Start the stack on the ground-station laptop. First check the value: `scripts/check_otlp_bind.sh` accepts
 only `127.0.0.1` and `10.42.0.1` and refuses anything else (`0.0.0.0` or `::` would put the
 OTLP receiver, which has no authentication, on Wi-Fi).
 
@@ -100,8 +100,8 @@ Never use `OTLP_BIND=0.0.0.0`. Without `OTLP_BIND` the ports stay on `127.0.0.1`
 address such as `10.42.0.1` cannot be bound there: `up` fails with
 `failed to bind host port 10.42.0.1:4317/tcp: cannot assign requested address` and the
 collector does not start. That fails closed (nothing is exposed). With Colima, run the
-stack without `OTLP_BIND`; the Mac's own processes can still export to `127.0.0.1:4317`,
-but the ZBook cannot reach the collector until the port is forwarded to the cable address
+stack without `OTLP_BIND`; the ground-station laptop's own processes can still export to `127.0.0.1:4317`,
+but the edge laptop cannot reach the collector until the port is forwarded to the cable address
 by some other means.
 
 Each process names its node with the standard `OTEL_RESOURCE_ATTRIBUTES` variable.
@@ -110,14 +110,14 @@ Mac (ground station; use `http://127.0.0.1:4317` if the collector is on loopback
 
 ```bash
 FLIGHTRISK_OTEL_ENABLED=true OTEL_EXPORTER=otlp-grpc OTEL_ENDPOINT=http://10.42.0.1:4317 \
-OTEL_RESOURCE_ATTRIBUTES=service.instance.id=mac-ground FLIGHTRISK_TELEMETRY_CONTENT=1 \
+OTEL_RESOURCE_ATTRIBUTES=service.instance.id=ground FLIGHTRISK_TELEMETRY_CONTENT=1 \
   python -m flightrisk.dashboard --source edge ...
 ```
 
 `FLIGHTRISK_TELEMETRY_CONTENT=1` turns on operator text and the target image preview for the
 field setup (the code default is off); leave it out to log numbers and ids only.
 
-ZBook (edge-2), PowerShell from the repo root:
+The edge-2 laptop, PowerShell from the repo root:
 
 ```powershell
 $env:FLIGHTRISK_OTEL_ENABLED = "true"; $env:OTEL_EXPORTER = "otlp-grpc"; $env:OTEL_ENDPOINT = "http://10.42.0.1:4317"; $env:OTEL_RESOURCE_ATTRIBUTES = "service.instance.id=edge-2"; $env:FLIGHTRISK_TELEMETRY_CONTENT = "1"
@@ -132,14 +132,14 @@ drop-down at the top of each dashboard (multi-select, *All* by default). A proce
 OpenTelemetry SDK would otherwise pick a random id on every start and each restart would be
 a new node.
 
-The cable path does not use Wi-Fi, so exporting keeps working while the ZBook's Wi-Fi is
+The cable path does not use Wi-Fi, so exporting keeps working while the edge laptop's Wi-Fi is
 joined to a Tello. If the collector is unreachable (cable out, stack stopped), telemetry is
 dropped: export runs on background threads with a 3 s timeout, the frame loop and the
 edge's send path are not slowed, and the flush at exit gives up after 3 s.
 
 Firewall: the macOS application firewall may ask whether to accept incoming connections
 for the process that owns port 4317 (Docker's port forwarder). Allow it, or exports from
-the ZBook time out and are dropped. The ZBook only makes outgoing connections.
+the edge laptop time out and are dropped. The edge laptop only makes outgoing connections.
 
 Stop the stack:
 

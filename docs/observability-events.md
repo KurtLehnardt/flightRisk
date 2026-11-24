@@ -19,7 +19,7 @@ interface and change a dashboard query when you rename one.
 | `message` | Human-readable text, redacted |
 | `category` | Event family: `user_input`, `target_image`, `error`, `drone_comm`, `drone_telemetry`, `alert`, `flight_safety`, `detection_pipeline`, `reasoning` |
 | `trace_id`, `span_id` | The span active when the line was written (absent outside a span). Click it in Grafana to open the trace |
-| `node` | `service.instance.id` from `OTEL_RESOURCE_ATTRIBUTES` (or `FLIGHTRISK_NODE`), for example `mac-ground` |
+| `node` | `service.instance.id` from `OTEL_RESOURCE_ATTRIBUTES` (or `FLIGHTRISK_NODE`), for example `ground` |
 | `session_id` | Current search session |
 | `drone_id` | When the event is about one drone |
 | `fingerprint`, `error_type`, `error_message`, `where` | On ERROR and CRITICAL lines: a hash of the exception type and its innermost frames that groups repeats, the exception type and redacted message, and the innermost frame. A repeat within 10 s is not written again; the next one carries `suppressed` (the count). A repeat means the same fingerprint for the same drone, kind, command, action, type, reason, peer, model and queue: a failure on another drone is written at once The stack trace (`stack`) is included only while `FLIGHTRISK_LOG_LEVEL=DEBUG` |
