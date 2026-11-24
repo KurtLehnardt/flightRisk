@@ -44,6 +44,8 @@ from flightrisk.drone.snapshot import (
     TelemetrySnapshot,
     reading,
 )
+from flightrisk.params import table as _registry
+from flightrisk.params.defaults import model_default
 
 DEFAULT_HOST = "sim://drone"
 
@@ -118,6 +120,7 @@ def _coerce(value: Any, default: Any) -> Any:
     return text
 
 
+
 class FakeDrone:
     """Simulated drone implementing every role protocol deterministically."""
 
@@ -140,9 +143,9 @@ class FakeDrone:
         self.capabilities = DroneCapabilities(
             has_gps=False,
             has_rtsp=False,
-            min_move_cm=20,
-            max_move_cm=500,
-            max_altitude_m=10,
+            min_move_cm=model_default("move.min_cm", _registry.T),
+            max_move_cm=model_default("move.max_cm", _registry.T),
+            max_altitude_m=model_default("envelope.max_altitude_cm", _registry.T) // 100,
             supports_missions=False,
             features=frozenset(features),
         )

@@ -874,6 +874,93 @@ def fact_arguments(resolution: EdgeResolution, rows: Mapping[str, str], today: M
     return arguments
 
 
+#: The registry row each ``edge_device.ObstacleSettings`` setting of the edge's start reads (EDGE-2).
+#: The avoidance budget has no row and keeps today's reader.
+OBSTACLE_ROWS: Mapping[str, str] = MappingProxyType({
+    "mode": "sensing.mode",
+    "turn": "sensing.turn",
+    "step_cm": "sensing.step_cm",
+    "settle_s": "sensing.settle_s",
+    "min_safe_depth": "sensing.min_safe_depth",
+    "person_fraction": "sensing.person_fraction",
+    "max_decode_lag_s": "sensing.max_decode_lag_s",
+    "clear_votes": "avoid.clear_votes",
+    "relook": "avoid.relook",
+    "sidestep_cm": "avoid.sidestep_cm",
+    "sidesteps": "avoid.sidesteps",
+})
+
+
+def obstacle_arguments(resolution: EdgeResolution, today: Mapping[str, Any],
+                       environ: Mapping[str, str]) -> dict[str, Any]:
+    """The obstacle settings of the edge's start from the resolved values (EDGE-2).
+
+    ``today`` holds the settings today's reader (``edge_device.ObstacleSettings``) built from
+    ``environ``, keyed as ``OBSTACLE_ROWS``. Each setting is its row's resolved value, so a value of the
+    drone's profile, or a launcher or params-file value the resolver accepted, reaches it. Three cases
+    keep today's reader's value, so no start that today's edge accepts flies differently:
+
+    * a value the environment or the command line set, as for the envelope (``envelope_arguments``),
+      refusing the start when such a name hides a launcher or params-file value (``_refuse_shadowed``);
+    * a row the resolution does not hold (``sensing.max_decode_lag_s`` on a MAVLink unit);
+    * a row whose environment variable is set but which the resolver did not take from it. On a
+      production MAVLink unit the resolver leaves a ``FLIGHTRISK_OBSTACLE_*`` fact override out of the
+      resolution (FACT-3) and logs that the edge reads it itself (``resolver.READ_BY_THE_EDGE``): a
+      MAVLink edge with a camera senses with these settings, so ignoring the override here would change
+      how today's edge flies. Plan risk R6 leaves that change to B1.
+
+    A launcher ``sensing.mode`` of off reaches here only when the launcher's ``confirmed`` object names
+    it. Without that confirmation the resolver refuses the start (``resolver.LAUNCHER_NEEDS_CONFIRMATION``),
+    where today's edge ignored the launcher value and sensed as usual (design item 47).
+    """
+    from flightrisk.params.table import TABLE
+
+    names = {spec.id: spec.env for spec in TABLE if spec.id in OBSTACLE_ROWS.values()}
+    arguments = dict(today)
+    for name, row in OBSTACLE_ROWS.items():
+        arguments[name] = _obstacle_value(resolution, row, today[name], names.get(row), environ)
+    return arguments
+
+
+def _obstacle_value(resolution: EdgeResolution, row: str, today: Any, variable: Optional[str],
+                    environ: Mapping[str, str]) -> Any:
+    """One setting of ``obstacle_arguments``: the resolved value of ``row``, or ``today`` in the cases it keeps."""
+    from flightrisk.params.spec import Source
+
+    value = resolution.values.get(row)
+    if value is None:
+        return today
+    if Source(value.source) in (Source.ENV, Source.CLI):
+        _refuse_shadowed(resolution, row, value, today)
+        return today
+    if variable and (environ.get(variable) or "").strip():
+        return today
+    return value.value
+
+
+def resolved_sensing_mode(resolution: EdgeResolution, today: str, environ: Mapping[str, str]) -> Any:
+    """The obstacle sensing mode the edge flies, exactly as ``obstacle_arguments`` gives it to the wiring.
+
+    ``today`` is the mode of ``FLIGHTRISK_OBSTACLE_SENSING`` (``edge_device._obstacle_sensing_mode``).
+    Raises ``EdgeStartRefused`` as ``obstacle_arguments`` does.
+    """
+    from flightrisk.params.table import TABLE
+
+    row = OBSTACLE_ROWS["mode"]
+    variable = next((spec.env for spec in TABLE if spec.id == row), None)
+    return _obstacle_value(resolution, row, today, variable, environ)
+
+
+def forward_sensing_on(resolution: Optional[EdgeResolution]) -> Optional[bool]:
+    """Whether forward obstacle sensing is available and on for the unit (SEAM-4); None without a resolution."""
+    if resolution is None:
+        return None
+    from flightrisk.hardware.features import FORWARD_OBSTACLE_SENSING
+
+    gate = resolution.gates.get(FORWARD_OBSTACLE_SENSING)
+    return bool(gate and gate.get("ok") and gate.get("on"))
+
+
 def resolved_elsewhere(resolution: EdgeResolution, row: str) -> Optional[str]:
     """The source detail of ``row``'s resolved value when neither the environment nor the command line set it.
 
