@@ -77,3 +77,19 @@ unless every later hash is also recomputed; CODEOWNERS review of this file is th
 - SHA-256 table: f949df64f14cee5c1c025d683cabea1d56a493941db05c214c33f7deac628378
 - SHA-256 golden: 7403c28493386027b0c383326d30d2bb2645fa54c154e289276f9246289d2504
 - SHA-256 allowlist: dd1af99c5e3615ed79b51d9efbed782d2f3abf41cd3855f08831cdde67c68621
+
+## PR-A3.5: Tello adapter and fake constants from the registry
+
+- Value: none changed.
+- Old and new: not applicable.
+- Reason: PR-A3.5 moves 28 + 3 + 2 deferred allowlist entries to registry lookups with no value change: 28 in
+  `flightrisk/drone/tello.py`, 3 in `flightrisk/drone/tello_bound.py` (the command, state and video ports) and 2
+  in `flightrisk/drone/fake.py` (`move.min_cm` and `move.max_cm`). Each constant keeps its name, value and type.
+  Four `tello.py` entries are reclassified from deferred to sdk under section 3.3, because they have no registry
+  row: `_LAND_STALL_PACKETS`, `_SETTLE_MIN_GAP_S`, `_SETTLE_BURST_GAP_S` and the `max_altitude_m=10` of
+  `TelloController.__init__`.
+- Section 27 item: none.
+- SHA-256 previous: 232c2d910939388ccb34883b2e83f3605c60aedafed6a69da687e85872a5bab6
+- SHA-256 table: f949df64f14cee5c1c025d683cabea1d56a493941db05c214c33f7deac628378
+- SHA-256 golden: 7403c28493386027b0c383326d30d2bb2645fa54c154e289276f9246289d2504
+- SHA-256 allowlist: 3e9e6a36256e810ea5bbce7c92888bb129ebf393a9a5bd24ce1b1456aed1675b
