@@ -6,7 +6,7 @@
 #   make-app.sh build --out DIR [--ref REF]        the same into any folder (build-dmg.sh)
 #
 # The bundle holds:
-#   Contents/Info.plist              bundle id io.github.kurtlehnardt.flightrisk.launcher
+#   Contents/Info.plist              bundle id org.flightrisk.launcher
 #   Contents/MacOS/FlightRisk        installer/macos/app-main.sh
 #   Contents/Resources/FlightRisk.icns
 #   Contents/Resources/install.sh    the installer, used when FlightRisk is not installed yet
@@ -20,7 +20,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
-BUNDLE_ID="io.github.kurtlehnardt.flightrisk.launcher"
+BUNDLE_ID="org.flightrisk.launcher"
 ICNS="$ROOT/installer/assets/FlightRisk.icns"
 
 usage() {

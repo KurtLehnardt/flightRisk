@@ -31,7 +31,7 @@ from tests.support.installer_repo import make_fixture_repo
 ROOT = Path(__file__).resolve().parent.parent
 MACOS = ROOT / "installer" / "macos"
 INSTALL = MACOS / "install.sh"
-BUNDLE_ID = "io.github.kurtlehnardt.flightrisk.launcher"
+BUNDLE_ID = "org.flightrisk.launcher"
 BASE_PYTHON = getattr(sys, "_base_executable", sys.executable)
 
 pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="the macOS installer runs on macOS only")
