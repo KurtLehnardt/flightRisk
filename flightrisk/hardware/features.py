@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Mapping, Optional, Sequence
 
-from flightrisk.hardware.catalogue import ADAPTER_SPECS, CameraSpec, DroneModel
+from flightrisk.hardware.catalogue import ADAPTER_SPECS, AdapterSpec, CameraSpec, DroneModel
 from flightrisk.params.resolver import spec_for
 
 ROLE_LEVEL = "level"
@@ -106,8 +106,6 @@ CLAUDE_SECOND_OPINION = "claude_second_opinion"
 
 CAPTURE_SOURCES_WITH_FRAMES = ("camera", "url")
 SLOT_ADAPTER_REASON = "no adapter for that protocol is installed"
-TELLO_ADAPTER = "tello_sdk_udp"
-MAVLINK_ADAPTER = "mavlink"
 SEARCH_ROLES = (ROLE_LEVEL, ROLE_NADIR)
 SRC_DEFAULT = "default"
 
@@ -178,8 +176,9 @@ class FeatureRefused(ValueError):
         self.reason = reason
 
 
-def _is_tello(model: DroneModel) -> bool:
-    return model.adapter == TELLO_ADAPTER
+def _adapter_spec(model: DroneModel) -> AdapterSpec:
+    """The catalogue facts of the model's adapter. An adapter missing from the catalogue has every fact off."""
+    return ADAPTER_SPECS.get(model.adapter) or AdapterSpec(model.adapter, "")
 
 
 def model_addable_reason(model: DroneModel) -> Optional[str]:
@@ -197,11 +196,13 @@ def feature_reason(feature_id: str, model: DroneModel, *, mission_pitch_deg: Map
     """Why ``feature_id`` is statically unavailable for ``model``, or None when it is available.
 
     ``source`` is the edge's ``--source`` (``camera``, ``url`` ...) for a capture-source unit.
-    ``stepped_sensing`` is whether the backend declares STEPPED_SENSING; it defaults to True for a
-    Tello adapter only and is never consulted for a capture-source (MAVLink) unit.
+    ``stepped_sensing`` is whether the backend declares STEPPED_SENSING; it defaults to the adapter
+    spec's ``stepped_sensing`` fact (False for an adapter missing from ``ADAPTER_SPECS``) and is never
+    consulted for a capture-source (MAVLink) unit.
     """
     if feature_id not in FEATURES:
         raise KeyError(f"unknown feature {feature_id!r}")
+    adapter = _adapter_spec(model)
     cameras = tuple(model.cameras)
     if tolerance_deg is None:
         tolerance_deg = default_level_tolerance_deg(model.profile)
@@ -219,12 +220,14 @@ def feature_reason(feature_id: str, model: DroneModel, *, mission_pitch_deg: Map
             if source not in CAPTURE_SOURCES_WITH_FRAMES:
                 return "obstacle sensing from the camera needs --source camera or url"
             return None
-        stepped = _is_tello(model) if stepped_sensing is None else stepped_sensing
+        stepped = adapter.stepped_sensing if stepped_sensing is None else stepped_sensing
         return None if stepped else "the drone does not support stepped sensing"
     if feature_id == ONBOARD_AVOIDANCE:
-        if model.adapter == MAVLINK_ADAPTER:
+        if adapter.declares_avoidance:
             return None
-        return "the Tello has no onboard avoidance" if _is_tello(model) else "this drone has no onboard avoidance"
+        if adapter.short_name:
+            return f"the {adapter.short_name} has no onboard avoidance"
+        return "this drone has no onboard avoidance"
     if feature_id == LEVEL_SEARCH:
         return None if mount_with(ROLE_LEVEL) else (pitch_reason or "no camera mount looks level")
     if feature_id == BIRDSEYE_SEARCH:
@@ -232,8 +235,8 @@ def feature_reason(feature_id: str, model: DroneModel, *, mission_pitch_deg: Map
             return None
         if pitch_reason:
             return pitch_reason
-        if _is_tello(model):
-            return "the Tello has one fixed forward camera"
+        if adapter.short_name:
+            return f"the {adapter.short_name} has one fixed forward camera"
         return ("no camera looks down: needs a downward mount or a gimbal with a mission pitch of "
                 f"{NADIR_MAX_PITCH_DEG} degrees or lower")
     if feature_id == THERMAL_DETECTION:
