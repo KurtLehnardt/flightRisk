@@ -682,9 +682,10 @@ class LandingTello:
         self.touched_down_at: float | None = None
 
     def _touch_down(self) -> None:
+        # Stamp the touchdown before the wire reports ground, so the land confirmation can never see a landed drone without a timestamp.
+        self.touched_down_at = time.monotonic()
         self.wire.height_cm = 0
         self.landing = False
-        self.touched_down_at = time.monotonic()
 
     def __call__(self, command: str):
         word = command.split()[0]
