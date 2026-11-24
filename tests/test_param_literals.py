@@ -205,6 +205,85 @@ class Scanner(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+REF_TARGET = re.compile(r"^(?:ast:(?P<path>[^:]+)|(?P<mod>[\w.]+)):(?P<attr>.+)$")
+
+
+def _ref_names(ref: str):
+    """Yield ``(file, name)`` for each code location a golden ``*_ref`` string points at."""
+    for part in ref.split(" & "):
+        m = REF_TARGET.match(part.strip())
+        if not m:
+            continue
+        path = m["path"] or m["mod"].replace(".", "/") + ".py"
+        attr = re.split(r"[\[*~]", m["attr"])[0]
+        inner = re.search(r"\((\w+)\)", attr)
+        yield path, inner.group(1) if inner else attr.split("(")[0].split(".")[-1]
+
+
+def registry_matches(allowlist) -> list[tuple[tuple, frozenset, str]]:
+    """Allowlist keys that duplicate a registry row, with the categories each may carry.
+
+    A key matches when (1) it defines a name that the golden file's ``today_ref`` (row value) or
+    ``lo_ref``/``hi_ref`` (today's accepted range) points at, (2) it is the default of an
+    environment name or flag that a row reads, or (3) its name is a row id's last segment and its
+    value is that row's default. A value match must be ``deferred``; a range match may be ``bound``.
+    """
+    import json
+
+    from flightrisk.params.table import TABLE
+
+    golden = json.loads((ROOT / "tests" / "golden" / "flight_params.json").read_text(encoding="utf-8"))
+    refs: dict[tuple, set] = {}
+
+    def walk(obj, rid):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if k in ("today_ref", "lo_ref", "hi_ref") and isinstance(v, str):
+                    for loc in _ref_names(v):
+                        refs.setdefault(loc, set()).add((rid, "value" if k == "today_ref" else "range"))
+                walk(v, rid)
+        elif isinstance(obj, list):
+            for v in obj:
+                walk(v, rid)
+
+    for row in golden["rows"]:
+        walk(row, row["id"])
+    env_names, by_leaf = {}, {}
+    for row in TABLE:
+        for n in (row.env, *(a.name for a in row.env_aliases), *row.cli):
+            if n:
+                env_names.setdefault(n, set()).add(row.id)
+        by_leaf.setdefault(row.id.split(".")[-1], []).append(row)
+    out = []
+    for file, entries in allowlist.items():
+        for key in entries:
+            _, _, kind, target, name, value = key
+            why, allowed = set(), {"deferred"}
+            if kind != "compare":
+                for (rid, what) in refs.get((file, name), set()) | refs.get((file, target), set()):
+                    why.add(f"{rid} {what}")
+            if kind in ("env_default", "argparse_default") and name in env_names:
+                why |= {f"{rid} env" for rid in env_names[name]}
+            for row in by_leaf.get(str(name).lower(), ()):
+                if value in row.defaults.values():
+                    why.add(f"{row.id} default")
+            if why:
+                if all(w.endswith(" range") for w in why):
+                    allowed.add("bound")
+                out.append((key, frozenset(allowed), "; ".join(sorted(why))))
+    return out
+
+
+# Reviewed coincidental matches of ``registry_matches``: key -> why it is not a registry duplicate.
+REGISTRY_MATCH_EXCEPTIONS = {
+    ('flightrisk/dashboard/pipeline.py', '<module>._frame_loop', 'compare', '<compare>', 'count', 1):
+        "A generic 'count' compared with 1, not the escort drone count of row escort.count.",
+    ('flightrisk/drone/plan_paths.py', '<module>.split_area', 'compare', '<compare>', 'count', 1):
+        "A lane-split count compared with 1, not the escort drone count of row escort.count.",
+    ('flightrisk/dashboard/detection_profiles.py', '<module>', 'assign', 'REPLY_TIMEOUT_S', 'REPLY_TIMEOUT_S', 20.0):
+        "The wait for an edge's reply to a detection-profile change, not the takeoff reply timeout of "
+        "row takeoff.reply_timeout_s; the equal value is a coincidence.",
+}
 
 
 def scan_source(text: str, rel: str, unit_re: re.Pattern) -> list[tuple[tuple, int]]:
@@ -322,3 +401,24 @@ def test_every_finding_is_allowlisted_with_exact_count():
                 assert re.search(r"A[3-5]", entry["reason"]), key
             expected[key] = entry["count"]
     assert scan_repo() == expected
+
+
+def test_registry_duplicates_are_deferred():
+    """F2: a non-deferred entry may not be a registry row's value, env default or row default."""
+    from tests.param_literal_allowlist import ALLOWLIST
+
+    wrong = []
+    for key, allowed, why in registry_matches(ALLOWLIST):
+        category = ALLOWLIST[key[0]][key]["category"]
+        if category not in allowed and key not in REGISTRY_MATCH_EXCEPTIONS:
+            wrong.append((key, category, why))
+    assert not wrong, wrong
+    stale = [k for k in REGISTRY_MATCH_EXCEPTIONS if k not in {m[0] for m in registry_matches(ALLOWLIST)}]
+    assert not stale, stale
+
+
+def test_registry_match_catches_a_planted_duplicate():
+    planted = {"flightrisk/drone/tello_bound.py": {
+        ("flightrisk/drone/tello_bound.py", "<module>", "assign", "TELLO_CMD_PORT", "TELLO_CMD_PORT", 8889): {}}}
+    (key, allowed, why), = registry_matches(planted)
+    assert allowed == {"deferred"} and "tello_sdk.command_port" in why

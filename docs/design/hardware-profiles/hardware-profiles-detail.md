@@ -870,7 +870,11 @@ suffix (`_cm`, `_mm`, `_m`, `_km`, `_s`, `_ms`, `_deg`, `_dps`, `_mps`, `_pct`, 
 **Allowlist.** Keyed by `(file, enclosing scope, kind, callee or target, name, value)` with the
 exact count of findings for that key; each key maps to `(category, reason)`. Categories: `sdk`,
 `protocol`, `regulatory`, `reference`, `internal`, `legacy`, `test_double`, `vision`, `map`,
-`process`, `deferred` (belongs in the registry but is not migrated yet; names its follow-up). Keys
+`process`, `bound` (today's accepted range of an environment reader; the parity test pins it and C5
+replaces it with the registry bound), `deferred` (belongs in the registry but is not migrated yet;
+names its follow-up). An entry whose name or value duplicates a registry row's value must be
+`deferred`; one that is a row's accepted range may be `bound`; a reviewed exceptions list in the
+checker holds the coincidental matches. Keys
 use names and values, never line numbers, so moving code does not churn the list; a changed value or
 a changed count fails until the allowlist changes in the same diff (Q8). Sections are separated by
 file, so PRs that migrate different files edit different sections. `tests/param_literal_allowlist.py`
