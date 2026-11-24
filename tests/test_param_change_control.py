@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 import hashlib
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 from flightrisk.params.docs import (
@@ -279,14 +281,45 @@ def _module_name(root: Path, path: Path) -> str:
     return ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
 
 
+def _string_import(node) -> str | None:
+    """The module a call ``importlib.import_module("x")``, ``import_module("x")`` or ``__import__("x")`` loads.
+
+    Only a string literal first argument counts; a relative name is resolved against a literal ``package``.
+    """
+    if not isinstance(node, ast.Call) or not node.args:
+        return None
+    func = node.func
+    name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else None
+    first = node.args[0]
+    if name not in ("import_module", "__import__") or not (isinstance(first, ast.Constant) and isinstance(first.value, str)):
+        return None
+    target = first.value
+    if name == "import_module" and target.startswith("."):
+        package = node.args[1] if len(node.args) > 1 else next((k.value for k in node.keywords if k.arg == "package"), None)
+        if not (isinstance(package, ast.Constant) and isinstance(package.value, str)):
+            return None
+        level = len(target) - len(target.lstrip("."))
+        base = package.value.split(".")
+        base = base[: len(base) - (level - 1)]
+        target = ".".join(base + ([target.lstrip(".")] if target.lstrip(".") else []))
+    return target
+
+
 def _imports_in(nodes, module: str, is_package: bool, root: Path, skipped=frozenset()) -> set[str]:
-    """The ``flightrisk`` modules the import statements among ``nodes`` load, relative imports resolved."""
+    """The ``flightrisk`` modules the import statements and string imports among ``nodes`` load.
+
+    Relative imports are resolved. A call of ``importlib.import_module`` or ``__import__`` with a string literal
+    counts as an import of that module (``_string_import``).
+    """
     found = set()
     for node in nodes:
         if node in skipped:
             continue
         targets = []
-        if isinstance(node, ast.Import):
+        string_target = _string_import(node)
+        if string_target:
+            targets = [string_target]
+        elif isinstance(node, ast.Import):
             targets = [a.name for a in node.names]
         elif isinstance(node, ast.ImportFrom):
             if node.level:
@@ -376,3 +409,36 @@ def test_coupling_walk_sees_a_module_level_tello_import_but_not_a_lazy_one(tmp_p
     assert _chain(reached, TELLO).startswith(
         "flightrisk.drone.tello <- flightrisk.drone.helper <- flightrisk.drone.mavlink_fleet"
     )
+
+
+def test_coupling_walk_counts_a_module_level_string_import(tmp_path):
+    pkg = tmp_path / "flightrisk"
+    (pkg / "drone").mkdir(parents=True)
+    for name in ("__init__.py", "drone/__init__.py", "drone/tello.py", "drone/helper.py"):
+        (pkg / name).write_text("")
+    (pkg / "edge_device.py").write_text("def _build_mavlink_drone(args, log):\n    from flightrisk.drone import helper\n")
+    (pkg / "drone" / "helper.py").write_text(
+        "import importlib\n\ndef later():\n    importlib.import_module('flightrisk.drone.tello')\n"
+    )
+    assert TELLO not in mavlink_build_path_modules(tmp_path)
+    for line in (
+        "import importlib\n_T = importlib.import_module('flightrisk.drone.tello')\n",
+        "from importlib import import_module\n_T = import_module('.tello', 'flightrisk.drone')\n",
+        "_T = __import__('flightrisk.drone.tello')\n",
+        "class Holder:\n    T = __import__('flightrisk.drone.tello')\n",
+    ):
+        (pkg / "drone" / "helper.py").write_text(line)
+        reached = mavlink_build_path_modules(tmp_path)
+        assert _chain(reached, TELLO).startswith("flightrisk.drone.tello <- flightrisk.drone.helper"), line
+
+
+def test_mavlink_build_path_leaves_tello_unloaded_in_a_fresh_interpreter():
+    """SEAM-6, run for real: importing the MAVLink build path's modules never loads ``flightrisk.drone.tello``."""
+    code = (
+        "import sys\n"
+        "import flightrisk.edge_device, flightrisk.drone.mavlink_fleet, flightrisk.drone.mavsdk_link\n"
+        "print('flightrisk.drone.tello' in sys.modules)\n"
+    )
+    result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert result.stdout.strip().splitlines()[-1] == "False", result.stdout[-2000:]

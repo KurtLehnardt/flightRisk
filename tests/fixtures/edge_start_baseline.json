@@ -1,4 +1,933 @@
 {
+ "methods": {
+  "default": {
+   "above_ceiling": {
+    "(200,)": false,
+    "(201,)": true,
+    "(3000,)": true,
+    "(3001,)": true,
+    "(None,)": false,
+    "(nan,)": false
+   },
+   "can_takeoff": {
+    "(0,)": false,
+    "(100,)": true,
+    "(14,)": false,
+    "(15,)": false,
+    "(29,)": false,
+    "(30,)": true,
+    "(None,)": false,
+    "(nan,)": false
+   },
+   "check_alt_slot": {
+    "(-1,)": "REFUSED",
+    "(100,)": 100.0,
+    "(1000,)": "REFUSED",
+    "(12000,)": "REFUSED",
+    "(130,)": 130.0,
+    "(140,)": 140.0,
+    "(141,)": "REFUSED",
+    "(1500,)": "REFUSED",
+    "(2500,)": "REFUSED",
+    "(2501,)": "REFUSED",
+    "(49,)": "REFUSED",
+    "(50,)": 50.0,
+    "(500,)": "REFUSED"
+   },
+   "check_move": {
+    "('forward', 0)": false,
+    "('forward', 100)": true,
+    "('forward', 19)": false,
+    "('forward', 20)": true,
+    "('forward', 2999)": false,
+    "('forward', 3000)": false,
+    "('forward', 500)": true,
+    "('forward', 5000)": false,
+    "('forward', 5001)": false,
+    "('forward', 501)": false,
+    "('forward', nan)": false,
+    "('left', 0)": false,
+    "('left', 100)": true,
+    "('left', 19)": false,
+    "('left', 20)": true,
+    "('left', 2999)": false,
+    "('left', 3000)": false,
+    "('left', 500)": true,
+    "('left', 5000)": false,
+    "('left', 5001)": false,
+    "('left', 501)": false,
+    "('left', nan)": false,
+    "('up', 0)": false,
+    "('up', 100)": false,
+    "('up', 19)": false,
+    "('up', 20)": false,
+    "('up', 2999)": false,
+    "('up', 3000)": false,
+    "('up', 500)": false,
+    "('up', 5000)": false,
+    "('up', 5001)": false,
+    "('up', 501)": false,
+    "('up', nan)": false
+   },
+   "climb_allowed": {
+    "(0, 0)": true,
+    "(0, 100)": true,
+    "(0, 1000)": false,
+    "(0, 20)": true,
+    "(100, 0)": true,
+    "(100, 100)": false,
+    "(100, 1000)": false,
+    "(100, 20)": true,
+    "(140, 0)": true,
+    "(140, 100)": false,
+    "(140, 1000)": false,
+    "(140, 20)": false,
+    "(2400, 0)": false,
+    "(2400, 100)": false,
+    "(2400, 1000)": false,
+    "(2400, 20)": false,
+    "(2500, 0)": false,
+    "(2500, 100)": false,
+    "(2500, 1000)": false,
+    "(2500, 20)": false,
+    "(None, 0)": false,
+    "(None, 100)": false,
+    "(None, 1000)": false,
+    "(None, 20)": false,
+    "(nan, 0)": false,
+    "(nan, 100)": false,
+    "(nan, 1000)": false,
+    "(nan, 20)": false
+   },
+   "inside_fence": {
+    "(0, -501)": false,
+    "(0, 0)": true,
+    "(3000, 3000)": false,
+    "(3001, 0)": false,
+    "(499, 499)": true,
+    "(500, 0)": true,
+    "(500.5, 0)": false,
+    "(50000, 0)": false
+   },
+   "should_land": {
+    "(0,)": true,
+    "(100,)": false,
+    "(14,)": true,
+    "(15,)": false,
+    "(29,)": false,
+    "(30,)": false,
+    "(None,)": false,
+    "(nan,)": false
+   },
+   "slot_move": {
+    "(-5,)": "REFUSED",
+    "(0,)": "REFUSED",
+    "(100,)": null,
+    "(1000,)": {
+     "__seq__": [
+      "down",
+      500
+     ]
+    },
+    "(119,)": null,
+    "(120,)": {
+     "__seq__": [
+      "down",
+      20
+     ]
+    },
+    "(1481,)": {
+     "__seq__": [
+      "down",
+      500
+     ]
+    },
+    "(1500,)": {
+     "__seq__": [
+      "down",
+      500
+     ]
+    },
+    "(1520,)": {
+     "__seq__": [
+      "down",
+      500
+     ]
+    },
+    "(50,)": {
+     "__seq__": [
+      "up",
+      50
+     ]
+    },
+    "(5000,)": {
+     "__seq__": [
+      "down",
+      500
+     ]
+    },
+    "(600,)": {
+     "__seq__": [
+      "down",
+      500
+     ]
+    },
+    "(81,)": null,
+    "(None,)": "REFUSED",
+    "(nan,)": "REFUSED"
+   },
+   "validate_alt_slot": {
+    "(-1,)": "REFUSED",
+    "(0,)": "REFUSED",
+    "(100,)": 100.0,
+    "(1000,)": "REFUSED",
+    "(12000,)": "REFUSED",
+    "(12001,)": "REFUSED",
+    "(130,)": 130.0,
+    "(140,)": 140.0,
+    "(1500,)": "REFUSED",
+    "(2500,)": "REFUSED",
+    "(49,)": "REFUSED",
+    "(50,)": 50.0,
+    "(500,)": 500.0,
+    "(501,)": "REFUSED",
+    "(inf,)": "REFUSED",
+    "(nan,)": "REFUSED"
+   },
+   "validate_ceiling": {
+    "(1000, 0)": "REFUSED",
+    "(1000, 11000)": "REFUSED",
+    "(1000, 29)": "REFUSED",
+    "(1000, 299)": {
+     "__seq__": [
+      1000.0,
+      299.0
+     ]
+    },
+    "(1000, 30)": {
+     "__seq__": [
+      1000.0,
+      30.0
+     ]
+    },
+    "(1000, 300)": {
+     "__seq__": [
+      1000.0,
+      300.0
+     ]
+    },
+    "(1000, 500)": {
+     "__seq__": [
+      1000.0,
+      500.0
+     ]
+    },
+    "(1000, 60)": {
+     "__seq__": [
+      1000.0,
+      60.0
+     ]
+    },
+    "(1001, 0)": "REFUSED",
+    "(1001, 11000)": "REFUSED",
+    "(1001, 29)": "REFUSED",
+    "(1001, 299)": "REFUSED",
+    "(1001, 30)": "REFUSED",
+    "(1001, 300)": "REFUSED",
+    "(1001, 500)": "REFUSED",
+    "(1001, 60)": "REFUSED",
+    "(12000, 0)": "REFUSED",
+    "(12000, 11000)": "REFUSED",
+    "(12000, 29)": "REFUSED",
+    "(12000, 299)": "REFUSED",
+    "(12000, 30)": "REFUSED",
+    "(12000, 300)": "REFUSED",
+    "(12000, 500)": "REFUSED",
+    "(12000, 60)": "REFUSED",
+    "(12001, 0)": "REFUSED",
+    "(12001, 11000)": "REFUSED",
+    "(12001, 29)": "REFUSED",
+    "(12001, 299)": "REFUSED",
+    "(12001, 30)": "REFUSED",
+    "(12001, 300)": "REFUSED",
+    "(12001, 500)": "REFUSED",
+    "(12001, 60)": "REFUSED",
+    "(149, 0)": "REFUSED",
+    "(149, 11000)": "REFUSED",
+    "(149, 29)": "REFUSED",
+    "(149, 299)": "REFUSED",
+    "(149, 30)": "REFUSED",
+    "(149, 300)": "REFUSED",
+    "(149, 500)": "REFUSED",
+    "(149, 60)": "REFUSED",
+    "(150, 0)": "REFUSED",
+    "(150, 11000)": "REFUSED",
+    "(150, 29)": "REFUSED",
+    "(150, 299)": "REFUSED",
+    "(150, 30)": {
+     "__seq__": [
+      150.0,
+      30.0
+     ]
+    },
+    "(150, 300)": "REFUSED",
+    "(150, 500)": "REFUSED",
+    "(150, 60)": {
+     "__seq__": [
+      150.0,
+      60.0
+     ]
+    },
+    "(200, 0)": "REFUSED",
+    "(200, 11000)": "REFUSED",
+    "(200, 29)": "REFUSED",
+    "(200, 299)": "REFUSED",
+    "(200, 30)": {
+     "__seq__": [
+      200.0,
+      30.0
+     ]
+    },
+    "(200, 300)": "REFUSED",
+    "(200, 500)": "REFUSED",
+    "(200, 60)": {
+     "__seq__": [
+      200.0,
+      60.0
+     ]
+    },
+    "(3000, 0)": "REFUSED",
+    "(3000, 11000)": "REFUSED",
+    "(3000, 29)": "REFUSED",
+    "(3000, 299)": "REFUSED",
+    "(3000, 30)": "REFUSED",
+    "(3000, 300)": "REFUSED",
+    "(3000, 500)": "REFUSED",
+    "(3000, 60)": "REFUSED",
+    "(nan, 0)": "REFUSED",
+    "(nan, 11000)": "REFUSED",
+    "(nan, 29)": "REFUSED",
+    "(nan, 299)": "REFUSED",
+    "(nan, 30)": "REFUSED",
+    "(nan, 300)": "REFUSED",
+    "(nan, 500)": "REFUSED",
+    "(nan, 60)": "REFUSED"
+   }
+  },
+  "for_field": {
+   "above_ceiling": {
+    "(200,)": false,
+    "(201,)": false,
+    "(3000,)": false,
+    "(3001,)": true,
+    "(None,)": false,
+    "(nan,)": false
+   },
+   "can_takeoff": {
+    "(0,)": false,
+    "(100,)": true,
+    "(14,)": false,
+    "(15,)": false,
+    "(29,)": false,
+    "(30,)": true,
+    "(None,)": false,
+    "(nan,)": false
+   },
+   "check_alt_slot": {
+    "(-1,)": "REFUSED",
+    "(100,)": "REFUSED",
+    "(1000,)": 1000.0,
+    "(12000,)": "REFUSED",
+    "(130,)": "REFUSED",
+    "(140,)": "REFUSED",
+    "(141,)": "REFUSED",
+    "(1500,)": 1500.0,
+    "(2500,)": 2500.0,
+    "(2501,)": "REFUSED",
+    "(49,)": "REFUSED",
+    "(50,)": "REFUSED",
+    "(500,)": "REFUSED"
+   },
+   "check_move": {
+    "('forward', 0)": false,
+    "('forward', 100)": true,
+    "('forward', 19)": false,
+    "('forward', 20)": true,
+    "('forward', 2999)": true,
+    "('forward', 3000)": true,
+    "('forward', 500)": true,
+    "('forward', 5000)": false,
+    "('forward', 5001)": false,
+    "('forward', 501)": true,
+    "('forward', nan)": false,
+    "('left', 0)": false,
+    "('left', 100)": true,
+    "('left', 19)": false,
+    "('left', 20)": true,
+    "('left', 2999)": true,
+    "('left', 3000)": true,
+    "('left', 500)": true,
+    "('left', 5000)": false,
+    "('left', 5001)": false,
+    "('left', 501)": true,
+    "('left', nan)": false,
+    "('up', 0)": false,
+    "('up', 100)": false,
+    "('up', 19)": false,
+    "('up', 20)": false,
+    "('up', 2999)": false,
+    "('up', 3000)": false,
+    "('up', 500)": false,
+    "('up', 5000)": false,
+    "('up', 5001)": false,
+    "('up', 501)": false,
+    "('up', nan)": false
+   },
+   "climb_allowed": {
+    "(0, 0)": true,
+    "(0, 100)": true,
+    "(0, 1000)": true,
+    "(0, 20)": true,
+    "(100, 0)": true,
+    "(100, 100)": true,
+    "(100, 1000)": true,
+    "(100, 20)": true,
+    "(140, 0)": true,
+    "(140, 100)": true,
+    "(140, 1000)": true,
+    "(140, 20)": true,
+    "(2400, 0)": true,
+    "(2400, 100)": true,
+    "(2400, 1000)": false,
+    "(2400, 20)": true,
+    "(2500, 0)": true,
+    "(2500, 100)": false,
+    "(2500, 1000)": false,
+    "(2500, 20)": false,
+    "(None, 0)": false,
+    "(None, 100)": false,
+    "(None, 1000)": false,
+    "(None, 20)": false,
+    "(nan, 0)": false,
+    "(nan, 100)": false,
+    "(nan, 1000)": false,
+    "(nan, 20)": false
+   },
+   "inside_fence": {
+    "(0, -501)": true,
+    "(0, 0)": true,
+    "(3000, 3000)": true,
+    "(3001, 0)": false,
+    "(499, 499)": true,
+    "(500, 0)": true,
+    "(500.5, 0)": true,
+    "(50000, 0)": false
+   },
+   "should_land": {
+    "(0,)": true,
+    "(100,)": false,
+    "(14,)": true,
+    "(15,)": false,
+    "(29,)": false,
+    "(30,)": false,
+    "(None,)": false,
+    "(nan,)": false
+   },
+   "slot_move": {
+    "(-5,)": "REFUSED",
+    "(0,)": "REFUSED",
+    "(100,)": {
+     "__seq__": [
+      "up",
+      1400
+     ]
+    },
+    "(1000,)": {
+     "__seq__": [
+      "up",
+      500
+     ]
+    },
+    "(119,)": {
+     "__seq__": [
+      "up",
+      1381
+     ]
+    },
+    "(120,)": {
+     "__seq__": [
+      "up",
+      1380
+     ]
+    },
+    "(1481,)": null,
+    "(1500,)": null,
+    "(1520,)": {
+     "__seq__": [
+      "down",
+      20
+     ]
+    },
+    "(50,)": {
+     "__seq__": [
+      "up",
+      1450
+     ]
+    },
+    "(5000,)": {
+     "__seq__": [
+      "down",
+      3500
+     ]
+    },
+    "(600,)": {
+     "__seq__": [
+      "up",
+      900
+     ]
+    },
+    "(81,)": {
+     "__seq__": [
+      "up",
+      1419
+     ]
+    },
+    "(None,)": "REFUSED",
+    "(nan,)": "REFUSED"
+   },
+   "validate_alt_slot": {
+    "(-1,)": "REFUSED",
+    "(0,)": "REFUSED",
+    "(100,)": "REFUSED",
+    "(1000,)": 1000.0,
+    "(12000,)": 12000.0,
+    "(12001,)": "REFUSED",
+    "(130,)": "REFUSED",
+    "(140,)": "REFUSED",
+    "(1500,)": 1500.0,
+    "(2500,)": 2500.0,
+    "(49,)": "REFUSED",
+    "(50,)": "REFUSED",
+    "(500,)": "REFUSED",
+    "(501,)": "REFUSED",
+    "(inf,)": "REFUSED",
+    "(nan,)": "REFUSED"
+   },
+   "validate_ceiling": {
+    "(1000, 0)": "REFUSED",
+    "(1000, 11000)": "REFUSED",
+    "(1000, 29)": "REFUSED",
+    "(1000, 299)": "REFUSED",
+    "(1000, 30)": "REFUSED",
+    "(1000, 300)": "REFUSED",
+    "(1000, 500)": "REFUSED",
+    "(1000, 60)": "REFUSED",
+    "(1001, 0)": "REFUSED",
+    "(1001, 11000)": "REFUSED",
+    "(1001, 29)": "REFUSED",
+    "(1001, 299)": "REFUSED",
+    "(1001, 30)": "REFUSED",
+    "(1001, 300)": "REFUSED",
+    "(1001, 500)": "REFUSED",
+    "(1001, 60)": "REFUSED",
+    "(12000, 0)": "REFUSED",
+    "(12000, 11000)": {
+     "__seq__": [
+      12000.0,
+      11000.0
+     ]
+    },
+    "(12000, 29)": "REFUSED",
+    "(12000, 299)": "REFUSED",
+    "(12000, 30)": "REFUSED",
+    "(12000, 300)": {
+     "__seq__": [
+      12000.0,
+      300.0
+     ]
+    },
+    "(12000, 500)": {
+     "__seq__": [
+      12000.0,
+      500.0
+     ]
+    },
+    "(12000, 60)": "REFUSED",
+    "(12001, 0)": "REFUSED",
+    "(12001, 11000)": "REFUSED",
+    "(12001, 29)": "REFUSED",
+    "(12001, 299)": "REFUSED",
+    "(12001, 30)": "REFUSED",
+    "(12001, 300)": "REFUSED",
+    "(12001, 500)": "REFUSED",
+    "(12001, 60)": "REFUSED",
+    "(149, 0)": "REFUSED",
+    "(149, 11000)": "REFUSED",
+    "(149, 29)": "REFUSED",
+    "(149, 299)": "REFUSED",
+    "(149, 30)": "REFUSED",
+    "(149, 300)": "REFUSED",
+    "(149, 500)": "REFUSED",
+    "(149, 60)": "REFUSED",
+    "(150, 0)": "REFUSED",
+    "(150, 11000)": "REFUSED",
+    "(150, 29)": "REFUSED",
+    "(150, 299)": "REFUSED",
+    "(150, 30)": "REFUSED",
+    "(150, 300)": "REFUSED",
+    "(150, 500)": "REFUSED",
+    "(150, 60)": "REFUSED",
+    "(200, 0)": "REFUSED",
+    "(200, 11000)": "REFUSED",
+    "(200, 29)": "REFUSED",
+    "(200, 299)": "REFUSED",
+    "(200, 30)": "REFUSED",
+    "(200, 300)": "REFUSED",
+    "(200, 500)": "REFUSED",
+    "(200, 60)": "REFUSED",
+    "(3000, 0)": "REFUSED",
+    "(3000, 11000)": "REFUSED",
+    "(3000, 29)": "REFUSED",
+    "(3000, 299)": "REFUSED",
+    "(3000, 30)": "REFUSED",
+    "(3000, 300)": {
+     "__seq__": [
+      3000.0,
+      300.0
+     ]
+    },
+    "(3000, 500)": {
+     "__seq__": [
+      3000.0,
+      500.0
+     ]
+    },
+    "(3000, 60)": "REFUSED",
+    "(nan, 0)": "REFUSED",
+    "(nan, 11000)": "REFUSED",
+    "(nan, 29)": "REFUSED",
+    "(nan, 299)": "REFUSED",
+    "(nan, 30)": "REFUSED",
+    "(nan, 300)": "REFUSED",
+    "(nan, 500)": "REFUSED",
+    "(nan, 60)": "REFUSED"
+   }
+  },
+  "from_env_empty": {
+   "above_ceiling": {
+    "(200,)": false,
+    "(201,)": true,
+    "(3000,)": true,
+    "(3001,)": true,
+    "(None,)": false,
+    "(nan,)": false
+   },
+   "can_takeoff": {
+    "(0,)": false,
+    "(100,)": true,
+    "(14,)": false,
+    "(15,)": false,
+    "(29,)": false,
+    "(30,)": true,
+    "(None,)": false,
+    "(nan,)": false
+   },
+   "check_alt_slot": {
+    "(-1,)": "REFUSED",
+    "(100,)": 100.0,
+    "(1000,)": "REFUSED",
+    "(12000,)": "REFUSED",
+    "(130,)": 130.0,
+    "(140,)": 140.0,
+    "(141,)": "REFUSED",
+    "(1500,)": "REFUSED",
+    "(2500,)": "REFUSED",
+    "(2501,)": "REFUSED",
+    "(49,)": "REFUSED",
+    "(50,)": 50.0,
+    "(500,)": "REFUSED"
+   },
+   "check_move": {
+    "('forward', 0)": false,
+    "('forward', 100)": true,
+    "('forward', 19)": false,
+    "('forward', 20)": true,
+    "('forward', 2999)": false,
+    "('forward', 3000)": false,
+    "('forward', 500)": true,
+    "('forward', 5000)": false,
+    "('forward', 5001)": false,
+    "('forward', 501)": false,
+    "('forward', nan)": false,
+    "('left', 0)": false,
+    "('left', 100)": true,
+    "('left', 19)": false,
+    "('left', 20)": true,
+    "('left', 2999)": false,
+    "('left', 3000)": false,
+    "('left', 500)": true,
+    "('left', 5000)": false,
+    "('left', 5001)": false,
+    "('left', 501)": false,
+    "('left', nan)": false,
+    "('up', 0)": false,
+    "('up', 100)": false,
+    "('up', 19)": false,
+    "('up', 20)": false,
+    "('up', 2999)": false,
+    "('up', 3000)": false,
+    "('up', 500)": false,
+    "('up', 5000)": false,
+    "('up', 5001)": false,
+    "('up', 501)": false,
+    "('up', nan)": false
+   },
+   "climb_allowed": {
+    "(0, 0)": true,
+    "(0, 100)": true,
+    "(0, 1000)": false,
+    "(0, 20)": true,
+    "(100, 0)": true,
+    "(100, 100)": false,
+    "(100, 1000)": false,
+    "(100, 20)": true,
+    "(140, 0)": true,
+    "(140, 100)": false,
+    "(140, 1000)": false,
+    "(140, 20)": false,
+    "(2400, 0)": false,
+    "(2400, 100)": false,
+    "(2400, 1000)": false,
+    "(2400, 20)": false,
+    "(2500, 0)": false,
+    "(2500, 100)": false,
+    "(2500, 1000)": false,
+    "(2500, 20)": false,
+    "(None, 0)": false,
+    "(None, 100)": false,
+    "(None, 1000)": false,
+    "(None, 20)": false,
+    "(nan, 0)": false,
+    "(nan, 100)": false,
+    "(nan, 1000)": false,
+    "(nan, 20)": false
+   },
+   "inside_fence": {
+    "(0, -501)": false,
+    "(0, 0)": true,
+    "(3000, 3000)": false,
+    "(3001, 0)": false,
+    "(499, 499)": true,
+    "(500, 0)": true,
+    "(500.5, 0)": false,
+    "(50000, 0)": false
+   },
+   "should_land": {
+    "(0,)": true,
+    "(100,)": false,
+    "(14,)": true,
+    "(15,)": false,
+    "(29,)": false,
+    "(30,)": false,
+    "(None,)": false,
+    "(nan,)": false
+   },
+   "slot_move": {
+    "(-5,)": "REFUSED",
+    "(0,)": "REFUSED",
+    "(100,)": null,
+    "(1000,)": {
+     "__seq__": [
+      "down",
+      500
+     ]
+    },
+    "(119,)": null,
+    "(120,)": {
+     "__seq__": [
+      "down",
+      20
+     ]
+    },
+    "(1481,)": {
+     "__seq__": [
+      "down",
+      500
+     ]
+    },
+    "(1500,)": {
+     "__seq__": [
+      "down",
+      500
+     ]
+    },
+    "(1520,)": {
+     "__seq__": [
+      "down",
+      500
+     ]
+    },
+    "(50,)": {
+     "__seq__": [
+      "up",
+      50
+     ]
+    },
+    "(5000,)": {
+     "__seq__": [
+      "down",
+      500
+     ]
+    },
+    "(600,)": {
+     "__seq__": [
+      "down",
+      500
+     ]
+    },
+    "(81,)": null,
+    "(None,)": "REFUSED",
+    "(nan,)": "REFUSED"
+   },
+   "validate_alt_slot": {
+    "(-1,)": "REFUSED",
+    "(0,)": "REFUSED",
+    "(100,)": 100.0,
+    "(1000,)": "REFUSED",
+    "(12000,)": "REFUSED",
+    "(12001,)": "REFUSED",
+    "(130,)": 130.0,
+    "(140,)": 140.0,
+    "(1500,)": "REFUSED",
+    "(2500,)": "REFUSED",
+    "(49,)": "REFUSED",
+    "(50,)": 50.0,
+    "(500,)": 500.0,
+    "(501,)": "REFUSED",
+    "(inf,)": "REFUSED",
+    "(nan,)": "REFUSED"
+   },
+   "validate_ceiling": {
+    "(1000, 0)": "REFUSED",
+    "(1000, 11000)": "REFUSED",
+    "(1000, 29)": "REFUSED",
+    "(1000, 299)": {
+     "__seq__": [
+      1000.0,
+      299.0
+     ]
+    },
+    "(1000, 30)": {
+     "__seq__": [
+      1000.0,
+      30.0
+     ]
+    },
+    "(1000, 300)": {
+     "__seq__": [
+      1000.0,
+      300.0
+     ]
+    },
+    "(1000, 500)": {
+     "__seq__": [
+      1000.0,
+      500.0
+     ]
+    },
+    "(1000, 60)": {
+     "__seq__": [
+      1000.0,
+      60.0
+     ]
+    },
+    "(1001, 0)": "REFUSED",
+    "(1001, 11000)": "REFUSED",
+    "(1001, 29)": "REFUSED",
+    "(1001, 299)": "REFUSED",
+    "(1001, 30)": "REFUSED",
+    "(1001, 300)": "REFUSED",
+    "(1001, 500)": "REFUSED",
+    "(1001, 60)": "REFUSED",
+    "(12000, 0)": "REFUSED",
+    "(12000, 11000)": "REFUSED",
+    "(12000, 29)": "REFUSED",
+    "(12000, 299)": "REFUSED",
+    "(12000, 30)": "REFUSED",
+    "(12000, 300)": "REFUSED",
+    "(12000, 500)": "REFUSED",
+    "(12000, 60)": "REFUSED",
+    "(12001, 0)": "REFUSED",
+    "(12001, 11000)": "REFUSED",
+    "(12001, 29)": "REFUSED",
+    "(12001, 299)": "REFUSED",
+    "(12001, 30)": "REFUSED",
+    "(12001, 300)": "REFUSED",
+    "(12001, 500)": "REFUSED",
+    "(12001, 60)": "REFUSED",
+    "(149, 0)": "REFUSED",
+    "(149, 11000)": "REFUSED",
+    "(149, 29)": "REFUSED",
+    "(149, 299)": "REFUSED",
+    "(149, 30)": "REFUSED",
+    "(149, 300)": "REFUSED",
+    "(149, 500)": "REFUSED",
+    "(149, 60)": "REFUSED",
+    "(150, 0)": "REFUSED",
+    "(150, 11000)": "REFUSED",
+    "(150, 29)": "REFUSED",
+    "(150, 299)": "REFUSED",
+    "(150, 30)": {
+     "__seq__": [
+      150.0,
+      30.0
+     ]
+    },
+    "(150, 300)": "REFUSED",
+    "(150, 500)": "REFUSED",
+    "(150, 60)": {
+     "__seq__": [
+      150.0,
+      60.0
+     ]
+    },
+    "(200, 0)": "REFUSED",
+    "(200, 11000)": "REFUSED",
+    "(200, 29)": "REFUSED",
+    "(200, 299)": "REFUSED",
+    "(200, 30)": {
+     "__seq__": [
+      200.0,
+      30.0
+     ]
+    },
+    "(200, 300)": "REFUSED",
+    "(200, 500)": "REFUSED",
+    "(200, 60)": {
+     "__seq__": [
+      200.0,
+      60.0
+     ]
+    },
+    "(3000, 0)": "REFUSED",
+    "(3000, 11000)": "REFUSED",
+    "(3000, 29)": "REFUSED",
+    "(3000, 299)": "REFUSED",
+    "(3000, 30)": "REFUSED",
+    "(3000, 300)": "REFUSED",
+    "(3000, 500)": "REFUSED",
+    "(3000, 60)": "REFUSED",
+    "(nan, 0)": "REFUSED",
+    "(nan, 11000)": "REFUSED",
+    "(nan, 29)": "REFUSED",
+    "(nan, 299)": "REFUSED",
+    "(nan, 30)": "REFUSED",
+    "(nan, 300)": "REFUSED",
+    "(nan, 500)": "REFUSED",
+    "(nan, 60)": "REFUSED"
+   }
+  }
+ },
  "probes": {
   "0000|tello|FLIGHTRISK_GEOFENCE_CM|env|'-5'": "refused",
   "0001|tello|FLIGHTRISK_GEOFENCE_CM|env|'0'": "refused",
@@ -765,6 +1694,113 @@
   "0722|generic_multirotor|--speed-mps|flag|'nan'": "refused"
  },
  "start_objects": {
+  "drone_capabilities": {
+   "flightrisk.drone.fake.FakeDrone": {
+    "features": {
+     "__set__": [
+      {
+       "__enum__": "Capability.HOVER"
+      },
+      {
+       "__enum__": "Capability.RC_CONTROL"
+      },
+      {
+       "__enum__": "Capability.RELATIVE_MOVE"
+      },
+      {
+       "__enum__": "Capability.RETURN_TO_HOME"
+      },
+      {
+       "__enum__": "Capability.ROTATE"
+      },
+      {
+       "__enum__": "Capability.STEPPED_SENSING"
+      },
+      {
+       "__enum__": "Capability.TAKEOFF_LAND"
+      },
+      {
+       "__enum__": "Capability.VIDEO"
+      }
+     ]
+    },
+    "flight_scale": "room",
+    "has_gps": false,
+    "has_rtsp": false,
+    "max_altitude_m": 10,
+    "max_move_cm": 500,
+    "min_move_cm": 20,
+    "supports_missions": false
+   },
+   "flightrisk.drone.tello.FakeTelloController": {
+    "features": {
+     "__set__": [
+      {
+       "__enum__": "Capability.HOVER"
+      },
+      {
+       "__enum__": "Capability.RC_CONTROL"
+      },
+      {
+       "__enum__": "Capability.RELATIVE_MOVE"
+      },
+      {
+       "__enum__": "Capability.ROTATE"
+      },
+      {
+       "__enum__": "Capability.STEPPED_SENSING"
+      },
+      {
+       "__enum__": "Capability.TAKEOFF_LAND"
+      },
+      {
+       "__enum__": "Capability.VIDEO"
+      }
+     ]
+    },
+    "flight_scale": "room",
+    "has_gps": false,
+    "has_rtsp": false,
+    "max_altitude_m": 10,
+    "max_move_cm": 500,
+    "min_move_cm": 20,
+    "supports_missions": false
+   },
+   "flightrisk.drone.tello.TelloController": {
+    "features": {
+     "__set__": [
+      {
+       "__enum__": "Capability.HOVER"
+      },
+      {
+       "__enum__": "Capability.RC_CONTROL"
+      },
+      {
+       "__enum__": "Capability.RELATIVE_MOVE"
+      },
+      {
+       "__enum__": "Capability.ROTATE"
+      },
+      {
+       "__enum__": "Capability.STEPPED_SENSING"
+      },
+      {
+       "__enum__": "Capability.TAKEOFF_LAND"
+      },
+      {
+       "__enum__": "Capability.VIDEO"
+      }
+     ]
+    },
+    "flight_scale": "room",
+    "has_gps": false,
+    "has_rtsp": false,
+    "max_altitude_m": 10,
+    "max_move_cm": 500,
+    "min_move_cm": 20,
+    "supports_missions": false
+   }
+  },
   "field_limits": {
    "default_alt_slot_cm": 1500,
    "default_ceiling_cm": 3000,
