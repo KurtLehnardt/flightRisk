@@ -18,7 +18,9 @@ import secrets
 import threading
 import time
 import traceback
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 
 import cv2
 import numpy as np
@@ -57,8 +59,14 @@ from flightrisk.drone.coordinator import (
 )
 from flightrisk.drone import plan_edit
 from flightrisk.drone.obstacle_sensor import CHANNEL_ORDER_BGR, CHANNEL_ORDER_RGB, to_sensor_frame
-from flightrisk.drone.safety import DEFAULT_GEOFENCE_CM, GEOFENCE_CM_ENV
+from flightrisk.drone.safety import (
+    DEFAULT_GEOFENCE_CM,
+    GEOFENCE_CM_ENV,
+    EnvelopeLimits,
+    min_takeoff_battery_from_env,
+)
 from flightrisk import fleet_protocol as fp
+from flightrisk import ground_params
 from flightrisk import obs_events
 from flightrisk import obs_metrics
 from flightrisk.obs_log import set_session_id
@@ -739,8 +747,19 @@ class FleetSupervisor:
     a drone's search is paused for manual control, and a paused drone is
     never declared lost for being on the ground or not flying its lanes (only
     for a lost link, as before).
+
+    Each drone's values are resolved once, at construction, from its model
+    (``ground_params.units_for``) and handed to the coordinator, which plans
+    and gates each drone with its own unit's values; a map plan builds each
+    drone's path with its unit's envelope profile. A drone whose values are
+    refused does not stop the dashboard: Plan is refused with the refusal,
+    which names the drone and the variable (section 27, item 47).
     """
 
+    # The units the ground resolved, by drone id, and the refusal text of each drone it did not
+    # (``ground_params.units_for``). None only for a supervisor built without __init__.
+    units: Mapping[str, ground_params.GroundUnit] | None = None
+    refused_units: Mapping[str, str] | None = None
     # No ceiling board unless one is given (also for a supervisor built without __init__).
     _ceiling: CeilingBoard | None = None
     # No map plan has been edited after Plan (also for a supervisor built without __init__).
@@ -798,6 +817,12 @@ class FleetSupervisor:
             for drone_id in drone_ids
         }
         self.geofence_cm = float(geofence_cm) if geofence_cm is not None else fleet_geofence_cm()
+        # Each drone's values, resolved once from its model. No edge reports its model yet, so the
+        # implicit inventory gives each drone the default model. A drone whose values are refused is
+        # refused at Plan (section 27, item 47), and the dashboard still starts.
+        units, refused_units = ground_params.units_for(list(self.links), {}, environ=os.environ)
+        self.units = MappingProxyType(units)
+        self.refused_units = MappingProxyType(refused_units)
         self.coordinator = FleetCoordinator(
             self.links,
             area_cm=area_cm,
@@ -814,7 +839,13 @@ class FleetSupervisor:
             sidestep_margin_cm=fleet_sidestep_margin_cm() if sidestep_margin_cm is None else int(sidestep_margin_cm),
             # A lost drone a person flies by hand is never sent land again.
             manually_controlled=self._flown_by_hand,
+            units=self.units,
+            refused_units=self.refused_units,
         )
+        # With units the coordinator gates each drone with its own unit's takeoff minimum and no longer
+        # reads FLIGHTRISK_MIN_TAKEOFF_BATTERY. A value that no edge accepts still stops the ground here,
+        # at the point where the coordinator read it before.
+        min_takeoff_battery_from_env()
         self._lock = threading.Lock()
         self._busy = threading.Lock()  # one plan() or start() at a time
         self._flown: set[str] = set()  # reported flying since the start
@@ -1098,7 +1129,14 @@ class FleetSupervisor:
 
         With *for_plan* the slots are the ones ``plan()`` has just taken from
         the ceiling board; otherwise they are read without side effects.
+        Each drone's path is made with its own unit's envelope profile.
+        Raises ``ValueError`` with the refusal text while a drone's values are
+        refused (section 27, item 47), so a preview shows it as its error;
+        ``plan()`` refuses such a fleet before it gets here.
         """
+        refused = self._refused_units_detail()
+        if refused is not None:
+            raise ValueError(refused)
         if for_plan and self._ceiling is not None:
             slot_of = self._plan_slot
         else:
@@ -1114,7 +1152,37 @@ class FleetSupervisor:
             footprint_cm=plan_edit.camera_footprint_cm(),
             # Paths stay this much farther than the gap from a drone that may sidestep.
             sidestep_margin_of=self.coordinator.sidestep_margin_of,
+            unit_limits=self.unit_limits(),
         )
+
+    def unit_limits(self) -> dict[str, EnvelopeLimits] | None:
+        """Each resolved drone's envelope profile (``GroundUnit.limits``), or None without units."""
+        if self.units is None:
+            return None
+        return {drone_id: unit.limits for drone_id, unit in self.units.items()}
+
+    def snap_tolerance_cm(self) -> int:
+        """How far a map path snapped to this fleet's moves may stray from the drawn path.
+
+        The largest bound over the resolved drones' profiles
+        (``plan_paths.snap_tolerance_cm``), which is ``SNAP_TOLERANCE_CM`` for
+        room-profile drones and without units.
+        """
+        limits = self.unit_limits()
+        return plan_edit.pp.snap_tolerance_cm(() if limits is None else limits.values())
+
+    def _refused_units_detail(self) -> str | None:
+        """The refusal text of each drone whose values the ground refused, in fleet order, or None.
+
+        Each text names its drone and the variable (``ground_params.units_for``).
+        """
+        refused = self.refused_units
+        if not refused:
+            return None
+        texts = [refused[drone_id] for drone_id in self.coordinator.drone_ids if drone_id in refused]
+        if not texts:
+            return None
+        return " ".join(texts) + " Correct the named value and restart the ground."
 
     def mark_plan_edited(self) -> bool:
         """The operator edited the plan on the map: refuse Start until Plan is pressed again.
@@ -1151,7 +1219,8 @@ class FleetSupervisor:
         first (``plan_edit.build_plan``) and the plan is refused, with
         nothing sent, when any check fails; otherwise its lanes are sent.
 
-        Raises ``RuntimeError`` while a drone reports flying, and
+        Raises ``RuntimeError`` while a drone reports flying or while a
+        drone's values are refused (section 27, item 47), and
         ``CeilingRefusal`` (a ``RuntimeError``) when a drone's altitude slot
         is above the ceiling limit; nothing is sent to any drone then.
         """
@@ -1164,6 +1233,12 @@ class FleetSupervisor:
                 detail = f"{', '.join(paused)} under manual control; press Resume search first"
                 self._emit("fleet_event", {"event": "plan_refused", "detail": detail})
                 raise RuntimeError(f"Plan refused: {detail}")
+            # A drone whose values the ground refused is never planned (section 27, item 47). Its
+            # refusal names it and the variable, and comes before the ceiling board gives out slots,
+            # before any clock sync and before anything is sent.
+            refused = self._refused_units_detail()
+            if refused is not None:
+                self._refuse_plan(refused)
             if self._ceiling is not None:
                 try:
                     self._plan_slots = self._ceiling.plan_slots(self.coordinator.drone_ids)
@@ -3137,7 +3212,10 @@ def _map_config() -> dict:
             "camera_footprint_cm": plan_edit.camera_footprint_cm() or plan_edit.DEFAULT_STRIP_CM,
         }
     config["patterns"] = list(plan_edit.pp.PATTERNS)
-    config["snap_tolerance_cm"] = plan_edit.pp.SNAP_TOLERANCE_CM
+    # A fleet's bound follows its drones' move ranges; the single drone keeps the room profile's.
+    config["snap_tolerance_cm"] = (
+        supervisor.snap_tolerance_cm() if supervisor is not None else plan_edit.pp.SNAP_TOLERANCE_CM
+    )
     config["providers"] = map_tiles.providers_payload()
     return config
 
