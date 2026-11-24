@@ -51,7 +51,11 @@ of the edge executor and the operator.
   plus ``ALTITUDE_TOLERANCE_CM`` of height-sensor error (a guess until
   hardware rung L1 measures it). A level camera sees less near ground the
   higher it flies, so the gate camera is the camera at ``slot +
-  ALTITUDE_MARGIN_CM``; lower heights see a superset.
+  ALTITUDE_MARGIN_CM``; lower heights see a superset. These are the room
+  profile's defaults: ``planning_footprint`` takes them as
+  ``altitude_deadband_cm`` and ``altitude_tolerance_cm``, and the planning
+  footprint records their sum as its ``altitude_margin_cm``, so the coverage
+  gate always uses the gate camera the plan was derived with.
 * Placement: each drone may be placed up to ``placement_tolerance_cm`` off in
   ``x`` and ``y``. The gate camera is eroded by that tolerance
   (``ForwardFootprint.eroded``): it keeps only ground that stays visible for
@@ -71,6 +75,28 @@ square spiral) are spaced by ``along_cm`` and placed as if the camera were
 centred ``ahead_cm`` in front of the drone. Because the rectangle is inside
 the gate camera, everything the square-model pattern would cover is also
 covered by the real camera, within the margins.
+
+Per-unit limits
+---------------
+Each drone's lanes and altitude slot are checked against its own
+``safety.EnvelopeLimits`` profile. Helpers that act on one drone take one
+``limits`` (``ROOM_LIMITS`` by default). ``check_plan`` takes
+``unit_limits``, a mapping from every drone id of the plan to its profile:
+``None``, the default, means ``ROOM_LIMITS`` for every drone, and a mapping
+that lacks a drone of the plan is refused with ``ValueError`` rather than
+falling back to a default (ids the plan does not use are ignored). A lane
+must be one whole-centimetre move within its drone's ``min_move_cm`` to
+``max_move_cm``, and the planner needs ``max_move_cm`` to be at least twice
+``min_move_cm`` (a leg just longer than one move splits into two moves of
+at least the minimum, and a leg shorter than the minimum is flown as an
+overshoot pair).
+
+The search area is a fleet bound, not a per-drone one: each side must be at
+least the largest ``min_move_cm`` of the units, so every unit can fly one
+move across it (the room profile's 20 cm by default), and at most
+``max_area_side_cm`` (``MAX_AREA_SIDE_CM`` by default, ``None`` for no cap).
+The same cap bounds the plan's distance limits (geofence, minimum
+separation and standoff).
 
 Coverage gate
 -------------
@@ -97,12 +123,16 @@ from typing import Any
 
 from flightrisk.drone import coverage_sim as cs
 from flightrisk.drone.coverage import SweepModel
+from flightrisk.drone.move_range import _envelope, _int_cm, _move_range
 from flightrisk.drone.safety import (
     DEFAULT_GEOFENCE_CM,
     HORIZONTAL_DIRECTIONS,
     MAX_MOVE_CM,
     MIN_ALT_SLOT_CM,
     MIN_MOVE_CM,
+    ROOM_LIMITS,
+    EnvelopeLimits,
+    format_cm,
     slot_below_minimum,
 )
 from flightrisk.fleet_protocol import MAX_LANES as _PROTOCOL_MAX_LANES
@@ -151,16 +181,19 @@ MIN_COVERAGE = 0.995
 """Smallest simulated fraction of the area a feasible plan must see (plan section 5.1)."""
 
 MAX_AREA_SIDE_CM = 20_000
-"""Largest area side accepted: twice the Tello's published 100 m range."""
+"""Default largest area side accepted (``max_area_side_cm``): the room profile's cap, twice its
+drone's published 100 m range. The ground passes each fleet's own cap, or None when the units are
+not range limited."""
 
 MAX_LANES_PER_DRONE = _PROTOCOL_MAX_LANES
 """Most lanes one drone's ``assign_lanes`` may carry: ``MAX_LANES`` of the fleet
 protocol v2, imported from ``flightrisk.fleet_protocol`` so the two cannot drift."""
 
 MAX_MOVES_PER_DRONE = MAX_LANES_PER_DRONE
-"""Most executor moves one drone may be given. Every lane is already one Tello move
-(20-500 cm), so this equals the lane cap; at 1.5 s of overhead per move it is far
-beyond one battery."""
+"""Most executor moves one drone may be given. Every lane is already one move within the
+drone's envelope profile (``min_move_cm`` to ``max_move_cm``, 20-500 cm for the room
+profile), so this equals the lane cap of the fleet protocol whatever the drone; at 1.5 s
+of overhead per move it is far beyond one battery."""
 
 MAX_MESSAGE_BYTES = _PROTOCOL_MAX_MESSAGE_BYTES
 """Largest encoded control message: ``MAX_MESSAGE_BYTES`` of the fleet protocol v2,
@@ -174,10 +207,12 @@ message (``epoch``, ``leader_id``, ``cmd_id``, ``plan_id``, ``plan_seq``,
 
 ALTITUDE_DEADBAND_CM = MIN_MOVE_CM
 """How far above its slot a drone may hold: ``safety.SafetyEnvelope.slot_move`` makes
-no correction while the rounded height error is below the 20 cm minimum move."""
+no correction while the rounded height error is below the 20 cm minimum move. The room
+profile's default of ``planning_footprint``'s ``altitude_deadband_cm``."""
 
 ALTITUDE_TOLERANCE_CM = 10
-"""Height-sensor error assumed on top of the deadband (a guess until hardware rung L1)."""
+"""Height-sensor error assumed on top of the deadband (a guess until hardware rung L1).
+The room profile's default of ``planning_footprint``'s ``altitude_tolerance_cm``."""
 
 ALTITUDE_MARGIN_CM = ALTITUDE_DEADBAND_CM + ALTITUDE_TOLERANCE_CM
 """The gate camera is the camera this far above the slot (30 cm)."""
@@ -188,7 +223,8 @@ COVERAGE_LINE_SPACING_CM = 10.0
 MIN_SWEEP_CM = 2 * MIN_MOVE_CM
 """Smallest sweep width accepted. With at least two minimum moves per sweep, a
 pass can always stop half a sweep (20 cm or more) inside an edge, which leaves
-room for the overshoot pair a leg shorter than 20 cm needs."""
+room for the overshoot pair a leg shorter than 20 cm needs. The room profile's
+default of ``planning_footprint``'s ``min_sweep_cm``."""
 
 SQUARE_FOOTPRINT = "square"
 """Pass as ``footprint`` to plan with the plan's idealised square footprint."""
@@ -202,7 +238,8 @@ flown from there; the limit also bounds the floor the operator must keep clear."
 _MAX_SWEEP_CM = 2 * MAX_AREA_SIDE_CM
 _MAX_PLACEMENT_TOLERANCE_CM = 500
 _MAX_STAGGER_S = 60.0
-# The room profile's (the Tello's) lowest slot (``safety.MIN_ALT_SLOT_CM``).
+# The room profile's (the Tello's) lowest slot (``safety.MIN_ALT_SLOT_CM``) and its
+# highest. The checks now read each drone's ``EnvelopeLimits``; the names are kept.
 _MIN_ALT_SLOT_CM = MIN_ALT_SLOT_CM
 _MAX_ALT_SLOT_CM = MAX_MOVE_CM
 _FROM_PLAN: Any = object()
@@ -219,19 +256,6 @@ def _number(name: str, value: Any) -> float:
     return float(value)
 
 
-def _int_cm(name: str, value: Any, minimum: int = 0, maximum: int | None = None) -> int:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-        raise ValueError(f"{name} must be a finite number of centimetres, got {value!r}")
-    if value != int(value):
-        raise ValueError(f"{name} must be a whole number of centimetres, got {value!r}")
-    value = int(value)
-    if value < minimum:
-        raise ValueError(f"{name} must be at least {minimum} cm, got {value}")
-    if maximum is not None and value > maximum:
-        raise ValueError(f"{name} must be at most {maximum} cm, got {value}")
-    return value
-
-
 def _pair(name: str, value: Any) -> tuple[Any, Any]:
     try:
         a, b = value
@@ -240,14 +264,87 @@ def _pair(name: str, value: Any) -> tuple[Any, Any]:
     return a, b
 
 
-def _area(area_cm: Any) -> tuple[int, int]:
+def _slot_range(limits: Any) -> tuple[float, float]:
+    """The lowest and highest altitude slot of an envelope profile."""
+    limits = _envelope(limits)
+    low = _number(f"{limits.name} min_alt_slot_cm", limits.min_alt_slot_cm)
+    high = _number(f"{limits.name} max_alt_slot_cm", limits.max_alt_slot_cm)
+    if not 0 < low <= high:
+        raise ValueError(
+            f"{limits.name} altitude slot range must be positive and not empty, "
+            f"got {format_cm(low)}-{format_cm(high)} cm"
+        )
+    return low, high
+
+
+def _per_drone_limits(unit_limits: Any, drone_ids: Sequence[Any]) -> list[EnvelopeLimits]:
+    """Each drone's envelope profile, in the order of ``drone_ids``.
+
+    ``None`` is ``ROOM_LIMITS`` for every drone. A mapping must hold a valid
+    profile for every drone id; one that lacks a drone is refused rather than
+    falling back to a default. Ids that are not in ``drone_ids`` are ignored.
+    """
+    if unit_limits is None:
+        return [ROOM_LIMITS] * len(drone_ids)
+    if not isinstance(unit_limits, Mapping):
+        raise TypeError(f"unit_limits must map drone ids to safety.EnvelopeLimits, got {type(unit_limits).__name__}")
+    missing = [drone_id for drone_id in drone_ids if drone_id not in unit_limits]
+    if missing:
+        raise ValueError(f"unit_limits has no envelope limits for {', '.join(map(repr, missing))}")
+    profiles = [unit_limits[drone_id] for drone_id in drone_ids]
+    for limits in profiles:
+        _move_range(limits)
+        _slot_range(limits)
+    return profiles
+
+
+def _fleet_min_move_cm(unit_limits: Any) -> int:
+    """The largest ``min_move_cm`` of the units in ``unit_limits`` (the room profile's when None)."""
+    if unit_limits is None:
+        return _move_range(ROOM_LIMITS)[0]
+    if not isinstance(unit_limits, Mapping):
+        raise TypeError(f"unit_limits must map drone ids to safety.EnvelopeLimits, got {type(unit_limits).__name__}")
+    if not unit_limits:
+        raise ValueError("unit_limits must hold the envelope limits of at least one drone")
+    return max(_move_range(limits)[0] for limits in unit_limits.values())
+
+
+def _area_cap(max_area_side_cm: Any) -> int | None:
+    """``None`` (no cap) or the largest area side as whole centimetres.
+
+    Area sides are whole centimetres, so a fractional cap acts as its whole part.
+    """
+    if max_area_side_cm is None:
+        return None
+    cap = _number("max_area_side_cm", max_area_side_cm)
+    if cap <= 0:
+        raise ValueError(f"max_area_side_cm must be a positive distance or None, got {max_area_side_cm!r}")
+    return math.floor(cap)
+
+
+def _area(
+    area_cm: Any,
+    *,
+    unit_limits: Mapping[str, EnvelopeLimits] | None = None,
+    max_area_side_cm: float | None = MAX_AREA_SIDE_CM,
+) -> tuple[int, int]:
+    """The search area as whole-centimetre ``(width, depth)``.
+
+    Each side must be at least the largest ``min_move_cm`` of the units in
+    ``unit_limits`` (``ROOM_LIMITS`` when None), so every unit can fly one
+    move across the area, and at most ``max_area_side_cm`` (None: no cap).
+    """
+    low = _fleet_min_move_cm(unit_limits)
+    cap = _area_cap(max_area_side_cm)
+    if cap is not None and cap < low:
+        raise ValueError(f"max_area_side_cm {cap} cm is below the {low} cm shortest area side")
     if isinstance(area_cm, (int, float)) and not isinstance(area_cm, bool):
         width = depth = area_cm
     else:
         width, depth = _pair("area_cm", area_cm)
     return (
-        _int_cm("area width", width, MIN_MOVE_CM, MAX_AREA_SIDE_CM),
-        _int_cm("area depth", depth, MIN_MOVE_CM, MAX_AREA_SIDE_CM),
+        _int_cm("area width", width, low, cap),
+        _int_cm("area depth", depth, low, cap),
     )
 
 
@@ -267,16 +364,18 @@ def _ids(drone_ids: Sequence[str]) -> list[str]:
     return ids
 
 
-def _slots(alt_slots_cm: Sequence[int]) -> list[int]:
+def _slots(alt_slots_cm: Sequence[int], *, limits: EnvelopeLimits = ROOM_LIMITS) -> list[int]:
+    """Whole-centimetre altitude slots, each within the slot range of ``limits``."""
+    low, high = _slot_range(limits)
     slots = [_int_cm("altitude slot", a) for a in alt_slots_cm]
     if not slots:
         raise ValueError("alt_slots_cm must contain at least one altitude")
     for slot in slots:
-        if not _MIN_ALT_SLOT_CM <= slot <= _MAX_ALT_SLOT_CM:
-            low = slot_below_minimum(slot)
+        if not low <= slot <= high:
+            reason = slot_below_minimum(slot, limits)
             raise ValueError(
-                f"altitude slot must be within {_MIN_ALT_SLOT_CM}-{_MAX_ALT_SLOT_CM} cm, got {slot}"
-                + (f": {low}" if low else "")
+                f"altitude slot must be within {format_cm(low)}-{format_cm(high)} cm, got {slot}"
+                + (f": {reason}" if reason else "")
             )
     return slots
 
@@ -289,13 +388,20 @@ def _lkp(lkp_cm: Any, width: int, depth: int) -> tuple[int, int]:
     return x, y
 
 
-def _optional_limit(name: str, value: Any) -> float | None:
-    """``None`` (the check is explicitly switched off) or a finite, positive, bounded distance."""
+def _optional_limit(name: str, value: Any, cap: int | None = MAX_AREA_SIDE_CM) -> float | None:
+    """``None`` (the check is explicitly switched off) or a finite, positive distance of at most ``cap``.
+
+    ``cap`` is the validated ``max_area_side_cm`` (``_area_cap``); None leaves no upper bound.
+    """
     if value is None:
         return None
     value = _number(name, value)
-    if not 0 < value <= MAX_AREA_SIDE_CM:
-        raise ValueError(f"{name} must be within (0, {MAX_AREA_SIDE_CM}] cm or None, got {value!r}")
+    if cap is None:
+        if value <= 0:
+            raise ValueError(f"{name} must be a positive distance or None, got {value!r}")
+        return value
+    if not 0 < value <= cap:
+        raise ValueError(f"{name} must be within (0, {cap}] cm or None, got {value!r}")
     return value
 
 
@@ -313,25 +419,55 @@ def _stagger(value: Any) -> float:
     return value
 
 
-def _max_standoff(value: Any, geofence_cm: float | None) -> float | None:
+def _max_standoff(value: Any, geofence_cm: float | None, cap: int | None = MAX_AREA_SIDE_CM) -> float | None:
     if isinstance(value, str):
         if value != STANDOFF_FROM_GEOFENCE:
             raise ValueError(f"max_standoff_cm must be a distance, None or {STANDOFF_FROM_GEOFENCE!r}, got {value!r}")
         return geofence_cm if geofence_cm is not None else float(DEFAULT_PLAN_GEOFENCE_CM)
-    return _optional_limit("max_standoff_cm", value)
+    return _optional_limit("max_standoff_cm", value, cap)
 
 
 def _safety_inputs(
-    geofence_cm: Any, min_separation_cm: Any, placement_tolerance_cm: Any, max_standoff_cm: Any = STANDOFF_FROM_GEOFENCE
+    geofence_cm: Any,
+    min_separation_cm: Any,
+    placement_tolerance_cm: Any,
+    max_standoff_cm: Any = STANDOFF_FROM_GEOFENCE,
+    *,
+    max_area_side_cm: float | None = MAX_AREA_SIDE_CM,
+    unit_limits: Mapping[str, EnvelopeLimits] | None = None,
 ) -> dict:
-    """Validated ``geofence_cm``, ``min_separation_cm``, ``placement_tolerance_cm`` and ``max_standoff_cm`` plan fields."""
-    fence = _optional_limit("geofence_cm", geofence_cm)
-    return {
+    """Validated ``geofence_cm``, ``min_separation_cm``, ``placement_tolerance_cm`` and ``max_standoff_cm`` plan fields.
+
+    The distances are bounded by ``max_area_side_cm`` (None: only finite and positive).
+    With no area cap and ``unit_limits`` given, they are also bounded by the smallest
+    ``max_geofence_cm`` of those profiles (the room profile's is infinite).
+    """
+    cap = _area_cap(max_area_side_cm)
+    fence = _optional_limit("geofence_cm", geofence_cm, cap)
+    values = {
         "geofence_cm": fence,
-        "min_separation_cm": _optional_limit("min_separation_cm", min_separation_cm),
+        "min_separation_cm": _optional_limit("min_separation_cm", min_separation_cm, cap),
         "placement_tolerance_cm": _tolerance(placement_tolerance_cm),
-        "max_standoff_cm": _max_standoff(max_standoff_cm, fence),
+        "max_standoff_cm": _max_standoff(max_standoff_cm, fence, cap),
     }
+    if cap is None and unit_limits:
+        tightest = min(unit_limits.values(), key=lambda limits: limits.max_geofence_cm)
+        for name in ("geofence_cm", "min_separation_cm", "max_standoff_cm"):
+            value = values[name]
+            if value is not None and value > tightest.max_geofence_cm:
+                raise ValueError(
+                    f"{name} must be within (0, {tightest.max_geofence_cm:g}] cm, the max_geofence_cm of the "
+                    f"{tightest.name!r} unit profile, got {value!r}"
+                )
+    return values
+
+
+def _altitude_margin(altitude_deadband_cm: Any, altitude_tolerance_cm: Any) -> float:
+    """The gate camera's height above the slot: the deadband plus the height-sensor tolerance."""
+    for name, value in (("altitude_deadband_cm", altitude_deadband_cm), ("altitude_tolerance_cm", altitude_tolerance_cm)):
+        if _number(name, value) <= 0:
+            raise ValueError(f"{name} must be a positive distance, got {value!r}")
+    return altitude_deadband_cm + altitude_tolerance_cm
 
 
 def required_gap_cm(
@@ -375,6 +511,9 @@ class PlanningFootprint:
     of the drone (``ahead_cm - along_cm / 2 >= near_cm`` and ``ahead_cm +
     along_cm / 2 <= far_cm``). ``source`` is the footprint the caller passed
     and ``slot_cm`` the altitude a ``ForwardFootprint`` source describes.
+    ``altitude_margin_cm`` is how far above its slot the gate camera sits
+    (``ALTITUDE_MARGIN_CM`` unless ``planning_footprint`` was given other
+    altitude margins); the coverage gate uses it too.
     """
 
     kind: str
@@ -385,6 +524,7 @@ class PlanningFootprint:
     ahead_cm: int
     source: Any = None
     slot_cm: int | None = None
+    altitude_margin_cm: float = ALTITUDE_MARGIN_CM
 
     def _camera_at(self, height_cm: float) -> cs.ForwardFootprint:
         if isinstance(self.source, SweepModel):
@@ -403,11 +543,12 @@ class PlanningFootprint:
     def gate_camera(self, alt_cm: float, placement_tolerance_cm: float) -> cs.Footprint:
         """The ground a drone of slot ``alt_cm`` sees within the altitude and placement margins.
 
-        The square model has no margins: it is an idealised model study.
+        The camera sits ``altitude_margin_cm`` above the slot. The square model
+        has no margins: it is an idealised model study.
         """
         if self.kind == SQUARE_FOOTPRINT:
             return cs.RectFootprint.square(self.lateral_cm)
-        return self._camera_at(alt_cm + ALTITUDE_MARGIN_CM).eroded(placement_tolerance_cm)
+        return self._camera_at(alt_cm + self.altitude_margin_cm).eroded(placement_tolerance_cm)
 
     def to_dict(self) -> dict:
         return {
@@ -427,6 +568,10 @@ def planning_footprint(
     alts_cm: Sequence[int],
     depth_cm: int,
     placement_tolerance_cm: float = DEFAULT_PLACEMENT_TOLERANCE_CM,
+    *,
+    min_sweep_cm: int = MIN_SWEEP_CM,
+    altitude_deadband_cm: float = ALTITUDE_DEADBAND_CM,
+    altitude_tolerance_cm: float = ALTITUDE_TOLERANCE_CM,
 ) -> PlanningFootprint:
     """Resolve the ``footprint`` and ``sweep_cm`` arguments of the plan builders.
 
@@ -435,25 +580,34 @@ def planning_footprint(
     ``alts_cm`` is the same); ``sweep_cm`` is the lane spacing (an upper
     bound for a camera footprint, and optional there). The forward rectangle
     is derived from every drone's gate camera (the module docstring).
+
+    ``min_sweep_cm`` is the smallest sweep width accepted, and
+    ``altitude_deadband_cm`` plus ``altitude_tolerance_cm`` how far above
+    its slot a drone may hold; the defaults are the room profile's
+    (``MIN_SWEEP_CM``, ``ALTITUDE_DEADBAND_CM`` and
+    ``ALTITUDE_TOLERANCE_CM``). The result records the altitude margin, so
+    ``check_plan`` gates the plan with the same gate cameras.
     """
+    min_sweep = _int_cm("min_sweep_cm", min_sweep_cm, 1, _MAX_SWEEP_CM)
+    margin = _altitude_margin(altitude_deadband_cm, altitude_tolerance_cm)
     if isinstance(footprint, str):
         if footprint != SQUARE_FOOTPRINT:
             raise ValueError(f"footprint must be {SQUARE_FOOTPRINT!r}, a SweepModel or a ForwardFootprint, got {footprint!r}")
         if sweep_cm is None:
             raise ValueError("the square footprint needs sweep_cm")
-        side = _int_cm("sweep_cm", sweep_cm, MIN_SWEEP_CM, _MAX_SWEEP_CM)
+        side = _int_cm("sweep_cm", sweep_cm, min_sweep, _MAX_SWEEP_CM)
         return PlanningFootprint(SQUARE_FOOTPRINT, side, -side / 2, side / 2, side, 0, SQUARE_FOOTPRINT)
     alts = sorted(set(alts_cm))
     tolerance = _tolerance(placement_tolerance_cm)
     if isinstance(footprint, SweepModel):
-        base = PlanningFootprint("forward", 0, 0, 0, 0, 0, footprint)
+        base = PlanningFootprint("forward", 0, 0, 0, 0, 0, footprint, altitude_margin_cm=margin)
     elif isinstance(footprint, cs.ForwardFootprint):
         if len(alts) != 1:
             raise ValueError(
                 f"a ForwardFootprint describes the camera at one altitude, but the drones fly altitude slots {alts} cm; "
                 "give every drone the same slot, or pass a SweepModel so each slot is modelled"
             )
-        base = PlanningFootprint("forward", 0, 0, 0, 0, 0, footprint, alts[0])
+        base = PlanningFootprint("forward", 0, 0, 0, 0, 0, footprint, alts[0], altitude_margin_cm=margin)
     else:
         raise TypeError(
             f"footprint must be {SQUARE_FOOTPRINT!r}, a coverage.SweepModel or a coverage_sim.ForwardFootprint, "
@@ -472,13 +626,13 @@ def planning_footprint(
         )
     widest = math.floor(2 * reach - 1e-6)
     if sweep_cm is None:
-        lateral = min(max(math.floor(2 * (near * half_tan - inset) - 1e-6), MIN_SWEEP_CM), widest)
+        lateral = min(max(math.floor(2 * (near * half_tan - inset) - 1e-6), min_sweep), widest)
     else:
-        lateral = min(_int_cm("sweep_cm", sweep_cm, MIN_SWEEP_CM, _MAX_SWEEP_CM), widest)
-    if lateral < MIN_SWEEP_CM:
+        lateral = min(_int_cm("sweep_cm", sweep_cm, min_sweep, _MAX_SWEEP_CM), widest)
+    if lateral < min_sweep:
         raise ValueError(
             f"the camera footprint is at most {max(lateral, 0)} cm wide where it is fully visible, "
-            f"below the {MIN_SWEEP_CM} cm minimum sweep"
+            f"below the {min_sweep} cm minimum sweep"
         )
     lo = math.ceil(max(near, (lateral / 2 + inset) / half_tan) + 1e-6)
     hi = math.floor(far - 1e-6)
@@ -518,7 +672,9 @@ def simulated_coverage(plan: Any, placement_tolerance_cm: float | None = None) -
     )
 
 
-def _lane_problems(drone: Any) -> list[str]:
+def _lane_problems(drone: Any, *, limits: EnvelopeLimits = ROOM_LIMITS) -> list[str]:
+    """Lanes that are not one whole-centimetre horizontal move within the move range of ``limits``."""
+    low, high = _move_range(limits)
     problems = []
     if not drone.lanes:
         # The executor refuses start_at with no lanes (``no_lanes``).
@@ -529,7 +685,7 @@ def _lane_problems(drone: Any) -> list[str]:
         )
     for index, lane in enumerate(drone.lanes):
         if not isinstance(lane, Mapping):
-            problems.append(f"{drone.drone_id}: lane {index} {lane!r} is not a 20-500 cm horizontal move")
+            problems.append(f"{drone.drone_id}: lane {index} {lane!r} is not a {low}-{high} cm horizontal move")
             continue
         distance = lane.get("distance_cm")
         if (
@@ -537,9 +693,9 @@ def _lane_problems(drone: Any) -> list[str]:
             or lane.get("direction") not in HORIZONTAL_DIRECTIONS
             or isinstance(distance, bool)
             or not isinstance(distance, int)
-            or not MIN_MOVE_CM <= distance <= MAX_MOVE_CM
+            or not low <= distance <= high
         ):
-            problems.append(f"{drone.drone_id}: lane {index} {lane!r} is not a 20-500 cm horizontal move")
+            problems.append(f"{drone.drone_id}: lane {index} {lane!r} is not a {low}-{high} cm horizontal move")
     return problems
 
 
@@ -584,6 +740,8 @@ def check_plan(
     placement_tolerance_cm: Any = _FROM_PLAN,
     max_standoff_cm: Any = _FROM_PLAN,
     min_coverage: float | None = MIN_COVERAGE,
+    unit_limits: Mapping[str, EnvelopeLimits] | None = None,
+    max_area_side_cm: float | None = MAX_AREA_SIDE_CM,
 ) -> list[str]:
     """Every reason ``plan`` must not be flown, or an empty list.
 
@@ -599,10 +757,20 @@ def check_plan(
     gate cameras see at least ``min_coverage`` of the area. The limits
     default to the values the plan was built with; ``None`` skips a check
     (for model studies only), and non-finite values are refused.
+
+    ``unit_limits`` maps every drone id of the plan to its
+    ``safety.EnvelopeLimits``: each lane must be a move within that
+    profile's move range and each altitude slot within its slot range.
+    ``None`` checks every drone against ``ROOM_LIMITS``; a mapping that
+    lacks a drone of the plan raises ``ValueError``. ``max_area_side_cm``
+    bounds the geofence, separation and standoff distances
+    (``MAX_AREA_SIDE_CM`` by default; ``None`` leaves them only finite and
+    positive).
     """
     return _check(
         plan, geofence_cm=geofence_cm, min_separation_cm=min_separation_cm,
         placement_tolerance_cm=placement_tolerance_cm, max_standoff_cm=max_standoff_cm, min_coverage=min_coverage,
+        unit_limits=unit_limits, max_area_side_cm=max_area_side_cm,
     )[0]
 
 
@@ -614,13 +782,23 @@ def _check(
     placement_tolerance_cm: Any = _FROM_PLAN,
     max_standoff_cm: Any = _FROM_PLAN,
     min_coverage: float | None = MIN_COVERAGE,
+    unit_limits: Mapping[str, EnvelopeLimits] | None = None,
+    max_area_side_cm: float | None = MAX_AREA_SIDE_CM,
 ) -> tuple[list[str], float | None]:
     """``check_plan`` plus the measured coverage (None when the lanes are too broken to simulate)."""
     fence = plan.geofence_cm if geofence_cm is _FROM_PLAN else geofence_cm
     min_sep = plan.min_separation_cm if min_separation_cm is _FROM_PLAN else min_separation_cm
     tolerance = plan.placement_tolerance_cm if placement_tolerance_cm is _FROM_PLAN else placement_tolerance_cm
     standoff_cap = plan.max_standoff_cm if max_standoff_cm is _FROM_PLAN else max_standoff_cm
-    limits = _safety_inputs(fence, min_sep, tolerance, standoff_cap)
+    planned = (
+        {drone.drone_id: unit_limits[drone.drone_id] for drone in plan.drones if drone.drone_id in unit_limits}
+        if isinstance(unit_limits, Mapping) else None
+    )
+    # The profiles are checked first so a wrong-type unit_limits value raises TypeError, as before.
+    profiles = _per_drone_limits(unit_limits, [drone.drone_id for drone in plan.drones])
+    limits = _safety_inputs(
+        fence, min_sep, tolerance, standoff_cap, max_area_side_cm=max_area_side_cm, unit_limits=planned,
+    )
     if min_coverage is not None:
         min_coverage = _number("min_coverage", min_coverage)
         if not 0 <= min_coverage <= 1:
@@ -640,13 +818,14 @@ def _check(
     broken = False
     if len(plan.drones) > MAX_ROSTER:
         problems.append(f"the plan has {len(plan.drones)} drones, above the {MAX_ROSTER} drone roster cap of the fleet protocol")
-    for drone in plan.drones:
+    for drone, profile in zip(plan.drones, profiles):
         if not is_identifier(drone.drone_id):
             problems.append(f"{drone.drone_id!r} is not a drone id (an identifier: letters, digits, . _ : -)")
-        lane_problems = _lane_problems(drone)
+        lane_problems = _lane_problems(drone, limits=profile)
         problems.extend(lane_problems)
-        if not _MIN_ALT_SLOT_CM <= drone.alt_cm <= _MAX_ALT_SLOT_CM:
-            low = slot_below_minimum(drone.alt_cm)
+        lowest, highest = _slot_range(profile)
+        if not lowest <= drone.alt_cm <= highest:
+            low = slot_below_minimum(drone.alt_cm, profile)
             problems.append(f"{drone.drone_id}: altitude slot {drone.alt_cm} cm is out of range" + (f" ({low})" if low else ""))
         if drone.lanes and lane_problems:  # a drone with no lanes at all is not "broken lanes"
             broken = True

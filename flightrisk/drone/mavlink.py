@@ -38,6 +38,7 @@ from flightrisk.drone.snapshot import (
     TelemetrySnapshot,
     reading,
 )
+from flightrisk.params.legacy import LEGACY_MAVLINK_MAX_ALTITUDE_M, LEGACY_MAVLINK_MAX_MOVE_CM, LEGACY_MAVLINK_MIN_MOVE_CM
 
 logger = logging.getLogger(__name__)
 
@@ -114,9 +115,9 @@ class MavlinkController:
         self.capabilities = DroneCapabilities(
             has_gps=True,
             has_rtsp=True,
-            min_move_cm=10,
-            max_move_cm=50000,
-            max_altitude_m=120,
+            min_move_cm=LEGACY_MAVLINK_MIN_MOVE_CM,
+            max_move_cm=LEGACY_MAVLINK_MAX_MOVE_CM,
+            max_altitude_m=LEGACY_MAVLINK_MAX_ALTITUDE_M,
             supports_missions=True,
             features=BASIC_FLIGHT | {Capability.GOTO_GPS},
             flight_scale="field",

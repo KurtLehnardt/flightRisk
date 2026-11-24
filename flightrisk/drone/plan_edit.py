@@ -8,9 +8,9 @@ moves with ``plan_paths.path_to_lanes``, and runs the checks of
 ``docs/map-and-plan-editing.md`` section 5:
 
 1. the geofence around each drone's takeoff point, on every traced point;
-2. ``fleet_plan_check.check_plan`` (valid 20-500 cm horizontal moves, the
-   lane cap, a valid ``assign_lanes`` within the size cap, the altitude slot
-   range), with its region gap rule replaced by
+2. ``fleet_plan_check.check_plan`` (valid horizontal moves within each
+   drone's move range, the lane cap, a valid ``assign_lanes`` within the
+   size cap, the altitude slot range), with its region gap rule replaced by
 3. the path separation check: any two drones' paths must stay ``gap_cm``
    apart everywhere, plus the ground's sidestep margin when either drone
    reports that it may sidestep an obstacle (``sidestep_margin_of``,
@@ -25,6 +25,17 @@ as before.
 ``BuiltPlan.ok`` is true only when nothing was found. ``BuiltPlan.payload()``
 is what the browser shows; ``BuiltPlan.zone_assignments()`` is what the
 coordinator sends to the edges, through the existing ``assign_lanes``.
+
+Each drone is planned and checked with its own ``safety.EnvelopeLimits``
+(``build_plan``'s ``unit_limits``, ``ROOM_LIMITS`` for every drone by
+default): its pattern and path are made of moves within its own move range
+(20-500 cm for the room profile), and ``check_plan`` checks it against the
+same profile. The zones stay equal, each at least the largest minimum move
+of the fleet wide (``plan_paths.split_area``). The bounds
+``PlanSpec.from_payload`` applies to the browser's numbers are unchanged and
+fleet-wide: the area and strip floors are the room profile's minimum move and
+the area cap is ``MAX_AREA_SIDE_CM``. Each drone's own minimum move is
+applied when its pattern and path are built.
 """
 
 from __future__ import annotations
@@ -37,14 +48,20 @@ from typing import Any
 
 from flightrisk.drone import plan_paths as pp
 from flightrisk.drone.coordinator import DEFAULT_ZONE_GAP_CM, ZoneAssignment
-from flightrisk.drone.fleet_plan_check import MAX_AREA_SIDE_CM, check_plan
+from flightrisk.drone.fleet_plan_check import (
+    MAX_AREA_SIDE_CM,
+    _area_cap,
+    _move_range,
+    _per_drone_limits,
+    check_plan,
+)
 from flightrisk.drone.fleet_plan_model import (
     DronePlan,
     FleetSearchPlan,
     PatternKind,
     Region,
 )
-from flightrisk.drone.safety import MIN_MOVE_CM
+from flightrisk.drone.safety import MIN_MOVE_CM, EnvelopeLimits
 from flightrisk.fleet_protocol import MAX_ROSTER, is_identifier
 
 __all__ = [
@@ -333,19 +350,32 @@ class BuiltPlan:
         return out
 
 
-def _check_plan_problems(drones: list[DronePath], area: pp.Rect, strip_cm: int, geofence_cm: float | None) -> list[str]:
+def _check_plan_problems(
+    drones: list[DronePath],
+    area: pp.Rect,
+    strip_cm: int,
+    geofence_cm: float | None,
+    *,
+    unit_limits: Mapping[str, EnvelopeLimits] | None = None,
+    max_area_side_cm: float | None = MAX_AREA_SIDE_CM,
+) -> list[str]:
     """``fleet_plan_check.check_plan`` on the converted drones, with the path rules of this module.
 
     ``check_plan`` works in a frame whose search area starts at the origin
     and whose drones fly inside their regions. Here each drone's region is
     the bounding box of its path and the area is the box around the search
-    area and every path, shifted to the origin; its region gap rule is
+    area and every path, shifted to the origin, and at least the largest
+    minimum move of the checked drones on each side; its region gap rule is
     switched off (``gap_cm=0``) because the path separation check replaces
     it, and its coverage gate is off (coverage is reported, not gated).
+    ``unit_limits`` and ``max_area_side_cm`` are passed to ``check_plan``
+    unchanged.
     """
     converted = [d for d in drones if d.converted is not None]
     if not converted:
         return []
+    profiles = _per_drone_limits(unit_limits, [d.drone_id for d in converted])
+    shortest = max(_move_range(limits)[0] for limits in profiles)
     every = [(area.x, area.y), (area.x1, area.y1)] + [p for d in converted for p in d.converted.trace]
     bounds = pp.Rect.bounding(every)
     ox, oy = bounds.x, bounds.y
@@ -362,7 +392,7 @@ def _check_plan_problems(drones: list[DronePath], area: pp.Rect, strip_cm: int, 
         ))
     plan = FleetSearchPlan(
         pattern=PatternKind.PARALLEL_SPLIT,
-        area_cm=(max(bounds.w, MIN_MOVE_CM), max(bounds.h, MIN_MOVE_CM)),
+        area_cm=(max(bounds.w, shortest), max(bounds.h, shortest)),
         sweep_cm=strip_cm,
         gap_cm=0,
         drones=tuple(plans),
@@ -370,7 +400,7 @@ def _check_plan_problems(drones: list[DronePath], area: pp.Rect, strip_cm: int, 
         min_separation_cm=None,
         max_standoff_cm=None,
     )
-    return check_plan(plan, min_coverage=None)
+    return check_plan(plan, min_coverage=None, unit_limits=unit_limits, max_area_side_cm=max_area_side_cm)
 
 
 def build_plan(
@@ -385,6 +415,8 @@ def build_plan(
     takeoffs: Mapping[str, Sequence[int]] | None = None,
     footprint_cm: int | None = None,
     sidestep_margin_of: Callable[[str], int] | None = None,
+    unit_limits: Mapping[str, EnvelopeLimits] | None = None,
+    max_area_side_cm: float | None = MAX_AREA_SIDE_CM,
 ) -> BuiltPlan:
     """Build and check a plan for ``drone_ids`` (see the module docstring).
 
@@ -405,9 +437,25 @@ def build_plan(
     obstacle inside its own zone (``coordinator.FleetCoordinator.sidestep_margin_of``);
     a pair keeps the larger of its two margins, and none without it. Never
     raises for a bad plan: every problem is in ``BuiltPlan.problems``.
+
+    ``unit_limits`` maps every drone id of ``drone_ids`` to its
+    ``safety.EnvelopeLimits``: each drone's pattern and path are made of
+    moves within its own move range, the zones are split for the fleet's
+    largest minimum move, and ``check_plan`` checks each drone against its
+    own profile. None, the default, is ``ROOM_LIMITS`` for every drone.
+    ``max_area_side_cm`` is passed to ``check_plan``, where it bounds the
+    geofence (``MAX_AREA_SIDE_CM`` by default; None leaves it only finite
+    and positive). Both are validated before anything is built, as
+    ``check_plan`` validates them: a ``unit_limits`` that lacks a drone of
+    ``drone_ids`` or holds an unusable profile raises ``ValueError``, one
+    that is not a mapping of ``EnvelopeLimits`` raises ``TypeError``, and a
+    ``max_area_side_cm`` that is not a positive number or None raises
+    ``ValueError``. These are wrong arguments, not a bad plan.
     """
     strip = spec.strip_cm if spec.strip_cm is not None else int(strip_cm)
     ids = [str(d) for d in drone_ids]
+    profiles = _per_drone_limits(unit_limits, ids)
+    _area_cap(max_area_side_cm)
     problems: list[Problem] = []
     built = BuiltPlan(spec, mode, [], problems, strip, int(gap_cm), geofence_cm)
     built.footprint_cm = int(footprint_cm) if footprint_cm is not None else strip
@@ -417,18 +465,18 @@ def build_plan(
     for extra in sorted(set(spec.paths) - set(ids)):
         problems.append(Problem("spec", f"the plan has a path for {extra}, which is not in the fleet", drone_id=extra))
     try:
-        zones = pp.split_area(spec.area, len(ids), int(gap_cm))
+        zones = pp.split_area(spec.area, len(ids), int(gap_cm), zone_limits=profiles)
     except ValueError as exc:
         problems.append(Problem("spec", str(exc)))
         return built
 
-    for index, (drone_id, zone) in enumerate(zip(ids, zones)):
+    for index, (drone_id, zone, limits) in enumerate(zip(ids, zones, profiles)):
         try:
             alt = int(alt_slot_of(drone_id, index)) if alt_slot_of is not None else 100
         except Exception as exc:  # noqa: BLE001 - the ceiling board's refusal is shown as a problem
             problems.append(Problem("altitude", f"{drone_id}: {exc}", drone_id=drone_id))
             alt = 100
-        pattern = pp.pattern_vertices(spec.pattern, zone, strip)
+        pattern = pp.pattern_vertices(spec.pattern, zone, strip, limits=limits)
         mark = tuple(int(v) for v in takeoffs[drone_id]) if takeoffs and drone_id in takeoffs else pattern[0]
         built.takeoffs[drone_id] = mark
         if mark != pattern[0]:
@@ -447,7 +495,7 @@ def build_plan(
             ))
             continue
         try:
-            drone.converted = pp.path_to_lanes(drone.drawn, fence_cm=geofence_cm)
+            drone.converted = pp.path_to_lanes(drone.drawn, fence_cm=geofence_cm, limits=limits)
         except ValueError as exc:
             problems.append(Problem("path", f"{drone_id}: {exc}", drone_id=drone_id))
             continue
@@ -478,7 +526,9 @@ def build_plan(
                 f"({where[0]:.0f}, {where[1]:.0f}) cm, below the {gap_cm} cm gap{extra}",
                 drone_id=a.drone_id, other_drone_id=b.drone_id, point=where,
             ))
-    for text in _check_plan_problems(built.drones, spec.area, strip, geofence_cm):
+    for text in _check_plan_problems(
+        built.drones, spec.area, strip, geofence_cm, unit_limits=unit_limits, max_area_side_cm=max_area_side_cm
+    ):
         if "geofence" in text and any(p.kind == "geofence" for p in problems):
             continue  # already reported with its vertex
         problems.append(Problem("check", text))

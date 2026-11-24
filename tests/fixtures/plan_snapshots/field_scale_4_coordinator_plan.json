@@ -1,0 +1,1033 @@
+{
+  "assign_lanes": {
+    "d1": [
+      {
+        "alt_cm": 1500,
+        "drone_id": "d1",
+        "lanes": [
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 51
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          }
+        ],
+        "type": "assign_lanes",
+        "zone": {
+          "h_cm": 6000,
+          "w_cm": 2102,
+          "x_cm": 0,
+          "y_cm": 0
+        }
+      }
+    ],
+    "d2": [
+      {
+        "alt_cm": 2000,
+        "drone_id": "d2",
+        "lanes": [
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 51
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          }
+        ],
+        "type": "assign_lanes",
+        "zone": {
+          "h_cm": 6000,
+          "w_cm": 2102,
+          "x_cm": 3000,
+          "y_cm": 0
+        }
+      }
+    ],
+    "d3": [
+      {
+        "alt_cm": 2500,
+        "drone_id": "d3",
+        "lanes": [
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 51
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          }
+        ],
+        "type": "assign_lanes",
+        "zone": {
+          "h_cm": 6000,
+          "w_cm": 2102,
+          "x_cm": 6000,
+          "y_cm": 0
+        }
+      }
+    ],
+    "d4": [
+      {
+        "alt_cm": 3000,
+        "drone_id": "d4",
+        "lanes": [
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 51
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          }
+        ],
+        "type": "assign_lanes",
+        "zone": {
+          "h_cm": 6000,
+          "w_cm": 2102,
+          "x_cm": 9000,
+          "y_cm": 0
+        }
+      }
+    ]
+  },
+  "drone_ids": [
+    "d1",
+    "d2",
+    "d3",
+    "d4"
+  ],
+  "edge_settings": [
+    {
+      "alt_slot_m": 15.0,
+      "geofence_m": 65.0,
+      "zone_x_m": 9.741114
+    },
+    {
+      "alt_slot_m": 20.0,
+      "geofence_m": 65.0,
+      "zone_x_m": 39.741114
+    },
+    {
+      "alt_slot_m": 25.0,
+      "geofence_m": 65.0,
+      "zone_x_m": 69.741114
+    },
+    {
+      "alt_slot_m": 30.0,
+      "geofence_m": 65.0,
+      "zone_x_m": 99.741114
+    }
+  ],
+  "plan": {
+    "gap_cm": 898,
+    "grid": {
+      "h_cm": 6000,
+      "w_cm": 11102,
+      "x_cm": 0,
+      "y_cm": 0
+    },
+    "strip_cm": 1051,
+    "zones": [
+      {
+        "alt_cm": 1500,
+        "drone_id": "d1",
+        "h_cm": 6000,
+        "lanes": [
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 51
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          }
+        ],
+        "w_cm": 2102,
+        "x_cm": 0,
+        "y_cm": 0
+      },
+      {
+        "alt_cm": 2000,
+        "drone_id": "d2",
+        "h_cm": 6000,
+        "lanes": [
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 51
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          }
+        ],
+        "w_cm": 2102,
+        "x_cm": 3000,
+        "y_cm": 0
+      },
+      {
+        "alt_cm": 2500,
+        "drone_id": "d3",
+        "h_cm": 6000,
+        "lanes": [
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 51
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          }
+        ],
+        "w_cm": 2102,
+        "x_cm": 6000,
+        "y_cm": 0
+      },
+      {
+        "alt_cm": 3000,
+        "drone_id": "d4",
+        "h_cm": 6000,
+        "lanes": [
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "forward",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 500
+          },
+          {
+            "direction": "right",
+            "distance_cm": 51
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          },
+          {
+            "direction": "back",
+            "distance_cm": 500
+          }
+        ],
+        "w_cm": 2102,
+        "x_cm": 9000,
+        "y_cm": 0
+      }
+    ]
+  },
+  "scale": {
+    "alt_slots_cm": [
+      1500,
+      2000,
+      2500,
+      3000
+    ],
+    "area_cm": [
+      11102,
+      6000
+    ],
+    "coverage_fraction": 0.999741,
+    "coverage_note": "the lanes cover the whole area at the lowest slot",
+    "geofence_cm": 6500.0,
+    "profile": "field",
+    "strip_cm": 1051,
+    "swath_cm": 1948.22278,
+    "takeoff_x_cm": [
+      974.11139,
+      3974.11139,
+      6974.11139,
+      9974.11139
+    ],
+    "zone_gap_cm": 898
+  }
+}

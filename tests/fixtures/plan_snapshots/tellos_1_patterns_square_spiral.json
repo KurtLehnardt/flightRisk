@@ -1,0 +1,410 @@
+{
+  "cases": {
+    "field_1200x800": {
+      "area_cm": [
+        1200,
+        800
+      ],
+      "assign_lanes_message": {
+        "d1": {
+          "alt_cm": 100,
+          "drone_id": "d1",
+          "lanes": [
+            {
+              "direction": "forward",
+              "distance_cm": 132
+            },
+            {
+              "direction": "right",
+              "distance_cm": 326
+            },
+            {
+              "direction": "back",
+              "distance_cm": 264
+            },
+            {
+              "direction": "left",
+              "distance_cm": 326
+            },
+            {
+              "direction": "left",
+              "distance_cm": 326
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 396
+            },
+            {
+              "direction": "right",
+              "distance_cm": 382
+            },
+            {
+              "direction": "right",
+              "distance_cm": 381
+            },
+            {
+              "direction": "back",
+              "distance_cm": 264
+            },
+            {
+              "direction": "back",
+              "distance_cm": 264
+            },
+            {
+              "direction": "left",
+              "distance_cm": 437
+            },
+            {
+              "direction": "left",
+              "distance_cm": 437
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 299
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 299
+            },
+            {
+              "direction": "right",
+              "distance_cm": 437
+            },
+            {
+              "direction": "right",
+              "distance_cm": 437
+            },
+            {
+              "direction": "back",
+              "distance_cm": 334
+            },
+            {
+              "direction": "back",
+              "distance_cm": 334
+            },
+            {
+              "direction": "left",
+              "distance_cm": 437
+            },
+            {
+              "direction": "left",
+              "distance_cm": 437
+            }
+          ],
+          "type": "assign_lanes",
+          "zone": {
+            "h_cm": 1057,
+            "takeoff_x_cm": 600,
+            "takeoff_y_cm": 77,
+            "w_cm": 1200,
+            "x_cm": 0,
+            "y_cm": -257
+          }
+        }
+      },
+      "check_plan": [],
+      "lkp_cm": [
+        600,
+        400
+      ],
+      "plan": {
+        "area_cm": [
+          1200,
+          800
+        ],
+        "coverage": 1.0,
+        "drones": [
+          {
+            "alt_cm": 100,
+            "drone_id": "d1",
+            "lanes": [
+              {
+                "direction": "forward",
+                "distance_cm": 132
+              },
+              {
+                "direction": "right",
+                "distance_cm": 326
+              },
+              {
+                "direction": "back",
+                "distance_cm": 264
+              },
+              {
+                "direction": "left",
+                "distance_cm": 326
+              },
+              {
+                "direction": "left",
+                "distance_cm": 326
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 396
+              },
+              {
+                "direction": "right",
+                "distance_cm": 382
+              },
+              {
+                "direction": "right",
+                "distance_cm": 381
+              },
+              {
+                "direction": "back",
+                "distance_cm": 264
+              },
+              {
+                "direction": "back",
+                "distance_cm": 264
+              },
+              {
+                "direction": "left",
+                "distance_cm": 437
+              },
+              {
+                "direction": "left",
+                "distance_cm": 437
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 299
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 299
+              },
+              {
+                "direction": "right",
+                "distance_cm": 437
+              },
+              {
+                "direction": "right",
+                "distance_cm": 437
+              },
+              {
+                "direction": "back",
+                "distance_cm": 334
+              },
+              {
+                "direction": "back",
+                "distance_cm": 334
+              },
+              {
+                "direction": "left",
+                "distance_cm": 437
+              },
+              {
+                "direction": "left",
+                "distance_cm": 437
+              }
+            ],
+            "start_offset_s": 0.0,
+            "takeoff_cm": [
+              600,
+              77
+            ],
+            "transit_lanes": 0,
+            "zone": {
+              "h_cm": 1057,
+              "takeoff_x_cm": 600,
+              "takeoff_y_cm": 77,
+              "w_cm": 1200,
+              "x_cm": 0,
+              "y_cm": -257
+            }
+          }
+        ],
+        "feasible": true,
+        "flight_area": {
+          "h_cm": 1057,
+          "w_cm": 1200,
+          "x_cm": 0,
+          "y_cm": -257
+        },
+        "footprint": {
+          "ahead_cm": 323,
+          "along_cm": 132,
+          "far_cm": 389,
+          "kind": "forward",
+          "lateral_cm": 326,
+          "near_cm": 257,
+          "slot_cm": null
+        },
+        "gap_cm": 0,
+        "geofence_cm": 500.0,
+        "lkp_cm": [
+          600,
+          400
+        ],
+        "max_standoff_cm": 500.0,
+        "min_separation_cm": null,
+        "pattern": "square_spiral",
+        "placement_tolerance_cm": 10.0,
+        "problems": [],
+        "reason": "one drone with a last-known point: square spiral from the LKP",
+        "separation_cm": null,
+        "standoff_cm": 257,
+        "sweep_cm": 326,
+        "unchecked": []
+      }
+    },
+    "room_400x400": {
+      "area_cm": [
+        400,
+        400
+      ],
+      "assign_lanes_message": {
+        "d1": {
+          "alt_cm": 100,
+          "drone_id": "d1",
+          "lanes": [
+            {
+              "direction": "forward",
+              "distance_cm": 132
+            },
+            {
+              "direction": "right",
+              "distance_cm": 37
+            },
+            {
+              "direction": "back",
+              "distance_cm": 264
+            },
+            {
+              "direction": "left",
+              "distance_cm": 74
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 266
+            },
+            {
+              "direction": "right",
+              "distance_cm": 74
+            },
+            {
+              "direction": "back",
+              "distance_cm": 268
+            },
+            {
+              "direction": "left",
+              "distance_cm": 74
+            }
+          ],
+          "type": "assign_lanes",
+          "zone": {
+            "h_cm": 657,
+            "takeoff_x_cm": 200,
+            "takeoff_y_cm": -123,
+            "w_cm": 400,
+            "x_cm": 0,
+            "y_cm": -257
+          }
+        }
+      },
+      "check_plan": [],
+      "lkp_cm": [
+        200,
+        200
+      ],
+      "plan": {
+        "area_cm": [
+          400,
+          400
+        ],
+        "coverage": 1.0,
+        "drones": [
+          {
+            "alt_cm": 100,
+            "drone_id": "d1",
+            "lanes": [
+              {
+                "direction": "forward",
+                "distance_cm": 132
+              },
+              {
+                "direction": "right",
+                "distance_cm": 37
+              },
+              {
+                "direction": "back",
+                "distance_cm": 264
+              },
+              {
+                "direction": "left",
+                "distance_cm": 74
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 266
+              },
+              {
+                "direction": "right",
+                "distance_cm": 74
+              },
+              {
+                "direction": "back",
+                "distance_cm": 268
+              },
+              {
+                "direction": "left",
+                "distance_cm": 74
+              }
+            ],
+            "start_offset_s": 0.0,
+            "takeoff_cm": [
+              200,
+              -123
+            ],
+            "transit_lanes": 0,
+            "zone": {
+              "h_cm": 657,
+              "takeoff_x_cm": 200,
+              "takeoff_y_cm": -123,
+              "w_cm": 400,
+              "x_cm": 0,
+              "y_cm": -257
+            }
+          }
+        ],
+        "feasible": true,
+        "flight_area": {
+          "h_cm": 657,
+          "w_cm": 400,
+          "x_cm": 0,
+          "y_cm": -257
+        },
+        "footprint": {
+          "ahead_cm": 323,
+          "along_cm": 132,
+          "far_cm": 389,
+          "kind": "forward",
+          "lateral_cm": 326,
+          "near_cm": 257,
+          "slot_cm": null
+        },
+        "gap_cm": 0,
+        "geofence_cm": 500.0,
+        "lkp_cm": [
+          200,
+          200
+        ],
+        "max_standoff_cm": 500.0,
+        "min_separation_cm": null,
+        "pattern": "square_spiral",
+        "placement_tolerance_cm": 10.0,
+        "problems": [],
+        "reason": "one drone with a last-known point: square spiral from the LKP",
+        "separation_cm": null,
+        "standoff_cm": 257,
+        "sweep_cm": 326,
+        "unchecked": []
+      }
+    }
+  },
+  "drone_ids": [
+    "d1"
+  ],
+  "kind": "square_spiral"
+}

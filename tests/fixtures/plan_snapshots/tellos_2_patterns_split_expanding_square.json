@@ -1,0 +1,785 @@
+{
+  "cases": {
+    "field_1200x800": {
+      "area_cm": [
+        1200,
+        800
+      ],
+      "assign_lanes_message": {
+        "d1": {
+          "alt_cm": 100,
+          "drone_id": "d1",
+          "lanes": [
+            {
+              "direction": "back",
+              "distance_cm": 37
+            },
+            {
+              "direction": "right",
+              "distance_cm": 50
+            },
+            {
+              "direction": "left",
+              "distance_cm": 118
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 74
+            },
+            {
+              "direction": "right",
+              "distance_cm": 118
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 74
+            },
+            {
+              "direction": "left",
+              "distance_cm": 312
+            },
+            {
+              "direction": "back",
+              "distance_cm": 222
+            },
+            {
+              "direction": "right",
+              "distance_cm": 312
+            },
+            {
+              "direction": "back",
+              "distance_cm": 74
+            },
+            {
+              "direction": "left",
+              "distance_cm": 312
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 370
+            },
+            {
+              "direction": "right",
+              "distance_cm": 312
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 74
+            },
+            {
+              "direction": "left",
+              "distance_cm": 312
+            },
+            {
+              "direction": "back",
+              "distance_cm": 259
+            },
+            {
+              "direction": "back",
+              "distance_cm": 259
+            },
+            {
+              "direction": "right",
+              "distance_cm": 312
+            },
+            {
+              "direction": "back",
+              "distance_cm": 74
+            },
+            {
+              "direction": "left",
+              "distance_cm": 312
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 333
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 333
+            },
+            {
+              "direction": "right",
+              "distance_cm": 312
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 30
+            },
+            {
+              "direction": "left",
+              "distance_cm": 312
+            },
+            {
+              "direction": "back",
+              "distance_cm": 363
+            },
+            {
+              "direction": "back",
+              "distance_cm": 363
+            },
+            {
+              "direction": "right",
+              "distance_cm": 312
+            }
+          ],
+          "type": "assign_lanes",
+          "zone": {
+            "h_cm": 1114,
+            "takeoff_x_cm": 465,
+            "takeoff_y_cm": 49,
+            "w_cm": 515,
+            "x_cm": 0,
+            "y_cm": -314
+          }
+        },
+        "d2": {
+          "alt_cm": 130,
+          "drone_id": "d2",
+          "lanes": [
+            {
+              "direction": "back",
+              "distance_cm": 37
+            },
+            {
+              "direction": "left",
+              "distance_cm": 50
+            },
+            {
+              "direction": "right",
+              "distance_cm": 118
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 74
+            },
+            {
+              "direction": "left",
+              "distance_cm": 118
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 74
+            },
+            {
+              "direction": "right",
+              "distance_cm": 312
+            },
+            {
+              "direction": "back",
+              "distance_cm": 222
+            },
+            {
+              "direction": "left",
+              "distance_cm": 312
+            },
+            {
+              "direction": "back",
+              "distance_cm": 74
+            },
+            {
+              "direction": "right",
+              "distance_cm": 312
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 370
+            },
+            {
+              "direction": "left",
+              "distance_cm": 312
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 74
+            },
+            {
+              "direction": "right",
+              "distance_cm": 312
+            },
+            {
+              "direction": "back",
+              "distance_cm": 259
+            },
+            {
+              "direction": "back",
+              "distance_cm": 259
+            },
+            {
+              "direction": "left",
+              "distance_cm": 312
+            },
+            {
+              "direction": "back",
+              "distance_cm": 74
+            },
+            {
+              "direction": "right",
+              "distance_cm": 312
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 333
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 333
+            },
+            {
+              "direction": "left",
+              "distance_cm": 312
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 30
+            },
+            {
+              "direction": "right",
+              "distance_cm": 312
+            },
+            {
+              "direction": "back",
+              "distance_cm": 363
+            },
+            {
+              "direction": "back",
+              "distance_cm": 363
+            },
+            {
+              "direction": "left",
+              "distance_cm": 312
+            }
+          ],
+          "type": "assign_lanes",
+          "zone": {
+            "h_cm": 1114,
+            "takeoff_x_cm": 735,
+            "takeoff_y_cm": 49,
+            "w_cm": 515,
+            "x_cm": 685,
+            "y_cm": -314
+          }
+        }
+      },
+      "check_plan": [],
+      "lkp_cm": [
+        600,
+        400
+      ],
+      "plan": {
+        "area_cm": [
+          1200,
+          800
+        ],
+        "coverage": 1.0,
+        "drones": [
+          {
+            "alt_cm": 100,
+            "drone_id": "d1",
+            "lanes": [
+              {
+                "direction": "back",
+                "distance_cm": 37
+              },
+              {
+                "direction": "right",
+                "distance_cm": 50
+              },
+              {
+                "direction": "left",
+                "distance_cm": 118
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 74
+              },
+              {
+                "direction": "right",
+                "distance_cm": 118
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 74
+              },
+              {
+                "direction": "left",
+                "distance_cm": 312
+              },
+              {
+                "direction": "back",
+                "distance_cm": 222
+              },
+              {
+                "direction": "right",
+                "distance_cm": 312
+              },
+              {
+                "direction": "back",
+                "distance_cm": 74
+              },
+              {
+                "direction": "left",
+                "distance_cm": 312
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 370
+              },
+              {
+                "direction": "right",
+                "distance_cm": 312
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 74
+              },
+              {
+                "direction": "left",
+                "distance_cm": 312
+              },
+              {
+                "direction": "back",
+                "distance_cm": 259
+              },
+              {
+                "direction": "back",
+                "distance_cm": 259
+              },
+              {
+                "direction": "right",
+                "distance_cm": 312
+              },
+              {
+                "direction": "back",
+                "distance_cm": 74
+              },
+              {
+                "direction": "left",
+                "distance_cm": 312
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 333
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 333
+              },
+              {
+                "direction": "right",
+                "distance_cm": 312
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 30
+              },
+              {
+                "direction": "left",
+                "distance_cm": 312
+              },
+              {
+                "direction": "back",
+                "distance_cm": 363
+              },
+              {
+                "direction": "back",
+                "distance_cm": 363
+              },
+              {
+                "direction": "right",
+                "distance_cm": 312
+              }
+            ],
+            "start_offset_s": 0.0,
+            "takeoff_cm": [
+              465,
+              49
+            ],
+            "transit_lanes": 2,
+            "zone": {
+              "h_cm": 1114,
+              "takeoff_x_cm": 465,
+              "takeoff_y_cm": 49,
+              "w_cm": 515,
+              "x_cm": 0,
+              "y_cm": -314
+            }
+          },
+          {
+            "alt_cm": 130,
+            "drone_id": "d2",
+            "lanes": [
+              {
+                "direction": "back",
+                "distance_cm": 37
+              },
+              {
+                "direction": "left",
+                "distance_cm": 50
+              },
+              {
+                "direction": "right",
+                "distance_cm": 118
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 74
+              },
+              {
+                "direction": "left",
+                "distance_cm": 118
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 74
+              },
+              {
+                "direction": "right",
+                "distance_cm": 312
+              },
+              {
+                "direction": "back",
+                "distance_cm": 222
+              },
+              {
+                "direction": "left",
+                "distance_cm": 312
+              },
+              {
+                "direction": "back",
+                "distance_cm": 74
+              },
+              {
+                "direction": "right",
+                "distance_cm": 312
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 370
+              },
+              {
+                "direction": "left",
+                "distance_cm": 312
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 74
+              },
+              {
+                "direction": "right",
+                "distance_cm": 312
+              },
+              {
+                "direction": "back",
+                "distance_cm": 259
+              },
+              {
+                "direction": "back",
+                "distance_cm": 259
+              },
+              {
+                "direction": "left",
+                "distance_cm": 312
+              },
+              {
+                "direction": "back",
+                "distance_cm": 74
+              },
+              {
+                "direction": "right",
+                "distance_cm": 312
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 333
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 333
+              },
+              {
+                "direction": "left",
+                "distance_cm": 312
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 30
+              },
+              {
+                "direction": "right",
+                "distance_cm": 312
+              },
+              {
+                "direction": "back",
+                "distance_cm": 363
+              },
+              {
+                "direction": "back",
+                "distance_cm": 363
+              },
+              {
+                "direction": "left",
+                "distance_cm": 312
+              }
+            ],
+            "start_offset_s": 2.0,
+            "takeoff_cm": [
+              735,
+              49
+            ],
+            "transit_lanes": 2,
+            "zone": {
+              "h_cm": 1114,
+              "takeoff_x_cm": 735,
+              "takeoff_y_cm": 49,
+              "w_cm": 515,
+              "x_cm": 685,
+              "y_cm": -314
+            }
+          }
+        ],
+        "feasible": true,
+        "flight_area": {
+          "h_cm": 1114,
+          "w_cm": 1200,
+          "x_cm": 0,
+          "y_cm": -314
+        },
+        "footprint": {
+          "ahead_cm": 351,
+          "along_cm": 74,
+          "far_cm": 389,
+          "kind": "forward",
+          "lateral_cm": 406,
+          "near_cm": 314,
+          "slot_cm": null
+        },
+        "gap_cm": 170,
+        "geofence_cm": 500.0,
+        "lkp_cm": [
+          600,
+          400
+        ],
+        "max_standoff_cm": 500.0,
+        "min_separation_cm": 150.0,
+        "pattern": "split_expanding_square",
+        "placement_tolerance_cm": 10.0,
+        "problems": [],
+        "reason": "last-known point: the split expanding square minimises expected time to first detection",
+        "separation_cm": 170.0,
+        "standoff_cm": 314,
+        "sweep_cm": 406,
+        "unchecked": []
+      }
+    },
+    "room_400x400": {
+      "area_cm": [
+        400,
+        400
+      ],
+      "assign_lanes_message": {
+        "d1": {
+          "alt_cm": 100,
+          "drone_id": "d1",
+          "lanes": [
+            {
+              "direction": "back",
+              "distance_cm": 37
+            },
+            {
+              "direction": "right",
+              "distance_cm": 50
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 148
+            },
+            {
+              "direction": "back",
+              "distance_cm": 274
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 326
+            }
+          ],
+          "type": "assign_lanes",
+          "zone": {
+            "h_cm": 714,
+            "takeoff_x_cm": 65,
+            "takeoff_y_cm": -151,
+            "w_cm": 115,
+            "x_cm": 0,
+            "y_cm": -314
+          }
+        },
+        "d2": {
+          "alt_cm": 130,
+          "drone_id": "d2",
+          "lanes": [
+            {
+              "direction": "back",
+              "distance_cm": 37
+            },
+            {
+              "direction": "left",
+              "distance_cm": 50
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 148
+            },
+            {
+              "direction": "back",
+              "distance_cm": 274
+            },
+            {
+              "direction": "forward",
+              "distance_cm": 326
+            }
+          ],
+          "type": "assign_lanes",
+          "zone": {
+            "h_cm": 714,
+            "takeoff_x_cm": 335,
+            "takeoff_y_cm": -151,
+            "w_cm": 115,
+            "x_cm": 285,
+            "y_cm": -314
+          }
+        }
+      },
+      "check_plan": [],
+      "lkp_cm": [
+        200,
+        200
+      ],
+      "plan": {
+        "area_cm": [
+          400,
+          400
+        ],
+        "coverage": 1.0,
+        "drones": [
+          {
+            "alt_cm": 100,
+            "drone_id": "d1",
+            "lanes": [
+              {
+                "direction": "back",
+                "distance_cm": 37
+              },
+              {
+                "direction": "right",
+                "distance_cm": 50
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 148
+              },
+              {
+                "direction": "back",
+                "distance_cm": 274
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 326
+              }
+            ],
+            "start_offset_s": 0.0,
+            "takeoff_cm": [
+              65,
+              -151
+            ],
+            "transit_lanes": 2,
+            "zone": {
+              "h_cm": 714,
+              "takeoff_x_cm": 65,
+              "takeoff_y_cm": -151,
+              "w_cm": 115,
+              "x_cm": 0,
+              "y_cm": -314
+            }
+          },
+          {
+            "alt_cm": 130,
+            "drone_id": "d2",
+            "lanes": [
+              {
+                "direction": "back",
+                "distance_cm": 37
+              },
+              {
+                "direction": "left",
+                "distance_cm": 50
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 148
+              },
+              {
+                "direction": "back",
+                "distance_cm": 274
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 326
+              }
+            ],
+            "start_offset_s": 2.0,
+            "takeoff_cm": [
+              335,
+              -151
+            ],
+            "transit_lanes": 2,
+            "zone": {
+              "h_cm": 714,
+              "takeoff_x_cm": 335,
+              "takeoff_y_cm": -151,
+              "w_cm": 115,
+              "x_cm": 285,
+              "y_cm": -314
+            }
+          }
+        ],
+        "feasible": true,
+        "flight_area": {
+          "h_cm": 714,
+          "w_cm": 400,
+          "x_cm": 0,
+          "y_cm": -314
+        },
+        "footprint": {
+          "ahead_cm": 351,
+          "along_cm": 74,
+          "far_cm": 389,
+          "kind": "forward",
+          "lateral_cm": 406,
+          "near_cm": 314,
+          "slot_cm": null
+        },
+        "gap_cm": 170,
+        "geofence_cm": 500.0,
+        "lkp_cm": [
+          200,
+          200
+        ],
+        "max_standoff_cm": 500.0,
+        "min_separation_cm": 150.0,
+        "pattern": "split_expanding_square",
+        "placement_tolerance_cm": 10.0,
+        "problems": [],
+        "reason": "last-known point: the split expanding square minimises expected time to first detection",
+        "separation_cm": 170.0,
+        "standoff_cm": 314,
+        "sweep_cm": 406,
+        "unchecked": []
+      }
+    }
+  },
+  "drone_ids": [
+    "d1",
+    "d2"
+  ],
+  "kind": "split_expanding_square"
+}
