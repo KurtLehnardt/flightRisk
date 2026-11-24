@@ -789,9 +789,11 @@ class FlightSequenceMixin:
         added to it (``_move_from_height``).
 
         Lands if the height is unknown, and lands instead of climbing when
-        the slot, or the climb from the measured height, would end above
-        the ceiling limit (``SafetyEnvelope.max_alt_slot_cm``). The edge
-        enforces that limit itself, whatever the ground sent.
+        the slot, or the climb from the height the move is sized from (the
+        commanded height when the drone reports one, else the measured
+        height), would end above the ceiling limit
+        (``SafetyEnvelope.max_alt_slot_cm``). The edge enforces that limit
+        itself, whatever the ground sent.
 
         A move the drone refuses with a transient refusal is retried after a
         hover, at most ``FlightGuards.refusal_retries`` times, each time from
@@ -862,13 +864,16 @@ class FlightSequenceMixin:
         takeoff and moves return once the measured height is within an
         arrival tolerance (0.7 m) of that. A move sized from the measured
         height would then end up to that tolerance away from the slot, so it
-        is sized from the commanded height. The measured height must still
-        be known and positive: otherwise it is returned unchanged and the
-        drone lands as before (``height_unknown``). A drone that settles its
-        height (the Tello) moves from where it is and is never asked, and a
-        commanded height that cannot be read falls back to *measured*.
+        is sized from the commanded height, whatever the measured height,
+        even when that is unknown or not positive: the move is added to the
+        commanded height all the same, so a limit checked from the measured
+        one would be checked from the wrong height. A drone that settles its
+        height (the Tello) moves from where it is and is never asked. A
+        commanded height that is unknown or cannot be read falls back to
+        *measured*, so a drone whose measured height is unknown too is
+        refused or landed as before (``height_unknown``).
         """
-        if self._settles_height() or not is_finite_number(measured) or measured <= 0:
+        if self._settles_height():
             return measured
         reader = getattr(self.drone, "commanded_height_cm", None)
         if not callable(reader):

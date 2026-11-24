@@ -456,4 +456,11 @@ def test_vertical_limits_use_the_measured_height_for_a_drone_that_settles_it(exe
     assert executor._move_from_height(130) == 130
     del drone.settled_height
     assert executor._move_from_height(130) == 500.0
-    assert executor._move_from_height(None) is None  # an unknown height stays unknown
+    # The commanded height is used whatever the measured one reads.
+    assert executor._move_from_height(0) == 500.0
+    assert executor._move_from_height(-20) == 500.0
+    assert executor._move_from_height(None) == 500.0
+    # With no commanded height either, the height stays unknown (refused or landed).
+    drone.commanded_height_cm = lambda: None
+    assert executor._move_from_height(None) is None
+    assert executor._move_from_height(0) == 0

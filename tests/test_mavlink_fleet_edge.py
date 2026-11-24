@@ -362,6 +362,81 @@ def test_manual_up_is_checked_against_the_ceiling_from_the_commanded_height(make
     assert len([c for c in edge.vehicle.commands if c[0] == "goto"]) == gotos  # nothing sent
 
 
+def _manual_edge_at_20_m(make_edge):
+    """An edge under manual control hovering after a takeoff to 20 m, with the ceiling limit at 2020 cm."""
+    edge = make_edge(SimVehicle(ARDUPILOT, time_scale=20.0), takeoff_alt_m=20.0)
+    assert edge.ready()
+    edge.envelope.configure_ceiling(2320, 300, 2000)  # ceiling limit 2020 cm, slot 2000 cm
+    edge.handle(fp.make_manual_hold(drone_id="drone-1", cmd_id="m-1"))
+    edge.handle(fp.make_manual_takeoff(drone_id="drone-1", cmd_id="m-2"))
+    assert wait_for(lambda: edge.of("ack", "manual_takeoff")), edge.of("nack")
+    assert wait_for(lambda: not edge.executor.is_busy)
+    assert edge.drone.commanded_height_cm() == pytest.approx(2000)
+    return edge
+
+
+def _gotos(edge):
+    return len([c for c in edge.vehicle.commands if c[0] == "goto"])
+
+
+def test_manual_up_is_checked_from_the_height_after_a_step_that_ends_during_the_check(make_edge):
+    """A step that finishes after the height was read but before the busy check cannot let "up" pass the ceiling.
+
+    The handler reads the commanded 2000 cm, then the previous "up 20" ends
+    (2020 cm) before its busy check passes. "up 20" seemed to end at
+    2020 cm, at the limit, but would end at 2040 cm: the worker checks it
+    again from the height the step starts from and refuses it.
+    """
+    edge = _manual_edge_at_20_m(make_edge)
+    drone = edge.drone
+    read_commanded = drone.commanded_height_cm
+    raced = []
+
+    def commanded_then_previous_step_ends():
+        height = read_commanded()
+        if not raced:
+            raced.append(height)
+            assert drone.move("up", 20).ok  # the previous step ends now, after the read
+        return height
+
+    drone.commanded_height_cm = commanded_then_previous_step_ends
+    gotos = _gotos(edge)
+    edge.handle(fp.make_manual_move("up", distance_cm=20, drone_id="drone-1", cmd_id="m-3"))
+    nack = wait_for(lambda: edge.of("nack", "manual_move"))
+    assert raced == [pytest.approx(2000)]
+    assert nack and nack[-1]["reason"] == "ceiling", nack
+    assert nack[-1]["height_cm"] == pytest.approx(2020) and nack[-1]["max_alt_slot_cm"] == 2020
+    assert _gotos(edge) == gotos + 1  # only the previous step was sent
+    assert read_commanded() == pytest.approx(2020)
+
+
+def test_manual_up_is_checked_from_the_commanded_height_when_the_measured_one_reads_zero(make_edge):
+    """A measured height of 0 does not make "up 80" look safe: it is added to the commanded 2000 cm, above 2020 cm."""
+    edge = _manual_edge_at_20_m(make_edge)
+    edge.drone.read_height_cm = lambda: 0
+    gotos = _gotos(edge)
+    edge.handle(fp.make_manual_move("up", distance_cm=80, drone_id="drone-1", cmd_id="m-3"))
+    nack = wait_for(lambda: edge.of("nack", "manual_move"))
+    assert nack and nack[-1]["reason"] == "ceiling", nack
+    assert nack[-1]["height_cm"] == pytest.approx(2000) and nack[-1]["max_alt_slot_cm"] == 2020
+    assert _gotos(edge) == gotos
+
+
+def test_climb_from_a_takeoff_that_overshoots_ends_at_the_slot(make_edge):
+    """A takeoff to 5 m that overshoots to 5.60 m still climbs to the slot, not 0.6 m below it."""
+    vehicle = SimVehicle(ARDUPILOT, time_scale=20.0)
+    vehicle.takeoff_stop_m = 5.60
+    edge = make_edge(vehicle)
+    assert edge.ready(), edge.drone.link_status()
+    start_lanes(edge, lanes=[{"direction": "forward", "distance_cm": 500}], alt_cm=1500)
+    assert wait_for(lambda: edge.executor.lane_index == 1 and not edge.executor.is_busy), edge.log.names()
+    climb = _slot_climb(edge)
+    assert climb["commanded_height_cm"] == pytest.approx(500)
+    assert (climb["direction"], climb["distance_cm"]) == ("up", 1000)
+    assert edge.drone.commanded_height_cm() == pytest.approx(1500)
+    assert wait_for(lambda: abs(edge.vehicle.alt - 15.0) < 0.05), edge.vehicle.alt
+
+
 def test_commanded_height_is_unknown_before_the_first_takeoff(make_edge):
     edge = make_edge()
     assert edge.ready()

@@ -141,9 +141,10 @@ class SimVehicle:
         self.velocity_body = (0.0, 0.0, 0.0, 0.0)
         self.speed = self.max_speed
         self.takeoff_alt = 2.5
-        # When set, a takeoff stops climbing at this height (metres) when it
-        # is below the takeoff altitude: a vehicle that settles within its
-        # arrival tolerance below the commanded takeoff altitude.
+        # When set, a takeoff stops climbing at this height (metres) instead
+        # of the takeoff altitude: below it, a vehicle that settles within its
+        # arrival tolerance under the commanded takeoff altitude; above it,
+        # one that overshoots it.
         self.takeoff_stop_m: float | None = None
         self.linked = True
         self.reports_in_air = reports_in_air
@@ -267,7 +268,7 @@ class SimVehicle:
     def _takeoff_goal_alt(self) -> float:
         if self.takeoff_stop_m is None:
             return self.takeoff_alt
-        return min(self.takeoff_alt, float(self.takeoff_stop_m))
+        return float(self.takeoff_stop_m)
 
     # --- physics --------------------------------------------------------
 
