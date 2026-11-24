@@ -7,7 +7,11 @@ import hashlib
 import re
 from pathlib import Path
 
-from flightrisk.params.docs import is_fact_row, is_read_only_row, render_flight_parameters_markdown
+from flightrisk.params.docs import (
+    is_fact_row,
+    is_read_only_row,
+    render_flight_parameters_markdown,
+)
 from flightrisk.params.table import TABLE
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -124,14 +128,58 @@ def test_editing_an_old_log_entry_breaks_the_chain():
     assert chain_errors(deleted)
 
 
+#: Modules outside params and hardware may import these, because they hold no registry or catalogue
+#: value: the drone id pattern only (A2a moved it out of the launcher so the inventory can share it).
+LEAF_IMPORTS_ALLOWED = {"flightrisk.hardware.ids", "flightrisk.hardware.ids.DRONE_ID"}
+
+
+def _type_checking_nodes(tree):
+    """Every node inside an ``if TYPE_CHECKING:`` block; such imports never run."""
+    inside = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If) and (
+            (isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING")
+            or (
+                isinstance(node.test, ast.Attribute)
+                and node.test.attr == "TYPE_CHECKING"
+                and isinstance(node.test.value, ast.Name)
+                and node.test.value.id == "typing"
+            )
+        ):
+            for child in node.body:
+                inside.update(ast.walk(child))
+    return inside
+
+
+def test_the_allowed_leaf_imports_hold_no_registry_or_catalogue_value():
+    """ids.py imports only re, and the hardware package's __init__ imports nothing, so importing the
+    id rule never loads the catalogue."""
+    tree = ast.parse((ROOT / "flightrisk" / "hardware" / "ids.py").read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            assert node.module == "re" and not node.level, ast.dump(node)
+        elif isinstance(node, ast.Import):
+            assert [a.name for a in node.names] == ["re"], ast.dump(node)
+    package = ast.parse((ROOT / "flightrisk" / "hardware" / "__init__.py").read_text(encoding="utf-8"))
+    assert not [n for n in ast.walk(package) if isinstance(n, (ast.Import, ast.ImportFrom))]
+
+
 def test_no_runtime_module_imports_params_or_hardware():
-    """CMP-1: nothing outside params, hardware and tests imports them yet."""
+    """CMP-1: nothing outside params, hardware and tests imports them at run time yet.
+
+    An import inside ``if TYPE_CHECKING:`` never runs, and the drone id pattern holds no registry or
+    catalogue value, so neither counts.
+    """
     offenders = []
     for path in (ROOT / "flightrisk").rglob("*.py"):
         rel = path.relative_to(ROOT).parts
         if rel[1] in ("params", "hardware"):
             continue
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        skipped = _type_checking_nodes(tree)
+        for node in ast.walk(tree):
+            if node in skipped:
+                continue
             names = []
             if isinstance(node, ast.Import):
                 names = [a.name for a in node.names]
@@ -142,6 +190,8 @@ def test_no_runtime_module_imports_params_or_hardware():
                     names = [("." * node.level) + n for n in names]
             for n in names:
                 bare = n.lstrip(".")
+                if bare in LEAF_IMPORTS_ALLOWED:
+                    continue
                 if re.match(r"(flightrisk\.)?(params|hardware)(\.|$)", bare) and (
                     not n.startswith(".") or bare.split(".")[0] in ("params", "hardware")
                 ):
