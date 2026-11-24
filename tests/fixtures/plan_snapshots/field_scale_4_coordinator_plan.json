@@ -503,22 +503,22 @@
     {
       "alt_slot_m": 15.0,
       "geofence_m": 65.0,
-      "zone_x_m": 9.741113897962657
+      "zone_x_m": 9.741114
     },
     {
       "alt_slot_m": 20.0,
       "geofence_m": 65.0,
-      "zone_x_m": 39.74111389796266
+      "zone_x_m": 39.741114
     },
     {
       "alt_slot_m": 25.0,
       "geofence_m": 65.0,
-      "zone_x_m": 69.74111389796266
+      "zone_x_m": 69.741114
     },
     {
       "alt_slot_m": 30.0,
       "geofence_m": 65.0,
-      "zone_x_m": 99.74111389796266
+      "zone_x_m": 99.741114
     }
   ],
   "plan": {
@@ -1016,17 +1016,17 @@
       11102,
       6000
     ],
-    "coverage_fraction": 0.999740926530844,
+    "coverage_fraction": 0.999741,
     "coverage_note": "the lanes cover the whole area at the lowest slot",
     "geofence_cm": 6500.0,
     "profile": "field",
     "strip_cm": 1051,
-    "swath_cm": 1948.2227795925314,
+    "swath_cm": 1948.22278,
     "takeoff_x_cm": [
-      974.1113897962657,
-      3974.111389796266,
-      6974.111389796266,
-      9974.111389796266
+      974.11139,
+      3974.11139,
+      6974.11139,
+      9974.11139
     ],
     "zone_gap_cm": 898
   }

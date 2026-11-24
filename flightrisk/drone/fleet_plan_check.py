@@ -794,6 +794,8 @@ def _check(
         {drone.drone_id: unit_limits[drone.drone_id] for drone in plan.drones if drone.drone_id in unit_limits}
         if isinstance(unit_limits, Mapping) else None
     )
+    # The profiles are checked first so a wrong-type unit_limits value raises TypeError, as before.
+    profiles = _per_drone_limits(unit_limits, [drone.drone_id for drone in plan.drones])
     limits = _safety_inputs(
         fence, min_sep, tolerance, standoff_cap, max_area_side_cm=max_area_side_cm, unit_limits=planned,
     )
@@ -801,7 +803,6 @@ def _check(
         min_coverage = _number("min_coverage", min_coverage)
         if not 0 <= min_coverage <= 1:
             raise ValueError(f"min_coverage must be within [0, 1], got {min_coverage!r}")
-    profiles = _per_drone_limits(unit_limits, [drone.drone_id for drone in plan.drones])
     problems: list[str] = []
     width, depth = plan.area_cm
     standoff = plan.standoff_cm
