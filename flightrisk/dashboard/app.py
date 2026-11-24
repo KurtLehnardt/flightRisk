@@ -1153,7 +1153,14 @@ class FleetSupervisor:
             # Paths stay this much farther than the gap from a drone that may sidestep.
             sidestep_margin_of=self.coordinator.sidestep_margin_of,
             unit_limits=self.unit_limits(),
+            **self._area_cap_kwargs(),
         )
+
+    def _area_cap_kwargs(self) -> dict[str, int | None]:
+        """The fleet's area cap for ``build_plan``; empty (its default) for a supervisor without units."""
+        if self.units is None:
+            return {}
+        return {"max_area_side_cm": ground_params.area_cap_cm(self.units.values())}
 
     def unit_limits(self) -> dict[str, EnvelopeLimits] | None:
         """Each resolved drone's envelope profile (``GroundUnit.limits``), or None without units."""
