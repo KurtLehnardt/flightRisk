@@ -83,21 +83,29 @@ NEW_STRINGS = NEW_STRINGS | frozenset(name for name in NEW_NAMES if name.startsw
 
 #: The allowlist: {path relative to flightrisk/: {token, ...}}. Empty in A2;
 #: A3 and C1 add their senders here.
-ALLOWED: dict[str, frozenset[str]] = {}
+ALLOWED: dict[str, frozenset[tuple[str, str]]] = {}
 
 #: Uses that send nothing, each with its reason. Kept apart from ``ALLOWED``,
 #: which lists senders and stays empty in A2.
-NOT_SENDERS: dict[str, frozenset[str]] = {
+#: Each exemption is ``(token, scope)``, where scope is the innermost enclosing
+#: function name (``<module>`` outside any function), so the same token used
+#: elsewhere in the file is still caught.
+NOT_SENDERS: dict[str, frozenset[tuple[str, str]]] = {
     # Maps an edge refusal to the older nack reason "landing" (a value, not
     # the assign_lanes key), from before A2.
-    "drone/lane_executor.py": frozenset({"landing:"}),
+    "drone/lane_executor.py": frozenset({("landing:", "<module>")}),
     # A flight-safety log event's own ``landing`` field (the orphan landing
     # that was cleared), from before A2; it builds no protocol message.
-    "dashboard/manual_control.py": frozenset({"landing="}),
+    "dashboard/manual_control.py": frozenset({("landing=", "observe_telemetry")}),
     # The start-time report builds the describe_unit reply body and its
     # unit_rev (data, not a send); the edge hello and the reply are built
     # only by fleet_protocol builders, which the scan of senders covers.
-    "params/report.py": frozenset({"unit_rev", "unit_rev="}),
+    # The gate on the unshaped send path refuses what needs an accepted name,
+    # and the authority downgrades a new nack reason to "invalid": both only
+    # hold messages back or lower them to today's wire.
+    "fleet_ground_link.py": frozenset({("required_accepts", "_payload_for")}),
+    "fleet_authority.py": frozenset({("nack_reason_for_peer", "_nack"), ("nack_reason_for_peer", "_drop_at_dispatch")}),
+    "params/report.py": frozenset({("unit_rev", "wire"), ("unit_rev=", "build_report")}),
 }
 
 
@@ -165,6 +173,19 @@ def find_senders(source: str, filename: str = "<source>") -> Iterator[tuple[int,
                     yield node.lineno, f"{keyword.arg}="
 
 
+def find_scoped_senders(source: str, filename: str = "<source>") -> Iterator[tuple[int, str, str]]:
+    """Every ``(line, token, scope)`` of ``find_senders``, with the innermost enclosing function name as scope."""
+    tree = ast.parse(source, filename=filename)
+    spans = sorted(
+        (node.lineno, node.end_lineno or node.lineno, node.name)
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    )
+    for line, token in find_senders(source, filename):
+        inside = [span for span in spans if span[0] <= line <= span[1]]
+        yield line, token, (max(inside)[2] if inside else "<module>")
+
+
 def _runtime_modules() -> Iterator[Path]:
     for path in sorted(PACKAGE.rglob("*.py")):
         rel = path.relative_to(PACKAGE)
@@ -173,16 +194,16 @@ def _runtime_modules() -> Iterator[Path]:
         yield path
 
 
-def _scan() -> dict[str, set[str]]:
-    found: dict[str, set[str]] = {}
+def _scan() -> dict[str, set[tuple[str, str]]]:
+    found: dict[str, set[tuple[str, str]]] = {}
     for path in _runtime_modules():
         rel = path.relative_to(PACKAGE).as_posix()
-        for _, token in find_senders(path.read_text(encoding="utf-8"), str(path)):
-            found.setdefault(rel, set()).add(token)
+        for _, token, scope in find_scoped_senders(path.read_text(encoding="utf-8"), str(path)):
+            found.setdefault(rel, set()).add((token, scope))
     return found
 
 
-def _permitted(rel: str) -> frozenset[str]:
+def _permitted(rel: str) -> frozenset[tuple[str, str]]:
     return ALLOWED.get(rel, frozenset()) | NOT_SENDERS.get(rel, frozenset())
 
 
@@ -199,6 +220,13 @@ def test_every_allowlist_entry_is_still_used():
     stale = {rel: sorted(tokens - found.get(rel, set())) for rel, tokens in {**ALLOWED, **NOT_SENDERS}.items()
              if tokens - found.get(rel, set())}
     assert stale == {}
+
+
+def test_an_exemption_covers_only_its_own_function():
+    exempt = {("landing=", "observe_telemetry")}
+    source = "def observe_telemetry():\n    log(landing=1)\n\ndef other():\n    send(landing=spot)\n"
+    found = {(token, scope) for _, token, scope in find_scoped_senders(source)}
+    assert found - exempt == {("landing=", "other")}
 
 
 def test_the_allowlist_is_empty_in_phase_a2():
