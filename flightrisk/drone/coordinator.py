@@ -123,6 +123,7 @@ from flightrisk.drone.plan_paths import closest_approach
 from flightrisk.drone.safety import (
     DEFAULT_ALT_SLOTS_CM,
     DEFAULT_MIN_TAKEOFF_BATTERY,
+    format_cm,
     min_takeoff_battery_from_env,
 )
 from flightrisk.drone.temp_preflight import TELEMETRY_TEMP, live_refusal, temp_status
@@ -657,7 +658,58 @@ def _number(value: Any) -> float | None:
 
 
 # What the coordinator reads of a ``ground_params.GroundUnit``; it checks a unit by these, not by its class.
-_UNIT_FIELDS = ("unit_id", "limits", "min_move_cm", "max_move_cm", "min_takeoff_battery_pct")
+_UNIT_FIELDS = ("unit_id", "limits", "min_move_cm", "max_move_cm", "min_takeoff_battery_pct", "values")
+
+# The rows of a unit's resolved ``values`` the coordinator plans each unit with: its geofence, the
+# altitude slots its zones take in turn when the fleet's slots do not fit its slot range, and the gap
+# it keeps from a neighbouring zone.
+_UNIT_FENCE_ROW = "envelope.geofence_cm"
+_UNIT_SLOTS_ROW = "plan.alt_slots_cm"
+_UNIT_ZONE_GAP_ROW = "plan.zone_gap_cm"
+
+
+def _unit_value(drone_id: str, unit: Any, row: str) -> Any:
+    """The resolved value of *row* in *unit*'s ``values``; ``TypeError`` when the unit has none."""
+    try:
+        return unit.values[row].value
+    except (AttributeError, KeyError, TypeError):
+        raise TypeError(f"units[{drone_id!r}] has no resolved `{row}` value") from None
+
+
+def _whole_cm(value: Any) -> bool:
+    """True for a whole number of centimetres (an ``int`` that is not a ``bool``)."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _positive_cm(value: Any) -> float | None:
+    """*value* as a float when it is a positive, finite number, else None (an integer too large for a float too)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        number = float(value)
+    except OverflowError:
+        return None
+    return number if math.isfinite(number) and number > 0 else None
+
+
+def _check_unit_plan_rows(drone_id: str, unit: Any) -> None:
+    """Raise unless *unit*'s geofence, zone slots and zone gap can be planned with.
+
+    The geofence must be a positive number of centimetres, the slots a
+    non-empty sequence of positive whole centimetres and the gap whole
+    centimetres, not negative. Whether a slot lies within the unit's slot
+    range is checked at ``plan()``, for the slot its zone takes.
+    """
+    fence = _unit_value(drone_id, unit, _UNIT_FENCE_ROW)
+    if _positive_cm(fence) is None:
+        raise ValueError(f"units[{drone_id!r}] has the geofence {fence!r}; it must be a positive number of cm")
+    slots = _unit_value(drone_id, unit, _UNIT_SLOTS_ROW)
+    if not isinstance(slots, (tuple, list)) or not slots or not all(_whole_cm(s) and s > 0 for s in slots):
+        raise ValueError(f"units[{drone_id!r}] has the zone altitude slots {slots!r}; they must be positive "
+                         "whole cm, at least one")
+    gap = _unit_value(drone_id, unit, _UNIT_ZONE_GAP_ROW)
+    if not _whole_cm(gap) or gap < 0:
+        raise ValueError(f"units[{drone_id!r}] has the zone gap {gap!r}; it must be whole cm, not negative")
 
 
 def _check_unit(drone_id: str, unit: Any) -> None:
@@ -666,8 +718,9 @@ def _check_unit(drone_id: str, unit: Any) -> None:
     The move range must be whole centimetres and equal to the planner's range
     of the unit's ``limits`` (``move_range._move_range``), so the lanes made
     from ``limits`` and the transits split with ``min_move_cm`` and
-    ``max_move_cm`` keep to one range, and the takeoff battery minimum must be
-    a finite number.
+    ``max_move_cm`` keep to one range, the takeoff battery minimum must be
+    a finite number, and the resolved geofence, zone slots and zone gap must
+    be usable (``_check_unit_plan_rows``).
     """
     missing = [name for name in _UNIT_FIELDS if not hasattr(unit, name)]
     if missing:
@@ -686,6 +739,7 @@ def _check_unit(drone_id: str, unit: Any) -> None:
     if _number(unit.min_takeoff_battery_pct) is None:
         raise TypeError(f"units[{drone_id!r}].min_takeoff_battery_pct must be a finite number, "
                         f"got {unit.min_takeoff_battery_pct!r}")
+    _check_unit_plan_rows(drone_id, unit)
 
 
 def _fleet_units(
@@ -881,13 +935,20 @@ class FleetCoordinator:
         strip_cm: Lane spacing inside a zone.
         alt_slots_cm: Altitude slots assigned to zones in turn, so
             neighbouring zones never share a slot when two or more are given.
+            With ``units``, a unit whose slot range does not hold every one
+            of them takes its own resolved ``plan.alt_slots_cm`` in turn
+            instead.
         alt_slot_of: Optional ``(drone_id, zone_index) -> slot_cm`` that
             picks each drone's altitude slot at ``plan()`` instead (the
             dashboard's per-drone slot settings). The coordinator does not
             check slots against a ceiling; its caller and every edge do.
+            With ``units``, ``plan()`` refuses a slot outside its unit's
+            slot range, whichever way it was picked.
         dedup_radius_cm: Detections closer than this on the shared grid are
             merged, whichever drones reported them.
-        zone_gap_cm: Empty corridor between neighbouring zones.
+        zone_gap_cm: Empty corridor between neighbouring zones. With
+            ``units``, the gap between two neighbouring zones is the largest
+            of this and the two units' resolved ``plan.zone_gap_cm``.
         min_battery: Lowest battery percentage allowed at ``start()`` and for
             a re-flight receiver. ``None`` (the default) reads
             ``FLIGHTRISK_MIN_TAKEOFF_BATTERY`` through
@@ -910,6 +971,8 @@ class FleetCoordinator:
             edge). Re-tasked lanes are offered only to drones whose geofence
             contains their whole new path. ``None`` plans without a fence;
             the edges still enforce their own and answer with a ``nack``.
+            With ``units`` and a fence given, each drone is planned against
+            the smaller of it and its unit's resolved ``envelope.geofence_cm``.
         retask_wait_s: How long ``on_drone_lost`` waits for the receiving
             drones to answer before reporting the re-task.
         retask_excluded: Optional ``drone_id -> bool``; a drone for which it
@@ -936,10 +999,13 @@ class FleetCoordinator:
             zone's lanes use its move range, every transit to re-tasked lanes
             or a re-flight is split within the receiver's move range, a
             re-flight drops the segments shorter than the shortest move of
-            any drone that may fly it, and ``start()`` and the re-flight
+            any drone that may fly it, ``start()`` and the re-flight
             receivers use its ``min_takeoff_battery_pct`` instead of
-            ``min_battery``. ``None`` (the default) plans every drone with the
-            room profile's move range and ``min_battery``. With ``units``,
+            ``min_battery``, and its resolved geofence, zone slots and zone
+            gap apply as ``geofence_cm``, ``alt_slots_cm`` and
+            ``zone_gap_cm`` say. ``None`` (the default) plans every drone
+            with the room profile's move range, ``min_battery`` and the
+            fence, slots and gap given here. With ``units``,
             every link id must be in exactly one of ``units`` and
             ``refused_units``, and each unit's id must be its key; anything
             else raises ``ValueError``, so no unit falls back to another
@@ -1214,32 +1280,41 @@ class FleetCoordinator:
         ``units``, each zone's moves stay within its own unit's move range and
         the zone must be at least as wide as the longest of the units'
         shortest moves; without, the room profile's range applies to every
-        zone.
+        zone. With ``units``, each gap is the largest of ``zone_gap_cm`` and
+        the two neighbours' own zone gaps (``_zone_gaps_cm``), each zone takes
+        a slot its unit can fly (``_zone_alt_cm``), and the plan's
+        ``gap_cm``, the separation re-tasks keep, is the largest gap any
+        planned unit asks for (``_fleet_gap_cm``). A fleet of units whose
+        gaps and slot ranges hold ``zone_gap_cm`` and ``alt_slots_cm`` gets
+        the zones it gets without units.
 
         Planning starts a new mission: acks, start state, loss marks,
         detections and a previous ``land_all`` are cleared. Clock sync
         results are kept. Planning is refused with ``RuntimeError`` while any
         drone's telemetry from the last ``TELEMETRY_FRESH_S`` seconds says it
-        is flying, because replacing a flying drone's lanes is unsafe, and
-        with ``ValueError`` when a unit is in ``refused_units``
-        (``_refuse_refused_units``).
+        is flying, because replacing a flying drone's lanes is unsafe, with
+        ``ValueError`` when a unit is in ``refused_units``
+        (``_refuse_refused_units``), and with ``ValueError`` when a zone's
+        slot is outside its unit's slot range (``_refuse_slots_outside_units``).
         """
         self._refuse_plan_while_flying()
         drone_ids = list(self._links)
         self._refuse_refused_units(drone_ids)
         n = len(drone_ids)
-        zone_w = (self._width_cm - self._zone_gap_cm * (n - 1)) // n
+        gaps = self._zone_gaps_cm(drone_ids)
+        zone_w = (self._width_cm - sum(gaps)) // n
         if self._units is None:
             too_narrow = zone_w < TELLO_MIN_MOVE_CM
         else:
             # Every unit flies a zone of this width, so the unit with the longest shortest move decides.
             too_narrow = zone_w < max(self._units[drone_id].min_move_cm for drone_id in drone_ids)
         if too_narrow:
-            raise ValueError(
-                f"area width {self._width_cm} cm is too narrow for {n} zones with "
-                f"{self._zone_gap_cm} cm gaps"
-            )
+            widths = sorted(set(gaps)) or [self._fleet_gap_cm(drone_ids)]
+            gap_text = (f"{widths[0]} cm gaps" if len(widths) == 1
+                        else "gaps of " + ", ".join(str(gap) for gap in gaps) + " cm")
+            raise ValueError(f"area width {self._width_cm} cm is too narrow for {n} zones with {gap_text}")
         zones = []
+        x_cm = 0
         for i, drone_id in enumerate(drone_ids):
             waypoints = generate_parallel_track(
                 zone_w, self._depth_cm, self._strip_cm, **self._limits_kwarg(drone_id)
@@ -1247,18 +1322,21 @@ class FleetCoordinator:
             lanes = tuple(_lane(wp.direction, wp.distance_cm) for wp in waypoints)
             zones.append(ZoneAssignment(
                 drone_id=drone_id,
-                x_cm=i * (zone_w + self._zone_gap_cm),
+                x_cm=x_cm,
                 y_cm=0,
                 w_cm=zone_w,
                 h_cm=self._depth_cm,
                 alt_cm=self._zone_alt_cm(drone_id, i),
                 lanes=lanes,
             ))
+            if i < len(gaps):
+                x_cm += zone_w + gaps[i]
+        self._refuse_slots_outside_units(zones)
         plan = FleetPlan(
             zones=tuple(zones),
             width_cm=self._width_cm,
             depth_cm=self._depth_cm,
-            gap_cm=self._zone_gap_cm,
+            gap_cm=self._fleet_gap_cm(drone_ids),
             strip_cm=self._strip_cm,
         )
         return self._install_plan(plan)
@@ -1280,6 +1358,9 @@ class FleetCoordinator:
         area ``(x, y, w, h)`` on the shared grid. Otherwise this behaves like
         ``plan()``: it is refused while a drone flies or when a unit is in
         ``refused_units``, starts a new mission and sends each drone its lanes.
+        The map plan has checked each zone's slot against its drone's slot
+        range already (``fleet_plan_check.check_plan`` with each unit's
+        limits), so it is not checked again here.
         """
         self._refuse_plan_while_flying()
         zones = tuple(zones)
@@ -1316,6 +1397,31 @@ class FleetCoordinator:
         if not self._refused_units:
             return
         texts = [self._refused_units[drone_id] for drone_id in drone_ids if drone_id in self._refused_units]
+        if texts:
+            raise ValueError("cannot plan: " + " ".join(texts))
+
+    def _refuse_slots_outside_units(self, zones: tuple[ZoneAssignment, ...] | list[ZoneAssignment]) -> None:
+        """Raise ``ValueError`` when a zone's altitude slot is outside its unit's slot range.
+
+        The range is the unit's ``limits.min_alt_slot_cm`` to
+        ``limits.max_alt_slot_cm``. The message is ``cannot plan: `` followed
+        by one sentence per such zone, in *zones* order, naming the unit, the
+        slot and the range. Nothing is sent and no state changes. Without
+        ``units`` nothing is checked here; every edge still checks its slot.
+        """
+        if self._units is None:
+            return
+        texts = []
+        for zone in zones:
+            unit = self._units.get(zone.drone_id)
+            if unit is None:
+                continue
+            low, high = unit.limits.min_alt_slot_cm, unit.limits.max_alt_slot_cm
+            slot = _number(zone.alt_cm)
+            if slot is None or not low <= slot <= high:
+                shown = format_cm(slot) if slot is not None else repr(zone.alt_cm)
+                texts.append(f"unit {zone.drone_id}: its altitude slot {shown} cm is outside its slot range "
+                             f"{format_cm(low)}-{format_cm(high)} cm.")
         if texts:
             raise ValueError("cannot plan: " + " ".join(texts))
 
@@ -1371,10 +1477,70 @@ class FleetCoordinator:
         return plan
 
     def _zone_alt_cm(self, drone_id: str, index: int) -> int:
-        """The altitude slot of zone *index*, flown by *drone_id*."""
+        """The altitude slot of zone *index*, flown by *drone_id*.
+
+        ``alt_slot_of`` decides when given; otherwise zone *index* takes slot
+        *index* of the default slots of *drone_id* (``_default_slots_cm``) in
+        turn. ``plan()`` checks the slot against the unit's slot range.
+        """
         if self._alt_slot_of is not None:
             return int(self._alt_slot_of(drone_id, index))
-        return self._alt_slots_cm[index % len(self._alt_slots_cm)]
+        slots = self._default_slots_cm(drone_id)
+        return slots[index % len(slots)]
+
+    def _default_slots_cm(self, drone_id: str) -> tuple[int, ...]:
+        """The slots *drone_id*'s zone takes in turn: ``alt_slots_cm``, unless its unit cannot fly them all.
+
+        A unit whose slot range does not hold every slot of ``alt_slots_cm``
+        takes its own resolved ``plan.alt_slots_cm`` instead (a field unit
+        under the room profile's 100 and 130 cm). Both are indexed by the
+        zone, so neighbouring zones alternate slots as before.
+        """
+        unit = self._units.get(drone_id) if self._units is not None else None
+        if unit is None:
+            return self._alt_slots_cm
+        low, high = unit.limits.min_alt_slot_cm, unit.limits.max_alt_slot_cm
+        if all(low <= slot <= high for slot in self._alt_slots_cm):
+            return self._alt_slots_cm
+        return tuple(_unit_value(drone_id, unit, _UNIT_SLOTS_ROW))
+
+    def _zone_gaps_cm(self, drone_ids: list[str]) -> list[int]:
+        """The gap after each zone but the last: entry *i* lies between the zones of ``drone_ids[i]`` and ``[i + 1]``.
+
+        Without ``units`` every gap is ``zone_gap_cm``. With ``units`` each
+        is the largest of ``zone_gap_cm`` and the two neighbours' resolved
+        ``plan.zone_gap_cm``, so a unit never flies closer to its
+        neighbour's zone than either asks.
+        """
+        if self._units is None:
+            return [self._zone_gap_cm] * (len(drone_ids) - 1)
+        own = [_unit_value(drone_id, self._units[drone_id], _UNIT_ZONE_GAP_ROW) for drone_id in drone_ids]
+        return [max(self._zone_gap_cm, own[i], own[i + 1]) for i in range(len(drone_ids) - 1)]
+
+    def _fleet_gap_cm(self, drone_ids: list[str]) -> int:
+        """The plan's ``gap_cm``: the largest of ``zone_gap_cm`` and the zone gaps of the units of *drone_ids*.
+
+        Re-tasks and re-flights keep this from every other drone's path, so
+        it is the largest gap any planned unit asks for.
+        """
+        if self._units is None:
+            return self._zone_gap_cm
+        return max([self._zone_gap_cm]
+                   + [_unit_value(drone_id, self._units[drone_id], _UNIT_ZONE_GAP_ROW) for drone_id in drone_ids])
+
+    def _configured_fence_cm(self, drone_id: str) -> float | None:
+        """The fence half-width *drone_id* is planned against before its edge reports one.
+
+        ``geofence_cm``, or with ``units`` the smaller of it and the unit's
+        resolved ``envelope.geofence_cm``. With ``geofence_cm`` None there is
+        no configured fence, with or without units: the edges enforce their
+        own and answer with a ``nack``.
+        """
+        fence = self._geofence_cm
+        unit = self._units.get(drone_id) if self._units is not None else None
+        if fence is None or unit is None:
+            return fence
+        return min(fence, float(_unit_value(drone_id, unit, _UNIT_FENCE_ROW)))
 
     # Each unit's own values (``units``). Without units every keyword is left
     # out, so the helpers' defaults, the room profile's move range, apply as
@@ -3110,9 +3276,14 @@ class FleetCoordinator:
         return f"waiting for {rid} to finish its own lanes"
 
     def _fence_cm(self, drone_id: str) -> float | None:
-        """The fence half-width to plan against: the smallest of the configured, reported and effective ones."""
+        """The fence half-width to plan against: the smallest of the configured, reported and effective ones.
+
+        The configured one is ``_configured_fence_cm``: with ``units``, the
+        drone's own unit's fence within ``geofence_cm``.
+        """
         state = self._drones[drone_id]
-        known = [f for f in (self._geofence_cm, state.reported_fence_cm, state.effective_fence_cm) if f is not None]
+        configured = self._configured_fence_cm(drone_id)
+        known = [f for f in (configured, state.reported_fence_cm, state.effective_fence_cm) if f is not None]
         return min(known) if known else None
 
     def _inside_fence(self, drone_id: str, point: tuple[float, float]) -> bool:
