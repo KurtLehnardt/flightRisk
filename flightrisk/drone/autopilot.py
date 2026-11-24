@@ -182,7 +182,7 @@ def autonomous_modes(autopilot: str | None) -> frozenset[str]:
 # Parameter meanings are taken from the parameter references:
 #   ArduCopter: https://ardupilot.org/copter/docs/parameters.html
 #     (FENCE_ENABLE, FENCE_TYPE, FENCE_ACTION, FENCE_RADIUS, FENCE_ALT_MAX,
-#     BATT_FS_LOW_ACT, BATT_FS_CRT_ACT, BATT_LOW_VOLT, BATT_LOW_MAH,
+#     FENCE_ALT_MAX_TP, BATT_FS_LOW_ACT, BATT_FS_CRT_ACT, BATT_LOW_VOLT, BATT_LOW_MAH,
 #     BATT_ARM_VOLT, FS_THR_ENABLE, RTL_ALT_M / RTL_ALT, MAV_SYSID / SYSID_THISMAV)
 #   PX4: https://docs.px4.io/main/en/advanced_config/parameter_reference.html
 #     (GF_ACTION, GF_MAX_HOR_DIST, GF_MAX_VER_DIST, COM_LOW_BAT_ACT,
@@ -194,6 +194,12 @@ def autonomous_modes(autopilot: str | None) -> frozenset[str]:
 #: ArduCopter FENCE_TYPE bits: 1 max altitude, 2 circle, 4 polygon, 8 min altitude.
 _AP_FENCE_ALT_MAX_BIT = 1
 _AP_FENCE_CIRCLE_BIT = 2
+#: ArduCopter 4.7 FENCE_ALT_MAX_TP, the frame of FENCE_ALT_MAX: 0 above sea level, 1 above home (the
+#: default), 2 above the EKF origin, 3 above terrain. The check reads FENCE_ALT_MAX as metres above home,
+#: so only 1 is accepted. Copter 4.6 has no such parameter and its FENCE_ALT_MAX is always above home.
+#: Source, ArduPilot tag Copter-4.7.3: libraries/AC_Fence/AC_Fence.cpp lines 168-173
+#: (https://raw.githubusercontent.com/ArduPilot/ardupilot/Copter-4.7.3/libraries/AC_Fence/AC_Fence.cpp).
+_AP_FENCE_ALT_FRAME_ABOVE_HOME = 1
 #: ArduCopter FENCE_ACTION: 0 report only (refused); 1 RTL or land; 2 always
 #: land; 3 SmartRTL or RTL or land; 4 brake or land; 5 SmartRTL or land.
 _AP_FENCE_ACTIONS = frozenset({1, 2, 3, 4, 5})
@@ -225,7 +231,7 @@ DEFAULT_SYSID = 1
 
 #: ArduCopter parameters renamed in a firmware release, as (new name, new factor, old name, old factor).
 #: Each factor converts that parameter's unit to the unit the checks use (centimetres for altitudes).
-#: The new name is read first and the old name only when the new one does not exist, so firmware from
+#: The new name is read first and the old name only when the new one cannot be read, so firmware from
 #: before and after the rename both pass; when neither can be read the value is unreadable and the
 #: check fails closed. A later rename is one more line here.
 #: Sources, ArduPilot tag Copter-4.7.3:
@@ -274,8 +280,8 @@ def _read_first(read: Callable[[str], float | None], names: tuple[tuple[str, flo
 #: Every parameter the checks read, per autopilot (read once, then cached).
 FAILSAFE_PARAMS: dict[str, tuple[str, ...]] = {
     ARDUPILOT: (
-        "FENCE_ENABLE", "FENCE_TYPE", "FENCE_ACTION", "FENCE_RADIUS", "FENCE_ALT_MAX", "BATT_FS_LOW_ACT",
-        "BATT_FS_CRT_ACT", "BATT_LOW_VOLT", "BATT_LOW_MAH", "BATT_ARM_VOLT", "FS_THR_ENABLE",
+        "FENCE_ENABLE", "FENCE_TYPE", "FENCE_ACTION", "FENCE_RADIUS", "FENCE_ALT_MAX", "FENCE_ALT_MAX_TP",
+        "BATT_FS_LOW_ACT", "BATT_FS_CRT_ACT", "BATT_LOW_VOLT", "BATT_LOW_MAH", "BATT_ARM_VOLT", "FS_THR_ENABLE",
         *(name for new_name, _, old_name, _ in _AP_RENAMED for name in (new_name, old_name)),
     ),
     PX4: (
@@ -355,6 +361,17 @@ def failsafe_problems(
         elif alt_max > MAX_FENCE_ALT_M or (ceiling_m is not None and alt_max <= ceiling_m):
             low = "" if ceiling_m is None else f"above the {ceiling_m:g} m ceiling and "
             problems.append(f"FENCE_ALT_MAX={alt_max:g} m; need {low}at most {MAX_FENCE_ALT_M:g} m")
+        # Copter 4.7 can make FENCE_ALT_MAX relative to sea level, the EKF origin or terrain. A missing
+        # FENCE_ALT_MAX_TP is accepted only when the vehicle answers to the 4.6 return-altitude name and not
+        # to the 4.7 one, so a 4.7 vehicle whose FENCE_ALT_MAX_TP cannot be read is refused.
+        alt_frame = read("FENCE_ALT_MAX_TP")
+        absent_on_46 = alt_frame is None and value("RTL_ALT_M") is None and value("RTL_ALT") is not None
+        if not absent_on_46 and (not _finite(alt_frame) or float(alt_frame) != _AP_FENCE_ALT_FRAME_ABOVE_HOME):
+            shown = "unreadable" if not _finite(alt_frame) else f"{float(alt_frame):g}"
+            problems.append(
+                f"FENCE_ALT_MAX_TP={shown}; FENCE_ALT_MAX_TP must be 1 (altitude above home), "
+                "because FENCE_ALT_MAX is checked as metres above home"
+            )
         need("BATT_FS_LOW_ACT", _AP_BATT_ACTIONS, "low battery must land or return; 5 terminates")
         need("BATT_FS_CRT_ACT", _AP_BATT_ACTIONS, "critical battery must land or return; 5 terminates")
         thresholds = [v for v in (value("BATT_LOW_VOLT"), value("BATT_LOW_MAH")) if v is not None]

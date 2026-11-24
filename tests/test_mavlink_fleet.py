@@ -32,6 +32,7 @@ from flightrisk.drone.mavlink_fleet import (
 )
 from flightrisk.drone.mavsdk_link import MavsdkAutopilotLink
 from tests.support.fake_mavsdk import (
+    ARDUPILOT_47_PARAMS,
     ARDUPILOT_PARAMS,
     PX4_PARAMS,
     FixType,
@@ -254,6 +255,29 @@ def test_return_altitude_is_checked_whatever_the_failsafe_action(make_drone):
     drone, _ = make_drone(vehicle, failsafe_action="land")
     assert wait_for(lambda: "RTL_ALT return altitude 60 m is above" in (drone.link_status().detail or ""))
     assert drone.check_slot(1500) is not None and "below the autopilot's return altitude" in drone.check_slot(1500)
+
+
+def test_copter_47_vehicle_through_the_fleet_preflight(make_drone):
+    """A vehicle with ArduCopter 4.7 names goes through refresh_params, link_status, check_slot and takeoff."""
+    drone, vehicle = make_drone(SimVehicle(ARDUPILOT, time_scale=20.0, params=ARDUPILOT_47_PARAMS))
+    assert "RTL_ALT" not in vehicle.params and "SYSID_THISMAV" not in vehicle.params
+    airborne(drone, vehicle)
+    assert drone.check_slot(1500) is None
+    vehicle.trigger_failsafe()
+    assert wait_for(lambda: vehicle.alt >= 14.9), vehicle.alt  # the fake returns at RTL_ALT_M, in metres
+
+    # RTL_ALT_M is metres: 60 m is refused against the 15 m slot, by the preflight and by check_slot.
+    high = SimVehicle(ARDUPILOT, time_scale=20.0, params={**ARDUPILOT_47_PARAMS, "RTL_ALT_M": 60.0})
+    drone, high = make_drone(high)
+    assert wait_for(lambda: "RTL_ALT_M return altitude 60 m is above" in (drone.link_status().detail or ""))
+    assert "below the autopilot's return altitude 60 m" in (drone.check_slot(1500) or "")
+    assert drone.takeoff().outcome is CommandOutcome.REJECTED and high.commands == []
+
+    # A fence altitude above terrain is refused.
+    terrain = SimVehicle(ARDUPILOT, time_scale=20.0, params={**ARDUPILOT_47_PARAMS, "FENCE_ALT_MAX_TP": 3})
+    drone, terrain = make_drone(terrain)
+    assert wait_for(lambda: "FENCE_ALT_MAX_TP=3; FENCE_ALT_MAX_TP must be 1" in (drone.link_status().detail or ""))
+    assert drone.takeoff().outcome is CommandOutcome.REJECTED and terrain.commands == []
 
 
 def test_unverified_failsafes_skip_only_the_parameter_checks(make_drone):

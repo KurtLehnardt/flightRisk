@@ -3,6 +3,8 @@
 ArduCopter 4.7 renamed ``RTL_ALT`` (centimetres) to ``RTL_ALT_M`` (metres) and ``SYSID_THISMAV`` to
 ``MAV_SYSID`` (tag Copter-4.7.3: ArduCopter/mode_rtl.cpp lines 8-15 and 65, ArduCopter/Parameters.cpp
 line 40). The checks read the new name first, fall back to the old one, and refuse when neither can be read.
+ArduCopter 4.7 also added ``FENCE_ALT_MAX_TP``, the frame of ``FENCE_ALT_MAX`` (libraries/AC_Fence/AC_Fence.cpp
+lines 168-173); the check needs 1 (above home).
 """
 
 from __future__ import annotations
@@ -11,17 +13,19 @@ import math
 
 import pytest
 
-from flightrisk.drone.autopilot import ARDUPILOT, FAILSAFE_PARAMS, PX4, failsafe_problems, rtl_altitude_cm
-from tests.support.fake_mavsdk import ARDUPILOT_PARAMS, PX4_PARAMS
+from flightrisk.drone.autopilot import (
+    ARDUPILOT,
+    FAILSAFE_PARAMS,
+    PX4,
+    failsafe_problems,
+    rtl_altitude_cm,
+)
+from tests.support.fake_mavsdk import ARDUPILOT_47_PARAMS, ARDUPILOT_PARAMS, PX4_PARAMS
 
 #: Copter 4.6 names, as the fake vehicle reports them.
 AP46 = dict(ARDUPILOT_PARAMS)
 #: The same settings with Copter 4.7 names, as a Copter 4.7.3 SITL reports them.
-AP47 = {
-    **{k: v for k, v in ARDUPILOT_PARAMS.items() if k not in ("RTL_ALT", "SYSID_THISMAV")},
-    "RTL_ALT_M": 15.0,
-    "MAV_SYSID": 1,
-}
+AP47 = dict(ARDUPILOT_47_PARAMS)
 CHECK = {"geofence_cm": 3000, "ceiling_cm": 3000, "slot_cm": 1500}
 
 
@@ -67,7 +71,7 @@ def test_copter_47_system_id_is_checked():
     ],
 )
 def test_both_names_present_the_new_name_wins(new_m, old_cm, expected_cm):
-    params = {**AP46, "RTL_ALT_M": new_m, "RTL_ALT": old_cm, "MAV_SYSID": 1}
+    params = {**AP46, "RTL_ALT_M": new_m, "RTL_ALT": old_cm, "MAV_SYSID": 1, "FENCE_ALT_MAX_TP": 1}
     assert rtl_altitude_cm(ARDUPILOT, reader(params)) == expected_cm
     found = problems(ARDUPILOT, params)
     refused = [p for p in found if "return altitude" in p]
@@ -97,8 +101,57 @@ def test_neither_system_id_name_readable_is_refused_naming_both():
     assert "cannot read MAV_SYSID / SYSID_THISMAV (system id)" in problems(ARDUPILOT, params)
 
 
+def frame_refusals(params):
+    return [p for p in problems(ARDUPILOT, params) if p.startswith("FENCE_ALT_MAX_TP=")]
+
+
+def test_fence_altitude_frame_absent_on_copter_46_passes():
+    assert "FENCE_ALT_MAX_TP" not in AP46
+    assert problems(ARDUPILOT, AP46) == []
+
+
+@pytest.mark.parametrize("base", [AP46, AP47], ids=["4.6", "4.7"])
+def test_fence_altitude_frame_above_home_passes(base):
+    assert problems(ARDUPILOT, {**base, "FENCE_ALT_MAX_TP": 1}) == []
+
+
+@pytest.mark.parametrize("base", [AP46, AP47], ids=["4.6", "4.7"])
+@pytest.mark.parametrize("frame", [0, 2, 3, 1.5])
+def test_fence_altitude_frame_other_than_above_home_is_refused(base, frame):
+    found = frame_refusals({**base, "FENCE_ALT_MAX_TP": frame})
+    assert found == [
+        (
+            f"FENCE_ALT_MAX_TP={frame:g}; FENCE_ALT_MAX_TP must be 1 (altitude above home), "
+            "because FENCE_ALT_MAX is checked as metres above home"
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {k: v for k, v in AP47.items() if k != "FENCE_ALT_MAX_TP"},  # 4.7 has it, so missing means unreadable
+        {**AP47, "FENCE_ALT_MAX_TP": None},
+        {**AP47, "FENCE_ALT_MAX_TP": math.nan},
+        {**AP46, "FENCE_ALT_MAX_TP": math.nan},
+        {**AP46, "FENCE_ALT_MAX_TP": math.inf},
+        # Neither return-altitude name reads, so the vehicle cannot be shown to be 4.6.
+        {k: v for k, v in AP46.items() if k != "RTL_ALT"},
+    ],
+    ids=["4.7-missing", "4.7-none", "4.7-nan", "4.6-nan", "4.6-inf", "version-unknown"],
+)
+def test_fence_altitude_frame_unreadable_when_present_is_refused(params):
+    assert frame_refusals(params) == [
+        (
+            "FENCE_ALT_MAX_TP=unreadable; FENCE_ALT_MAX_TP must be 1 (altitude above home), "
+            "because FENCE_ALT_MAX is checked as metres above home"
+        )
+    ]
+
+
 def test_both_names_of_each_rename_are_read():
     names = FAILSAFE_PARAMS[ARDUPILOT]
+    assert "FENCE_ALT_MAX_TP" in names
     for name in ("RTL_ALT_M", "RTL_ALT", "MAV_SYSID", "SYSID_THISMAV"):
         assert name in names
     assert len(names) == len(set(names))

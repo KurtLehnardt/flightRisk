@@ -220,6 +220,8 @@ ALLOWLIST: dict[str, dict[tuple, dict]] = {
             "reason": 'Flight parameter duplicate; A3 moves it into the registry.'},
         ('flightrisk/drone/autopilot.py', '<module>', 'assign', 'MIN_OA_MARGIN_M', 'MIN_OA_MARGIN_M', 2.0): {"count": 1, "category": "deferred",
             "reason": 'Flight parameter duplicate; A3 moves it into the registry.'},
+        ('flightrisk/drone/autopilot.py', '<module>', 'assign', '_AP_FENCE_ALT_FRAME_ABOVE_HOME', '_AP_FENCE_ALT_FRAME_ABOVE_HOME', 1): {"count": 1, "category": "sdk",
+            "reason": 'ArduPilot enumeration value: FENCE_ALT_MAX_TP 1 is above home (AC_Fence.cpp, Copter-4.7.3).'},
         ('flightrisk/drone/autopilot.py', '<module>', 'assign', '_AP_FENCE_ALT_MAX_BIT', '_AP_FENCE_ALT_MAX_BIT', 1): {"count": 1, "category": "sdk",
             "reason": 'MAVLink and ArduPilot enumeration value.'},
         ('flightrisk/drone/autopilot.py', '<module>', 'assign', '_AP_FENCE_CIRCLE_BIT', '_AP_FENCE_CIRCLE_BIT', 2): {"count": 1, "category": "sdk",
