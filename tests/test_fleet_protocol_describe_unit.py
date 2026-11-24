@@ -10,9 +10,11 @@ from flightrisk import fleet_protocol as fp
 from flightrisk.fleet_protocol.checks import _is_private_key
 from flightrisk.fleet_protocol.unit import encoded_size
 from flightrisk.hardware.catalogue import BUILTIN_MODELS
+from flightrisk.hardware.features import FEATURE_IDS, resolve_features
+from flightrisk.hardware.inventory import parse_inventory
 from flightrisk.params.report import build_report
 from flightrisk.params.resolver import resolve_unit
-from flightrisk.params.spec import Scope
+from flightrisk.params.spec import Scope, Source
 from flightrisk.params.table import TABLE
 
 REV = "0123456789ab"
@@ -41,8 +43,8 @@ def _walk(obj):
             yield from _walk(item)
 
 
-def _worst_case() -> dict:
-    """A custom model with three cameras, every drone-scope registry row and long floats."""
+def _heavy_model():
+    """A custom model with three gimbal thermal cameras and a long name."""
     base = BUILTIN_MODELS["generic_multirotor"]
     cam = base.cameras[0]
     cameras = tuple(
@@ -51,8 +53,14 @@ def _worst_case() -> dict:
                             radiometric=True)
         for i in range(3)
     )
-    model = dataclasses.replace(base, id="custom-heavy-lifter-01", name="Custom heavy lifter " + "x" * 60,
-                                cameras=cameras)
+    return dataclasses.replace(base, id="custom-heavy-lifter-01", name="Custom heavy lifter " + "x" * 60,
+                               cameras=cameras)
+
+
+def _worst_case() -> dict:
+    """A custom model with three cameras, every drone-scope registry row and long floats."""
+    model = _heavy_model()
+    cameras = model.cameras
     report = build_report(model, {}, roles={c.id: "search_primary" for c in cameras},
                           gates={f"capability_gate_{i:02d}": {"on": True, "ok": False, "src": "inventory",
                                                      "why": "a requirement is not met by this unit " + "y" * 20}
@@ -244,3 +252,79 @@ def test_nack_reason_for_peer():
     assert fp.nack_reason_for_peer("straight_line_home", query) == "straight_line_home"
     assert fp.nack_reason_for_peer("straight_line_home", None) == "invalid"
     assert fp.nack_reason_for_peer("geofence", None) == "geofence"
+
+
+# --- the real producers (resolve_features, resolve_unit, build_report) -------
+
+#: A feature every built-in model can switch on, stored on an inventory unit.
+_INVENTORY_FEATURE = "claude_second_opinion"
+
+
+def _real_reply(model_id: str, with_inventory: bool) -> dict:
+    """The describe_unit ack built only from the real producers, as an edge will build it."""
+    model = BUILTIN_MODELS[model_id] if model_id in BUILTIN_MODELS else _heavy_model()
+    if not with_inventory:
+        gates = resolve_features(model)
+        resolution = resolve_unit(model, "drone-1", {})
+    else:
+        inventory = parse_inventory({"version": 1, "rev": 3, "models": {}, "units": [
+            {"unit_id": "drone-1", "name": "Unit one",
+             "model": model_id if model_id in BUILTIN_MODELS else "generic_multirotor",
+             "available": True, "features": {_INVENTORY_FEATURE: True}}]})
+        wanted = dict(inventory.unit("drone-1")["features"])
+        gates = resolve_features(model, wanted, {fid: Source.INVENTORY.value for fid in wanted})
+        assert gates[_INVENTORY_FEATURE]["on"] and gates[_INVENTORY_FEATURE]["src"] == "inventory"
+        ceiling = resolve_unit(model, "drone-1", {})["envelope.ceiling_cm"].value
+        resolution = resolve_unit(model, "drone-1", {Source.INVENTORY: {"envelope.ceiling_cm": ceiling}})
+        assert resolution["envelope.ceiling_cm"].source is Source.INVENTORY
+    report = build_report(model, resolution, gates=gates)
+    return fp.make_describe_unit_ack("drone-1", "q1", **report.wire(), ap_link_loss="unknown",
+                                     accepts=["return_home"])
+
+
+@pytest.mark.parametrize("with_inventory", [False, True], ids=["defaults", "inventory"])
+@pytest.mark.parametrize("model_id", [*BUILTIN_MODELS, "custom_three_camera"])
+def test_reply_from_the_real_feature_gates_is_accepted(model_id, with_inventory):
+    ack = _real_reply(model_id, with_inventory)
+    assert set(ack["gates"]) == set(FEATURE_IDS)
+    for fid, gate in ack["gates"].items():
+        # An available feature has no reason: null on the wire, never "".
+        assert gate["why"] is None if gate["ok"] else isinstance(gate["why"], str) and gate["why"]
+    if with_inventory:
+        assert ack["values"]["envelope.ceiling_cm"]["src"] == "inventory"
+    # The reply survives the wire and the ground's check of it.
+    wire = json.loads(json.dumps(ack))
+    fp.validate_describe_unit_reply(wire, proto=2)
+    assert wire == ack
+
+
+def test_an_empty_or_blank_why_goes_out_as_null():
+    gates = {"level_search": {"on": True, "ok": True, "why": "", "src": "default"},
+             "birdseye_search": {"on": False, "ok": True, "why": "   ", "src": "default"},
+             "thermal_detection": {"on": False, "ok": False, "why": "no thermal camera", "src": "default"}}
+    report = build_report(BUILTIN_MODELS["tello"], resolve_unit("tello", "drone-1", {}), gates=gates)
+    whys = {fid: gate["why"] for fid, gate in report.gates.items()}
+    assert whys == {"level_search": None, "birdseye_search": None, "thermal_detection": "no thermal camera"}
+
+
+@pytest.mark.parametrize("feature_id", FEATURE_IDS)
+def test_every_feature_id_passes_the_privacy_screen(feature_id):
+    assert not _is_private_key(feature_id)
+
+
+@pytest.mark.parametrize("param_id", [spec.id for spec in TABLE if spec.scope is Scope.DRONE])
+def test_every_drone_scope_parameter_id_passes_the_privacy_screen(param_id):
+    assert not _is_private_key(param_id)
+
+
+def test_every_real_feature_and_parameter_id_round_trips_through_describe_unit():
+    drone_ids = {spec.id for spec in TABLE if spec.scope is Scope.DRONE}
+    ack = _real_reply("generic_multirotor", with_inventory=False)
+    assert set(ack["gates"]) == set(FEATURE_IDS)
+    assert ack["values"] and set(ack["values"]) <= drone_ids
+    # Every drone-scope id on the wire at once, under the real feature ids.
+    full = dict(ack, values={pid: {"v": 1, "src": "profile", "d": 1, "lo": 0, "hi": 2, "edit": "ui"}
+                             for pid in sorted(drone_ids)})
+    wire = json.loads(json.dumps(full))
+    fp.validate_describe_unit_reply(wire, proto=2)
+    assert set(wire["values"]) == drone_ids and set(wire["gates"]) == set(FEATURE_IDS)

@@ -178,14 +178,20 @@ def values_object(profile: str, resolution: Mapping[str, EffectiveValue]) -> dic
 
 
 def gates_object(gates: Optional[Mapping[str, Mapping[str, Any]]]) -> dict[str, Any]:
-    """The ``gates`` object: ``{feature id: {"on", "ok", "why", "src"}}``."""
+    """The ``gates`` object: ``{feature id: {"on", "ok", "why", "src"}}``.
+
+    ``resolve_features`` gives an available feature ``why: ""``. The wire
+    carries no reason as null, never as empty text, so the describe_unit
+    validator (1 to 200 printable characters or null) accepts the reply.
+    """
     out = {}
     for feature_id, gate in sorted((gates or {}).items()):
         why = gate.get("why")
+        why = None if why is None else str(why).strip()[:_TEXT_LEN]
         out[str(feature_id)] = {
             "on": bool(gate.get("on")),
             "ok": bool(gate.get("ok")),
-            "why": None if why is None else str(why)[:_TEXT_LEN],
+            "why": why or None,
             "src": str(_plain(gate.get("src") or "profile")),
         }
     return out
