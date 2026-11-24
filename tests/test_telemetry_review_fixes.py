@@ -317,8 +317,11 @@ def test_process_exit_with_a_black_hole_collector_is_bounded_by_the_default_budg
     finally:
         if watchdog is not None:
             watchdog.cancel()
-        if proc is not None and proc.poll() is None:
-            proc.kill()
+        if proc is not None:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(5)
+            proc.stdout.close()
         blackhole.close()
     assert proc.returncode == 0
     # The default budget is 3 s; allow for interpreter teardown, but the SDK's
