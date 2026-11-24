@@ -54,7 +54,15 @@ Obstacle sensing (design ``.claude/build/obstacle/design.md`` sections 3 and
    still measures a heading is a turn that did not finish, and cuts the lane
    with ``sensor_stale`` instead of landing. A drone without that
    measurement (the Tello, whose ``cw``/``ccw`` reply arrives once the turn
-   is flown) is gated exactly as before.
+   is flown) is gated exactly as before. A camera on a gimbal mount
+   (``LaneExecutor.set_obstacle_camera``) must also look level, before and
+   after the look: when the pitch its reader reports is missing, not
+   measured, read before the look started, or its absolute value exceeds
+   the level tolerance (registry row
+   ``sensing.level_pitch_tolerance_deg``), the gate's result is
+   ``unavailable`` (reason ``stale``, cause ``camera not level``), which cuts
+   the lane as a stale view does. A fixed mount, and an executor given no
+   camera, are gated exactly as before.
 3. **The cut policy.** ``blocked`` cuts the lane where the drone hovers: the
    rest of the lane and of every following lane in the same direction is
    removed from the plan, the cut ``(lane, flown_cm, reason)`` is recorded
@@ -153,6 +161,8 @@ from flightrisk.drone.obstacle_sensor import (
 )
 from flightrisk.drone.safety import ROOM_LIMITS, CeilingError, is_finite_number
 from flightrisk.fleet_protocol import MAX_TEXT_LEN
+from flightrisk.hardware import features as _features
+from flightrisk.params import table as _registry
 
 __all__ = [
     "EVENT_DESCENT_REFUSED",
@@ -171,14 +181,27 @@ __all__ = [
     "MoveNotExecutedError",
 ]
 
+
+def _registry_default(param_id: str) -> Any:
+    """The registry default of ``param_id`` in the indoor reference profile column (today's value)."""
+    for spec in _registry.TABLE:
+        if spec.id == param_id:
+            return spec.defaults[_registry.T]
+    raise KeyError(f"no registry row {param_id!r}")
+
+
+# The lane knobs below that duplicate a parameter registry row read that row
+# (``flightrisk.params.table``), so this module keeps no copy that only
+# happens to match. Today's values are the indoor reference profile column.
+
 #: Seconds the drone hovers between two attempts at a gate whose sensor
 #: could not look, so a sensor that fails at once still takes about as long
 #: as a stale one (``OBSTACLE_SENSE_RETRIES`` attempts, about 3 s in all).
-OBSTACLE_RETRY_PAUSE_S = 0.5
+OBSTACLE_RETRY_PAUSE_S = _registry_default("sensing.retry_pause_s")
 #: A drone that measures its heading (``measured_heading_deg()``) may have a
 #: step cleared only while that heading is within this many degrees of the
 #: commanded heading, so its forward camera looks where the step goes.
-HEADING_TOLERANCE_DEG = 10.0
+HEADING_TOLERANCE_DEG = _registry_default("move.heading_tolerance_deg")
 #: ``SenseResult.detail["cause"]`` of a gate that did not judge a view
 #: because the drone did not face the commanded heading (an ``unavailable``
 #: result with reason ``stale``), and of a turn that did not finish.
@@ -1474,6 +1497,55 @@ class FlightSequenceMixin:
             return True, None
         return True, float(value) % 360.0
 
+    def _camera_pitch_deg(self, camera: Any, after: float) -> float | None:
+        """The measured pitch of *camera* read no earlier than *after*, or None when it is unknown. Never raises.
+
+        The executor's pitch reader returns ``(pitch_deg, stamp_s)``, the
+        stamp on the executor's clock. A camera whose pitch is not measured
+        (``pitch_measured`` False), no reader, a reader that raises, a value
+        that is not a finite number, a pitch stamped before *after* (so the
+        pitch may be stale) and a pitch stamped later than the executor's
+        clock reads now (the reader is on another clock) all count as a
+        missing pitch.
+        """
+        reader = getattr(self, "_obstacle_pitch_reader", None)
+        if reader is None or getattr(camera, "pitch_measured", False) is not True:
+            return None
+        try:
+            pitch, stamp = reader(camera.id)
+        except Exception:  # noqa: BLE001 - a pitch that cannot be read is a missing pitch
+            return None
+        if not (is_finite_number(pitch) and is_finite_number(stamp)) or stamp < after or stamp > self._clock():
+            return None
+        return float(pitch)
+
+    def _level_off(self, after: float) -> dict[str, Any] | None:
+        """Why the sensing camera does not look level, as a ``SenseResult`` detail, or None when it does (ROLE-4).
+
+        None for an executor given no camera and for a fixed mount, whose
+        camera always points where it was built to. A gimbal mount looks
+        level only when its reader reports a measured pitch, read no earlier
+        than *after* (the start of the look), whose absolute value is within
+        the executor's level tolerance. A gimbal with no pitch has no role
+        at all (``role_unavailable_reason``), so a missing, unmeasured or
+        stale pitch is not level either.
+        """
+        camera = getattr(self, "_obstacle_camera", None)
+        if camera is None or getattr(camera, "mount_kind", None) != "gimbal":
+            return None
+        pitch = self._camera_pitch_deg(camera, after)
+        tolerance = getattr(self, "_obstacle_level_tolerance_deg", None)
+        if tolerance is None:
+            tolerance = _features.default_level_tolerance_deg()
+        if _features.role_unavailable_reason(camera, pitch) is None and pitch is not None and abs(pitch) <= tolerance:
+            return None
+        return {
+            "cause": _features.CAMERA_NOT_LEVEL_REASON,
+            "camera": camera.id,
+            "pitch_deg": None if pitch is None else round(pitch, 1),
+            "tolerance_deg": tolerance,
+        }
+
     def _heading_off(self) -> dict[str, Any] | None:
         """Why the drone does not face its commanded heading, as a ``SenseResult`` detail, or None when it does.
 
@@ -1639,15 +1711,24 @@ class FlightSequenceMixin:
         ``stale``, cause ``heading not reached``). The heading is read again
         after a ``clear`` view, which counts only if the drone still faced
         it: the view arrived between the two readings. Drones that do not
-        measure their heading get the sensor's answer unchanged. *deadline*
-        and *person_wait* are passed to ``_sense_once``.
+        measure their heading get the sensor's answer unchanged. A camera
+        on a gimbal mount is held to its pitch the same way
+        (``_level_off``): a missing, unmeasured or stale pitch, or one beyond
+        the tolerance, is ``unavailable`` (reason ``stale``, cause ``camera
+        not level``), before the look and again after a ``clear`` one. Before
+        the look a pitch read before *after* is stale; after it, one read
+        before the look ended, so the sample read before the look does not
+        count again: no judged frame was captured later than the end of the
+        look, so the pitch is no older than the frame. *deadline* and
+        *person_wait* are passed to ``_sense_once``.
         """
-        off = self._heading_off()
+        off = self._heading_off() or self._level_off(after)
         if off is not None:
             return SenseResult.make_unavailable(REASON_STALE, detail=off), 0.0
         result, latency_ms = self._sense_once(after, deadline, person_wait=person_wait)
         if result.clear:
-            off = self._heading_off()
+            # No frame the look judged was captured later than the look's end.
+            off = self._heading_off() or self._level_off(max(after, self._clock()))
             if off is not None:
                 return SenseResult.make_unavailable(REASON_STALE, latency_ms=latency_ms, detail=off), latency_ms
         return result, latency_ms
@@ -1926,6 +2007,16 @@ class FlightSequenceMixin:
                 cause=HEADING_NOT_REACHED,
                 measured_heading_deg=result.detail.get("measured_heading_deg"),
                 commanded_heading_deg=result.detail.get("commanded_heading_deg"),
+            )
+        elif result.detail.get("cause") == _features.CAMERA_NOT_LEVEL_REASON:
+            self._log.warning(
+                EVENT_SENSE_STALE,
+                drone_id=self.drone_id,
+                lane_index=lane_index,
+                attempt=attempt,
+                cause=_features.CAMERA_NOT_LEVEL_REASON,
+                pitch_deg=result.detail.get("pitch_deg"),
+                tolerance_deg=result.detail.get("tolerance_deg"),
             )
         else:
             self._log.warning(EVENT_SENSE_STALE, drone_id=self.drone_id, lane_index=lane_index, attempt=attempt)

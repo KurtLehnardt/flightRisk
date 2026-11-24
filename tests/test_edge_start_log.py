@@ -93,13 +93,16 @@ def test_a_fact_override_on_a_test_unit_is_info_with_source_env(edge_env):
 
 
 def test_a_fact_override_on_a_production_unit_is_ignored_with_one_line_naming_the_variable(edge_env, caplog):
-    edge_env.setenv("FLIGHTRISK_OBSTACLE_STEP_CM", "300")
+    # A Tello temperature override: a MAVLink unit's model does not hold it, and the edge does not read it
+    # there. The obstacle overrides are read by the edge itself since A3.4 (READ_BY_THE_EDGE), so they log a
+    # different line; tests/test_edge_obstacle_features.py covers those.
+    edge_env.setenv("FLIGHTRISK_TELLO_TEMP_WARN_C", "90")
     log = _Log()
     with caplog.at_level(logging.INFO, logger="flightrisk.params.resolver"):
         _start(_MAVLINK + ["--source", "camera", "--drone-id", "drone-1"], log)
-    lines = [r.getMessage() for r in caplog.records if "FLIGHTRISK_OBSTACLE_STEP_CM" in r.getMessage()]
+    lines = [r.getMessage() for r in caplog.records if "FLIGHTRISK_TELLO_TEMP_WARN_C" in r.getMessage()]
     assert len(lines) == 1 and "ignored" in lines[0]
-    assert not [e for e in log.events if e[2].get("param_id") == "sensing.step_cm"]
+    assert not [e for e in log.events if e[2].get("param_id") == "tello.temp_warn_c"]
 
 
 def test_no_fact_row_log_line_uses_setting_or_safety_wording(edge_env, caplog):

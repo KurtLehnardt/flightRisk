@@ -224,7 +224,7 @@ def test_the_ignored_tello_overrides_are_the_guard_and_temperature_rows():
 }))
 def test_a_mavlink_unit_logs_each_ignored_tello_override(edge_env, caplog, row):
     # N-10: a production unit ignores the Tello flight-guard and temperature overrides with a warning
-    # naming the variable, like the obstacle overrides it ignores (design section 27, item 47).
+    # naming the variable (design section 27, item 47).
     name = next(spec.env for spec in TABLE if spec.id == row)
     edge_env.setenv(name, "5")
     args = _args(_MAVLINK + ["--source", "camera", "--drone-id", "drone-1"])
