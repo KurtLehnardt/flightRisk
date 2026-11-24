@@ -11,6 +11,7 @@
 # Ports: instance N listens for MAVLink on TCP 5760 + 10 * N. The Docker image
 # runs without MAVProxy, so connect MAVSDK with tcpout://127.0.0.1:<port>
 # (scripts/sitl_fly_coverage.py --instance N does this for you).
+# For native ArduPilot and PX4 fleets, see scripts/sitl_fleet.sh.
 #
 # The Docker image is amd64 only and pinned by digest. On an arm64 host such as
 # an Apple Silicon Mac it runs under emulation, which is slow: expect several
@@ -62,7 +63,7 @@ start_native() {
         echo "Install ArduPilot SITL: https://ardupilot.org/dev/docs/sitl-simulator-software-in-the-loop.html"
         exit 1
     fi
-    echo "Starting native SITL instance ${INSTANCE} (MAVSDK: udp://:$((14540 + INSTANCE)))..."
+    echo "Starting native SITL instance ${INSTANCE} (MAVSDK: udpin://0.0.0.0:$((14540 + INSTANCE)))..."
     exec sim_vehicle.py -v "$VEHICLE" -I "$INSTANCE" --no-rebuild -w \
         --custom-location="${LAT},${LON},${ALT},0" \
         --out="udp:127.0.0.1:$((14540 + INSTANCE))"
