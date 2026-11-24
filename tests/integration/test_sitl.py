@@ -54,7 +54,7 @@ TAKEOFF_RETRY_INTERVAL_S = 2.0
 CLIMB_WAIT_S = 30.0
 CLIMB_MARGIN_M = 1.5
 LAND_WAIT_S = 60.0
-LAND_MARGIN_M = 0.5
+LAND_MARGIN_M = 1.0
 LAND_HOLD_S = 3.0
 DISARM_WAIT_S = 30.0
 
@@ -104,7 +104,7 @@ def _armed(ctrl) -> bool:
 
 
 def _land(ctrl, ground):
-    """Land and wait until the drone has been within 0.5 m of the ground for 3 s, then for the automatic disarm.
+    """Land and wait until the drone has been within 1 m of the ground for 3 s (the PX4 altitude estimate drifts by up to about 0.7 m between flights), then for the automatic disarm.
 
     PX4 can take longer than 5 s to disarm after a landing that began away from the takeoff point, and a takeoff
     commanded before the disarm is accepted and then dropped, so the disarm is awaited for up to 30 s.
