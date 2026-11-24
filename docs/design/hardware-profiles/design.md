@@ -1217,8 +1217,10 @@ every "from <PR>" tag in `parameters.md` matches an item below naming that PR an
   fit the backend and a safety feature stored off in either file. A file that is absent is treated as empty,
   so a start without one is unchanged. The launcher preflight and `docs/launcher.md` row still let a Tello
   takeoff minimum of 15 to 25 % pass until A4 aligns the check (tasks.md, A4); the edge refuses it at start.
-  A production MAVLink unit also ignores the 9 overrides of the Tello obstacle-sensor facts that a MAVLink
-  edge honours today, and logs one line naming each ignored variable (FACT-3, N-10). It also ignores the 9
+  A production MAVLink unit does not resolve the 9 overrides of the Tello obstacle-sensor facts
+  (`FLIGHTRISK_OBSTACLE_*`), but its edge still reads them through today's obstacle reader, so a MAVLink
+  camera edge senses with them exactly as today; the start log says so in one line per variable, and the
+  change waits for B1 (R6). A production MAVLink unit ignores the 9
   overrides of the Tello flight-guard and temperature facts (the `FLIGHTRISK_TELLO_*` settle, late-takeoff,
   refusal and temperature variables), which its model does not hold, with the same log line naming each
   variable; a MAVLink drone never uses these settings, so its flight does not change. The edge also refuses a start in which an environment variable or flag that today's envelope does not read for that drone would win an envelope row (an altitude slot or a battery level) over a launcher or params-file value, because the drone would otherwise fly neither value; before A3 that start was accepted and the launcher or file value was silently dropped. Until B1 adds the SITL
