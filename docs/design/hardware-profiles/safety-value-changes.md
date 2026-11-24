@@ -47,3 +47,18 @@ unless every later hash is also recomputed; CODEOWNERS review of this file is th
 - SHA-256 table: f949df64f14cee5c1c025d683cabea1d56a493941db05c214c33f7deac628378
 - SHA-256 golden: 7403c28493386027b0c383326d30d2bb2645fa54c154e289276f9246289d2504
 - SHA-256 allowlist: 7b4539efd7be798d98e11aa03af4a962acab92f084b5e7d020cbe47b9a8904db
+
+## PR-A3.3: safety, envelope, flight guard and temperature defaults from the registry
+
+- Value: none changed.
+- Old and new: not applicable.
+- Reason: PR-A3.3 moves 27 + 11 deferred allowlist entries to registry lookups with no value change: 27 in
+  `flightrisk/drone/safety.py` and 11 in `flightrisk/drone/flight_guards.py` and
+  `flightrisk/drone/temp_preflight.py`. Each constant now reads its registry row and keeps its value and
+  type, so the allowlist only loses those 38 entries.
+- Section 27 item: 47 (A3). A production unit ignores the Tello flight-guard and temperature overrides,
+  with a log line naming each variable.
+- SHA-256 previous: 79c17994057de59fb0abd4a575c978dad863b81ec39efdb6f9d0432d66acb710
+- SHA-256 table: f949df64f14cee5c1c025d683cabea1d56a493941db05c214c33f7deac628378
+- SHA-256 golden: 7403c28493386027b0c383326d30d2bb2645fa54c154e289276f9246289d2504
+- SHA-256 allowlist: fe448eec579b0074675a2081053542143105f710da82ab86ecae76f4a598b1c2

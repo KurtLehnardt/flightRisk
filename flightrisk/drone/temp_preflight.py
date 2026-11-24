@@ -34,6 +34,17 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, NamedTuple
 
+from flightrisk.params import table as _registry
+
+
+def _registry_default(param_id: str) -> Any:
+    """The registry default of ``param_id`` in the indoor reference profile column."""
+    for spec in _registry.TABLE:
+        if spec.id == param_id:
+            return spec.defaults[_registry.T]
+    raise KeyError(f"no registry row {param_id!r}")
+
+
 #: Environment variables read at the edge's start (``edge_device``) and checked by the launcher.
 ENV_TELLO_TEMP_WARN_C = "FLIGHTRISK_TELLO_TEMP_WARN_C"
 ENV_TELLO_TEMP_REFUSE_C = "FLIGHTRISK_TELLO_TEMP_REFUSE_C"
@@ -41,14 +52,14 @@ ENV_TELLO_TEMP_REFUSE_C = "FLIGHTRISK_TELLO_TEMP_REFUSE_C"
 REFUSE_OFF = "off"
 
 #: The warn level: near the top of the 91 to 93 degrees our drone-1 reads at rest, 3 below the refusal.
-DEFAULT_TEMP_WARN_C = 92
+DEFAULT_TEMP_WARN_C = _registry_default("tello.temp_warn_c")
 #: The refusal level: the lowest overheat shutdown temperature reported for a Tello (95).
-DEFAULT_TEMP_REFUSE_C = 95
+DEFAULT_TEMP_REFUSE_C = _registry_default("tello.temp_refuse_c")
 #: Allowed warn and refusal levels, in degrees Celsius. Below 40 every Tello that has been on for
 #: a minute would warn; above 120 is past every reported shutdown point.
 TEMP_LIMIT_RANGE_C = (40, 120)
 #: A reading outside this range is not a temperature this board reports, so it is ``unknown``.
-TEMP_READING_RANGE_C = (-40, 150)
+TEMP_READING_RANGE_C = _registry_default("tello_sdk.temp_reading_range_c")
 
 #: Levels of a check.
 LEVEL_OK = "ok"
