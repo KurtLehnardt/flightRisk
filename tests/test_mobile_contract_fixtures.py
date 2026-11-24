@@ -96,6 +96,7 @@ REQUIRED_CASES = {
         "assign_lanes_v1", "fenced_command_v2", "set_detection_profile", "profile_fallback", "set_ceiling",
         "manual_command", "control_modes", "hold_reasons", "edge_states",
     },
+    "catalogue.json": {"builtin_models"},
     "client_emits.json": set(),  # checked by test_client_emit_allow_list
     "match_score_vectors.json": set(),  # checked by tests/test_match_score_vectors.py
     "unknown_keys.json": set(),  # checked by test_unknown_key_variants_differ_only_by_the_unknown_key
@@ -552,3 +553,72 @@ def test_the_ui_derivations_the_spec_copies_are_unchanged():
         "manualDroneId = data.manual_controlled || null;",
     ):
         assert line in js, line
+
+
+# ---------------------------------------------------------------------------
+# catalogue.json: model facts only, never a Tello tuning value
+# ---------------------------------------------------------------------------
+
+
+def _catalogue_payload() -> dict:
+    return _load(FIXTURES / "catalogue.json")["cases"]["builtin_models"]["payload"]
+
+
+def test_catalogue_has_the_builtin_models_cameras_and_feature_reasons():
+    from flightrisk.hardware.catalogue import BUILTIN_MODELS, SUPPORT_LEVELS
+    from flightrisk.hardware.features import FEATURE_IDS
+
+    payload = _catalogue_payload()
+    assert set(payload) == {"models", "features", "support_levels"}
+    assert set(payload["models"]) == set(BUILTIN_MODELS)
+    assert payload["support_levels"] == list(SUPPORT_LEVELS)
+    assert set(payload["features"]) == set(FEATURE_IDS)
+    for model_id, model in payload["models"].items():
+        assert model["support"] in SUPPORT_LEVELS
+        assert model["cameras"], model_id
+        assert set(model["features"]) == set(FEATURE_IDS)
+        for state in model["features"].values():
+            assert state["available"] == (state["why"] is None)
+
+
+def test_tello_params_fixture_is_intentionally_not_produced():
+    assert not (FIXTURES / "tello_params.json").exists()
+    assert "tello_params.json" in DOC.read_text(encoding="utf-8")
+
+
+def test_catalogue_carries_no_registry_fact_row_id_or_fact_value():
+    from flightrisk.params.spec import Edit
+    from flightrisk.params.table import TABLE
+
+    fact_ids = {row.id for row in TABLE if Edit.FACT in set(row.edit.values())}
+    assert fact_ids, "the registry has no fact rows; the check would pass for nothing"
+    fact_keys = fact_ids | {fact_id.rsplit(".", 1)[-1] for fact_id in fact_ids}
+    fact_values = {
+        value for row in TABLE if Edit.FACT in set(row.edit.values())
+        for value in row.defaults.values() if isinstance(value, (int, float)) and not isinstance(value, bool)
+    }
+    forbidden_parts = ("threshold", "tuning", "settle", "tello_param")
+
+    def walk(value, parent=""):
+        # Every (key, value) pair, and every item of a list paired with the
+        # list's own key, so plain values inside lists are checked too.
+        if isinstance(value, dict):
+            for key, child in value.items():
+                yield key, child
+                yield from walk(child, key)
+        elif isinstance(value, list):
+            for child in value:
+                yield parent, child
+                yield from walk(child, parent)
+
+    camera_numbers = {"stream_w_px", "stream_h_px", "hfov_deg", "fps"}
+    for key, child in walk(_catalogue_payload()):
+        assert key not in fact_keys, f"catalogue key {key!r} is a registry fact row id"
+        assert not any(part in key.lower() for part in forbidden_parts), key
+        if isinstance(child, str):
+            assert child not in fact_ids, f"catalogue value {child!r} is a registry fact row id"
+        if (isinstance(child, (int, float)) and not isinstance(child, bool) and child in fact_values
+                and key not in camera_numbers):
+            pytest.fail(f"catalogue number {key!r}={child!r} equals a fact row default")
+    raw = (FIXTURES / "catalogue.json").read_text(encoding="utf-8")
+    assert not any(f'"{fact_id}"' in raw for fact_id in fact_ids)

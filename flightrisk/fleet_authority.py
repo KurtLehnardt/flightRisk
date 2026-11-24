@@ -553,6 +553,8 @@ class EdgeAuthority:
             return ()
         lanes = msg.get("lanes")
         lanes_total = min(len(lanes), fp.MAX_LANES) if isinstance(lanes, list) else 0
+        # The authority tracks no describe_unit query, so a reason only a newer ground understands goes out as "invalid".
+        reason = fp.nack_reason_for_peer(reason, None)
         return (fp.make_nack(mtype, self.drone_id, reason, cmd_id, epoch_seen=self._epoch_seen,
                              lanes_total=lanes_total if mtype == fp.ASSIGN_LANES else None, detail=detail),)
 
@@ -650,6 +652,7 @@ class EdgeAuthority:
         if (mtype not in fp.FENCED_COMMAND_TYPES and mtype not in fp.MANUAL_COMMAND_TYPES) or cmd_id is None:
             return
         lanes = msg.get("lanes")
+        reason = fp.nack_reason_for_peer(reason, None)
         nack = fp.make_nack(
             mtype, self.drone_id, reason, cmd_id, epoch_seen=self._epoch_seen,
             lanes_total=(min(len(lanes), fp.MAX_LANES) if isinstance(lanes, list) else 0)

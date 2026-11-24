@@ -1302,6 +1302,17 @@ older ground ignores the key, and `shape_for_peer` strips it for a v1 peer.
   `corridor`, `landing`, `no_entry`, `speed_cm_s` or `on_complete: "return_home"`, goes only to
   an edge whose validated reply lists every name the message needs (`required_accepts`).
   Today's messages are always allowed.
+
+  **Correction (A2 review).** An edge from before A2 accepts an `assign_lanes` with `corridor`,
+  `landing`, `no_entry` or `speed_cm_s` on a v2 link and silently drops those keys, so a drone
+  would fly through a no-entry area with no refusal. The gate is therefore enforced on the send
+  path, not left to each sender: `shape_for_peer(msg, peer_proto, peer_description=...)` raises
+  `ProtocolError` for an `assign_lanes` that carries any of those keys or `on_complete:
+  "return_home"` unless `peer_description` (the edge's validated `describe_unit` ack) lists every
+  name the message needs, and always for a v1 peer. No sender sets these keys in A2; A3 and A4
+  pass the edge's reply when they start. `scripts/check_wire_compat.py` reports these messages as
+  "accepted by base but stripped of meaning (now refused by the send path)" and fails if the send
+  path stops refusing one.
 - `nack_reason_for_peer(reason, peer_query)`: an edge sends `straight_line_home` only to a
   ground that has sent it `describe_unit`, and `invalid` otherwise. A query carries no sender
   identity, so `peer_query` must be the last query received on the same connection as the

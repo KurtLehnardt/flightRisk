@@ -365,6 +365,13 @@ class GroundV2Mixin:
         Raises ``PeerVersionError`` when the link's version cannot carry it.
         """
         if self._links is None:
+            # No identity, so no shaping and no description of the edge: nothing that needs an accepted name may go.
+            needed = fp.required_accepts(message)
+            if needed:
+                logger.warning(
+                    "refusing to send %s without an identity: it needs %s", message.get("type"), sorted(needed)
+                )
+                return None
             return json.dumps(message)
         if not self._links.may_send(websocket, message):
             return None
