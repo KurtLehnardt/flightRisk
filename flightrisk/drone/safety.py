@@ -33,6 +33,11 @@ to decide what the edge may do:
 * Link-loss watchdog: ``link_watchdog`` records the time of the last ground
   message; ``link_lost`` reports when it is older than ``link_loss_land_s``.
 
+Every default and range below is read from the flight parameter registry
+(``flightrisk/params/table.py``): the room scale reads the registry's indoor
+reference profile column and the field scale its generic multirotor column,
+so this module holds no copy of a registry value.
+
 Design reference: hackathon design section 10. The limits can be overridden
 with the environment variables ``FLIGHTRISK_GEOFENCE_CM``,
 ``FLIGHTRISK_MIN_TAKEOFF_BATTERY``, ``FLIGHTRISK_LINK_LOSS_LAND_S``,
@@ -57,7 +62,10 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, Mapping
+from typing import Any, Callable, Mapping
+
+from flightrisk.params import table as _registry
+from flightrisk.params.spec import Bound, ParamSpec
 
 __all__ = [
     "CEILING_CM_ENV",
@@ -105,28 +113,62 @@ GEOFENCE_CM_ENV = "FLIGHTRISK_GEOFENCE_CM"
 CEILING_CM_ENV = "FLIGHTRISK_CEILING_CM"
 CEILING_MARGIN_CM_ENV = "FLIGHTRISK_CEILING_MARGIN_CM"
 
-DEFAULT_LINK_LOSS_LAND_S = 3.0
-DEFAULT_MIN_TAKEOFF_BATTERY = 30
+def _registry_profile(scale: str) -> str:
+    """The registry profile column an envelope scale reads.
 
-DEFAULT_ALT_SLOTS_CM = (100, 130)
+    The room scale reads the indoor reference profile and the field scale the
+    generic multirotor profile.
+    """
+    if scale == "room":
+        return _registry.T
+    if scale == "field":
+        return _registry.G
+    raise ValueError(f"unknown envelope scale {scale!r}")
+
+
+def _registry_row(param_id: str) -> ParamSpec:
+    """The registry row ``param_id``, looked up in the table at call time."""
+    for spec in _registry.TABLE:
+        if spec.id == param_id:
+            return spec
+    raise KeyError(f"no registry row {param_id!r}")
+
+
+def _registry_default(param_id: str, scale: str) -> Any:
+    """The registry default of ``param_id`` in the profile column of ``scale``."""
+    return _registry_row(param_id).defaults[_registry_profile(scale)]
+
+
+def _registry_bound(param_id: str, scale: str) -> Bound:
+    """The registry hard bound of ``param_id`` in the profile column of ``scale``."""
+    bound = _registry_row(param_id).bounds[_registry_profile(scale)]
+    if bound is None:
+        raise LookupError(f"registry row {param_id!r} has no bound for the {scale} scale")
+    return bound
+
+
+DEFAULT_LINK_LOSS_LAND_S = _registry_default("link.loss_detect_s", "room")
+DEFAULT_MIN_TAKEOFF_BATTERY = _registry_default("battery.min_takeoff_pct", "room")
+
+DEFAULT_ALT_SLOTS_CM = _registry_default("plan.alt_slots_cm", "room")
 """Altitude slots given to drones in turn by the fleet coordinator and the search patterns.
 
 Both must stay at most ``DEFAULT_CEILING_CM - DEFAULT_CEILING_MARGIN_CM`` (140 cm) so every
 default slot passes the room ceiling check; keep them here so the two modules never drift apart.
 """
-DEFAULT_LAND_BATTERY = 15
-DEFAULT_GEOFENCE_CM = 500
-DEFAULT_ALT_SLOT_CM = 100
+DEFAULT_LAND_BATTERY = _registry_default("battery.critical_pct", "room")
+DEFAULT_GEOFENCE_CM = _registry_default("envelope.geofence_cm", "room")
+DEFAULT_ALT_SLOT_CM = _registry_default("envelope.alt_slot_cm", "room")
 #: Outdoor drones hold their position this long after the ground link is
 #: lost before the link-loss failsafe (a ground-station crash or a radio
 #: blip must not send a whole fleet home at once).
-DEFAULT_FIELD_LINK_LOSS_HOLD_S = 10.0
+DEFAULT_FIELD_LINK_LOSS_HOLD_S = _registry_default("link.loss_wait_s", "field")
 
 # The Tello SDK accepts relative moves between 20 cm and 500 cm. Shorter or
 # longer requests are clamped by the controller, which would make the
 # dead-reckoned position wrong, so the envelope refuses them instead.
-MIN_MOVE_CM = 20
-MAX_MOVE_CM = 500
+MIN_MOVE_CM = _registry_default("move.min_cm", "room")
+MAX_MOVE_CM = _registry_default("move.max_cm", "room")
 
 # The lowest altitude slot of the room profile (the Tello). The Tello's
 # downward Vision Positioning System works from 0.3 m (Tello user manual:
@@ -137,7 +179,7 @@ MAX_MOVE_CM = 500
 # takeoff's own hover of about 80 cm also needs a long descent right after
 # takeoff: on 2026-11-21 a 20 cm slot sent a Tello 'down 80' from a stale
 # height, which it answered 'error No valid imu' while it drifted off a desk.
-MIN_ALT_SLOT_CM = 50
+MIN_ALT_SLOT_CM = _registry_bound("envelope.alt_slot_cm", "room").lo
 MIN_ALT_SLOT_DETAIL = (
     f"a Tello's altitude slot must be at least {MIN_ALT_SLOT_CM} cm: below 30 cm its downward vision "
     "positioning cannot hold it, and the other 20 cm covers its height error and overshoot"
@@ -150,16 +192,16 @@ MAX_ALT_SLOT_CM = MAX_MOVE_CM
 # surface too. The default effective maximum slot is 200 - 60 = 140 cm. On
 # 2026-10-28 a Tello sent to a 160 cm slot hit the ceiling, so the default is
 # deliberately below that, and a lower room must be configured explicitly.
-DEFAULT_CEILING_CM = 200
-DEFAULT_CEILING_MARGIN_CM = 60
+DEFAULT_CEILING_CM = _registry_default("envelope.ceiling_cm", "room")
+DEFAULT_CEILING_MARGIN_CM = _registry_default("envelope.ceiling_margin_cm", "room")
 # The Tello's takeoff alone hovers at about 80 cm and can overshoot, so a
 # room lower than this is not safe to fly in at all.
-MIN_CEILING_CM = 150
+MIN_CEILING_CM = _registry_bound("envelope.ceiling_cm", "room").lo
 # Far above any room; with it the 500 cm slot limit is the binding one.
-MAX_CEILING_CM = 1000
+MAX_CEILING_CM = _registry_bound("envelope.ceiling_cm", "room").hi
 # The clearance below the ceiling never drops below this: it covers the
 # Tello's height error and its overshoot at the end of a climb.
-MIN_CEILING_MARGIN_CM = 30
+MIN_CEILING_MARGIN_CM = _registry_bound("envelope.ceiling_margin_cm", "room").lo
 
 HORIZONTAL_DIRECTIONS = ("forward", "back", "left", "right")
 
@@ -193,45 +235,49 @@ class EnvelopeLimits:
     default_ceiling_margin_cm: float
 
 
-#: Indoor profile (the Tello): the limits this module always had.
-ROOM_LIMITS = EnvelopeLimits(
-    name="room",
-    min_move_cm=MIN_MOVE_CM,
-    max_move_cm=MAX_MOVE_CM,
-    min_alt_slot_cm=MIN_ALT_SLOT_CM,
-    max_alt_slot_cm=MAX_ALT_SLOT_CM,
-    min_ceiling_cm=MIN_CEILING_CM,
-    max_ceiling_cm=MAX_CEILING_CM,
-    min_ceiling_margin_cm=MIN_CEILING_MARGIN_CM,
-    max_geofence_cm=float("inf"),
-    default_geofence_cm=DEFAULT_GEOFENCE_CM,
-    default_alt_slot_cm=DEFAULT_ALT_SLOT_CM,
-    default_ceiling_cm=DEFAULT_CEILING_CM,
-    default_ceiling_margin_cm=DEFAULT_CEILING_MARGIN_CM,
-)
+def _envelope_limits(scale: str, max_geofence_cm: float | None = None) -> EnvelopeLimits:
+    """Build the ``scale`` envelope profile from the registry rows of its profile column.
+
+    Each range is the registry's hard bound and each default the registry's
+    default. ``max_geofence_cm`` replaces the ``envelope.max_geofence_cm``
+    default when given.
+    """
+    alt_slot = _registry_bound("envelope.alt_slot_cm", scale)
+    ceiling = _registry_bound("envelope.ceiling_cm", scale)
+    return EnvelopeLimits(
+        name=scale,
+        min_move_cm=_registry_default("move.min_cm", scale),
+        max_move_cm=_registry_default("move.max_cm", scale),
+        min_alt_slot_cm=alt_slot.lo,
+        max_alt_slot_cm=alt_slot.hi,
+        min_ceiling_cm=ceiling.lo,
+        max_ceiling_cm=ceiling.hi,
+        min_ceiling_margin_cm=_registry_bound("envelope.ceiling_margin_cm", scale).lo,
+        max_geofence_cm=(
+            _registry_default("envelope.max_geofence_cm", scale) if max_geofence_cm is None else max_geofence_cm
+        ),
+        default_geofence_cm=_registry_default("envelope.geofence_cm", scale),
+        default_alt_slot_cm=_registry_default("envelope.alt_slot_cm", scale),
+        default_ceiling_cm=_registry_default("envelope.ceiling_cm", scale),
+        default_ceiling_margin_cm=_registry_default("envelope.ceiling_margin_cm", scale),
+    )
+
+
+#: Indoor profile (the Tello): the limits this module always had. The room
+#: envelope has never capped the geofence itself, so its largest geofence stays
+#: unbounded here; the resolver checks the registry's geofence bound at edge
+#: start, and a directly built ``SafetyEnvelope`` keeps today's behaviour
+#: (design section 27).
+ROOM_LIMITS = _envelope_limits("room", max_geofence_cm=float("inf"))
 
 #: Outdoor profile for GPS-guided open-source autopilots (PX4, ArduPilot).
 #: Conservative defaults: a 30 m ceiling with a 5 m margin (25 m highest
 #: slot), a 15 m slot, a 30 m geofence half-width (a 60 m by 60 m box around
-#: the takeoff point), and nothing above 120 m. A Pixhawk-class aircraft is
-#: far more dangerous than a Tello; widen these only on purpose.
-FIELD_LIMITS = EnvelopeLimits(
-    name="field",
-    min_move_cm=MIN_MOVE_CM,
-    max_move_cm=5000,
-    # 10 m: a slot must clear people and most low obstacles; it is still
-    # below many trees, so slots must be chosen above the local obstacles.
-    min_alt_slot_cm=1000,
-    max_alt_slot_cm=12000,
-    min_ceiling_cm=1000,
-    max_ceiling_cm=12000,
-    min_ceiling_margin_cm=300,
-    max_geofence_cm=50000,
-    default_geofence_cm=3000,
-    default_alt_slot_cm=1500,
-    default_ceiling_cm=3000,
-    default_ceiling_margin_cm=500,
-)
+#: the takeoff point), and nothing above 120 m. A 10 m lowest slot clears
+#: people and most low obstacles but is still below many trees, so slots must
+#: be chosen above the local obstacles. A Pixhawk-class aircraft is far more
+#: dangerous than a Tello; widen these only on purpose, in the registry.
+FIELD_LIMITS = _envelope_limits("field")
 
 _LIMITS_BY_SCALE = {ROOM_LIMITS.name: ROOM_LIMITS, FIELD_LIMITS.name: FIELD_LIMITS}
 

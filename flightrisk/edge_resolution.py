@@ -33,8 +33,9 @@ CAP-6, and today's ranges from ``params/today.py``, so an environment or
 flag value of a name today's code reads keeps today's range), runs the static feature gates (``resolve_features``, FEA-7 static
 part, FEA-10) and builds the start report (``build_report``). Any refusal
 raises ``EdgeStartRefused``, whose text is the operator's exit message. The
-resolved values are kept in ``EdgeResolution``; nothing reads them yet, so a
-start that is not refused flies exactly as before.
+resolved values are kept in ``EdgeResolution``. The edge builds its start
+envelope from them (``envelope_arguments``); with no new input they are
+today's values, so a start that is not refused flies exactly as before.
 """
 
 from __future__ import annotations
@@ -663,6 +664,175 @@ def resolve_edge(
         gates=MappingProxyType(gates),
         report=report,
     )
+
+
+#: The registry row each ``SafetyEnvelope`` argument of the edge's start envelope reads (EDGE-2).
+ENVELOPE_ROWS: Mapping[str, str] = MappingProxyType({
+    "geofence_cm": "envelope.geofence_cm",
+    "alt_slot_cm": "envelope.alt_slot_cm",
+    "ceiling_cm": "envelope.ceiling_cm",
+    "ceiling_margin_cm": "envelope.ceiling_margin_cm",
+    "min_takeoff_battery": "battery.min_takeoff_pct",
+    "land_battery": "battery.critical_pct",
+    "link_loss_land_s": "link.loss_detect_s",
+    "link_loss_hold_s": "link.loss_wait_s",
+})
+
+
+def todays_envelope_arguments(envelope: Any) -> dict[str, Any]:
+    """The ``SafetyEnvelope`` arguments that rebuild ``envelope``, keyed as ``ENVELOPE_ROWS``."""
+    return {
+        "geofence_cm": envelope.geofence_cm,
+        "alt_slot_cm": envelope.alt_slot_cm,
+        "ceiling_cm": envelope.ceiling_cm,
+        "ceiling_margin_cm": envelope.ceiling_margin_cm,
+        "min_takeoff_battery": envelope.min_takeoff_battery,
+        "land_battery": envelope.land_battery,
+        "link_loss_land_s": envelope.link_watchdog.timeout_s,
+        "link_loss_hold_s": envelope.link_loss_hold_s,
+    }
+
+
+def envelope_arguments(resolution: EdgeResolution, today: Mapping[str, Any]) -> dict[str, Any]:
+    """The ``SafetyEnvelope`` arguments of the edge's start envelope, from the resolved values (EDGE-2).
+
+    ``today`` holds the arguments of the envelope today's readers built from the environment and the
+    command line (``todays_envelope_arguments``). Each argument is its row's resolved value
+    (``ENVELOPE_ROWS``), so a value from the profile, the params file or the launcher layer reaches
+    the envelope. A value the environment or the command line set keeps today's reader's value: for a
+    name today's envelope reads, the resolver gives the same value (``tests/test_param_parity.py``),
+    and a name it does not read, such as ``FLIGHTRISK_LAND_BATTERY`` or ``FLIGHTRISK_FIELD_ALT_SLOT_M``
+    on an indoor edge, must not change the envelope in phase A (plan section 1). A row missing from
+    the resolution keeps today's value too. A test-adapter fact override that the resolver ignored on
+    a production unit never reaches the envelope, since the resolved value is then the profile's.
+
+    Raises ``EdgeStartRefused`` when such a name hides a launcher or params-file value of the row
+    (``_refuse_shadowed``).
+    """
+    from flightrisk.params.spec import Source
+
+    arguments = dict(today)
+    for name, row in ENVELOPE_ROWS.items():
+        value = resolution.values.get(row)
+        if value is None:
+            continue
+        if Source(value.source) in (Source.ENV, Source.CLI):
+            _refuse_shadowed(resolution, row, value, today[name])
+            continue
+        arguments[name] = value.value
+    if not arguments["link_loss_hold_s"]:
+        # The envelope stores a 0 s hold as None: the drone lands at once.
+        arguments["link_loss_hold_s"] = None
+    return arguments
+
+
+def _refuse_shadowed(resolution: EdgeResolution, row: str, value: Any, flown: Any) -> None:
+    """Refuse a start where an environment or command-line name hides a launcher or params-file value.
+
+    ``value`` is the row's resolved value, from the environment or the command line, and ``flown`` is
+    the value today's envelope reader gives. For a name today's envelope reads they are equal
+    (``tests/test_param_parity.py``). When they differ, the name is one today's envelope does not read
+    for this drone, so the drone would fly ``flown`` while the resolution and the start log report
+    ``value``, and a launcher or params-file value of the row would be lost without a word.
+
+    Only that case is refused. Without a launcher or params-file value of the row nothing is refused,
+    so such a start keeps today's envelope exactly. Launcher and params-file values never reached the
+    envelope before A3, so the refusal costs no value today's edge flew: a start it refuses is one where
+    today's edge also drops the launcher or params-file value, without a word.
+    """
+    from flightrisk.params.messages import render_shadowed_value
+    from flightrisk.params.resolver import LayerValue
+    from flightrisk.params.spec import Source
+
+    said = value.value
+    if row == ENVELOPE_ROWS["link_loss_hold_s"]:
+        # The envelope stores a 0 s hold as None.
+        said, flown = said or 0, flown or 0
+    if said == flown:
+        return
+    layers = resolution.layers.layers
+    for source, where in ((Source.LAUNCHER, LAUNCHER_PARAMS_ENV_VAR), (Source.FILE, None)):
+        raw = (layers.get(source) or {}).get(row)
+        if raw is None:
+            continue
+        if isinstance(raw, LayerValue):
+            raw, where = raw.value, raw.detail
+        raise EdgeStartRefused(_refusing(render_shadowed_value(
+            resolution.layers.unit_id, row, value.source_detail, said, where or source.value, raw, flown,
+        )))
+
+
+#: The registry row each ``FlightGuards`` setting of the edge's start reads (EDGE-2). The hover-only test
+#: (``mode.hover_test``) is a mission switch, not a drone value, and keeps today's reader.
+GUARD_ROWS: Mapping[str, str] = MappingProxyType({
+    "settle_samples": "takeoff.settle_samples",
+    "settle_tolerance_cm": "takeoff.settle_tolerance_cm",
+    "settle_timeout_s": "takeoff.settle_timeout_s",
+    "takeoff_late_s": "takeoff.late_s",
+    "refusal_retries": "takeoff.refusal_retries",
+    "refusal_hold_s": "takeoff.refusal_hold_s",
+    "refusals_per_flight": "tello.refusals_per_flight",
+})
+
+#: The registry row each ``TempLimits`` level of the edge's start reads (EDGE-2, FACT-3).
+TEMP_ROWS: Mapping[str, str] = MappingProxyType({
+    "warn_c": "tello.temp_warn_c",
+    "refuse_c": "tello.temp_refuse_c",
+})
+
+# On a production MAVLink unit these rows are not in the resolution, so a FLIGHTRISK_TELLO_* override of
+# one gives the built-in default where today's reader honoured it. A MAVLink drone does not use any of
+# these settings, so its flight does not change. The settle and late-takeoff guards run only for a drone
+# with settled_height (lane_flight._settles_height), the refusal retries only for a CommandRefusedError,
+# which only the Tello raises (lane_flight._retry_refusal), and the temperature levels only for a drone
+# with state_temperature (lane_executor._takeoff_temp_refusal and temp_status); MavlinkFleetDrone has
+# none of them. Only the start log changes: edge_flight_guard_setting_non_default and
+# edge_temp_setting_non_default no longer name an override the drone never used, and the resolver logs a
+# warning naming each such variable as ignored (resolver.IGNORED_WHERE_NOT_APPLICABLE, N-10).
+
+
+def fact_arguments(resolution: EdgeResolution, rows: Mapping[str, str], today: Mapping[str, Any],
+                   defaults: Mapping[str, Any]) -> dict[str, Any]:
+    """The start settings of ``rows`` (``GUARD_ROWS`` or ``TEMP_ROWS``) from the resolved values (EDGE-2).
+
+    ``today`` holds the settings today's reader built from the environment, and ``defaults`` the
+    built-in ones. Each setting is its row's resolved value, so a value of the drone's profile reaches
+    it. A value the environment or the command line set keeps today's reader's value, as for the
+    envelope (``envelope_arguments``). A row the resolution does not hold does not apply to the
+    drone's model, so a test-adapter override of it, such as ``FLIGHTRISK_TELLO_TAKEOFF_LATE_S`` on a
+    production MAVLink unit, is not used: the setting is the built-in default (FACT-3). A row whose
+    resolved value is its off value (the temperature refusal switched off) is None, as ``TempLimits``
+    stores it.
+    """
+    from flightrisk.params.spec import Source
+    from flightrisk.params.table import TABLE
+
+    off_values = {spec.id: spec.off_value for spec in TABLE if spec.id in rows.values()}
+    arguments = dict(today)
+    for name, row in rows.items():
+        value = resolution.values.get(row)
+        if value is None:
+            arguments[name] = defaults[name]
+            continue
+        if Source(value.source) in (Source.ENV, Source.CLI):
+            continue
+        off = off_values.get(row)
+        arguments[name] = None if off is not None and value.value == off else value.value
+    return arguments
+
+
+def resolved_elsewhere(resolution: EdgeResolution, row: str) -> Optional[str]:
+    """The source detail of ``row``'s resolved value when neither the environment nor the command line set it.
+
+    None when the row is not resolved, or when the environment or the command line set it, where today's
+    reader gives the value (``fact_arguments``).
+    """
+    from flightrisk.params.spec import Source
+
+    value = resolution.values.get(row)
+    if value is None or Source(value.source) in (Source.ENV, Source.CLI):
+        return None
+    return value.source_detail
 
 
 def _fact_ids(profile: Any) -> frozenset[str]:
