@@ -1,0 +1,124 @@
+{
+  "area_cm": [
+    400,
+    400
+  ],
+  "assign_lanes": {
+    "d1": [
+      {
+        "alt_cm": 100,
+        "drone_id": "d1",
+        "lanes": [
+          {
+            "direction": "forward",
+            "distance_cm": 400
+          },
+          {
+            "direction": "right",
+            "distance_cm": 75
+          },
+          {
+            "direction": "back",
+            "distance_cm": 400
+          }
+        ],
+        "type": "assign_lanes",
+        "zone": {
+          "h_cm": 400,
+          "w_cm": 150,
+          "x_cm": 0,
+          "y_cm": 0
+        }
+      }
+    ],
+    "d2": [
+      {
+        "alt_cm": 130,
+        "drone_id": "d2",
+        "lanes": [
+          {
+            "direction": "forward",
+            "distance_cm": 400
+          },
+          {
+            "direction": "right",
+            "distance_cm": 75
+          },
+          {
+            "direction": "back",
+            "distance_cm": 400
+          }
+        ],
+        "type": "assign_lanes",
+        "zone": {
+          "h_cm": 400,
+          "w_cm": 150,
+          "x_cm": 250,
+          "y_cm": 0
+        }
+      }
+    ]
+  },
+  "drone_ids": [
+    "d1",
+    "d2"
+  ],
+  "plan": {
+    "gap_cm": 100,
+    "grid": {
+      "h_cm": 400,
+      "w_cm": 400,
+      "x_cm": 0,
+      "y_cm": 0
+    },
+    "strip_cm": 75,
+    "zones": [
+      {
+        "alt_cm": 100,
+        "drone_id": "d1",
+        "h_cm": 400,
+        "lanes": [
+          {
+            "direction": "forward",
+            "distance_cm": 400
+          },
+          {
+            "direction": "right",
+            "distance_cm": 75
+          },
+          {
+            "direction": "back",
+            "distance_cm": 400
+          }
+        ],
+        "w_cm": 150,
+        "x_cm": 0,
+        "y_cm": 0
+      },
+      {
+        "alt_cm": 130,
+        "drone_id": "d2",
+        "h_cm": 400,
+        "lanes": [
+          {
+            "direction": "forward",
+            "distance_cm": 400
+          },
+          {
+            "direction": "right",
+            "distance_cm": 75
+          },
+          {
+            "direction": "back",
+            "distance_cm": 400
+          }
+        ],
+        "w_cm": 150,
+        "x_cm": 250,
+        "y_cm": 0
+      }
+    ]
+  },
+  "strip_cm": 75,
+  "zone_gap_cm": 100
+}

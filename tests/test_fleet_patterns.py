@@ -21,6 +21,7 @@ validation and the takeoff contract.
 
 from __future__ import annotations
 
+import dataclasses
 import itertools
 import math
 import random
@@ -32,6 +33,7 @@ from flightrisk.drone import fleet_patterns as fp
 from flightrisk.drone.coverage import tello_sweep_model
 from flightrisk.drone.lane_executor import LaneExecutor, parse_lanes
 from flightrisk.drone.safety import (
+    FIELD_LIMITS,
     HORIZONTAL_DIRECTIONS,
     MAX_MOVE_CM,
     MIN_MOVE_CM,
@@ -258,6 +260,28 @@ def test_geofence_is_respected_or_the_plan_is_refused():
                 fence_problem = any(drone.drone_id in p and "geofence" in p for p in plan.problems)
                 assert inside != fence_problem, (case, fence, plan.problems)
             assert plan.feasible == (not plan.problems)
+
+
+def test_pattern_builders_cap_the_geofence_by_the_units_own_limit_without_an_area_cap():
+    field_unit = dataclasses.replace(FIELD_LIMITS, name="field-unit", max_geofence_cm=50000)
+    ids = ["drone-1", "drone-2"]
+    fleet = {i: field_unit for i in ids}
+    area, lkp = (4000, 6000), (2000, 3000)
+
+    def builders(geofence):
+        common = {"max_area_side_cm": None, "geofence_cm": geofence, "unit_limits": fleet, "footprint": SQUARE}
+        return (
+            lambda: fp.plan_parallel_split(ids, area, 1000, alt_slots_cm=(1500, 2000), **common),
+            lambda: fp.plan_split_expanding_square(ids, area, lkp, 1000, alt_slots_cm=(1500, 2000), **common),
+            lambda: fp.plan_square_spiral("drone-1", area, lkp, 1000, alt_cm=1500, **{**common, "unit_limits": {"drone-1": field_unit}}),
+            lambda: fp.plan_search(ids, area, 1000, lkp, alt_slots_cm=(1500, 2000), **common),
+        )
+
+    for build in builders(60000):
+        with pytest.raises(ValueError, match="geofence"):
+            build()
+    for build in builders(50000):
+        build()
 
 
 # ---------------------------------------------------------------------------

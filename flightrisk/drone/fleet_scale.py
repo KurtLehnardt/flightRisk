@@ -1,12 +1,12 @@
-"""Fleet plan scale per drone type: room-sized Tello plans and field-sized autopilot plans.
+"""Fleet plan scale per environment: room-sized plans and field-sized autopilot plans.
 
 The fleet coordinator (``flightrisk.drone.coordinator.FleetCoordinator``)
 plans in centimetres on a grid whose size, lane spacing, altitude slots and
-geofence are parameters. Its defaults are the indoor Tello's (a 4 m by 4 m
+geofence are parameters. Its defaults are the room profile's (a 4 m by 4 m
 area, 75 cm lanes, 100 and 130 cm slots). ``FleetScale`` bundles those
 parameters per scale so a ground never mixes them up:
 
-* ``ROOM_SCALE``: the Tello defaults, unchanged.
+* ``ROOM_SCALE``: the room profile's defaults, unchanged.
 * ``field_scale(...)``: an outdoor plan for PX4 or ArduPilot drones flown by
   ``--drone mavlink`` edges. The area and slots are given in metres; the
   lane spacing comes from the camera's nadir footprint at the lowest slot
@@ -21,18 +21,32 @@ near-left corner of its own zone, ``x`` is to the right and ``y`` ahead
 moves of at most 5 m (the coordinator's segmentation); a field edge flies
 each as one position target. Merging collinear segments into longer targets
 is a listed follow-up (``docs/open-drone-support.md``).
+
+``scale_for(environment, n_drones, ...)`` gives the scale of one
+environment (an envelope profile name, ``"room"`` or ``"field"``) for a
+camera passed in as values, a ``coverage.CameraModel`` or its horizontal
+field of view and frame size, so a caller that resolves each unit's
+environment and camera elsewhere never imports a camera catalogue here. The
+per-environment defaults stay in this module: ``ROOM_SCALE`` for the room,
+and ``field_scale``'s defaults (``PI_CAMERA_MODULE_3`` among them) for the
+field.
 """
 from __future__ import annotations
 
 import itertools
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from flightrisk.drone.coordinator import DEFAULT_ALT_SLOTS_CM, DEFAULT_ZONE_GAP_CM
 from flightrisk.drone.coverage import CameraModel, nadir_swath_m
-from flightrisk.drone.safety import DEFAULT_GEOFENCE_CM, FIELD_LIMITS, EnvelopeLimits
+from flightrisk.drone.safety import (
+    DEFAULT_GEOFENCE_CM,
+    FIELD_LIMITS,
+    ROOM_LIMITS,
+    EnvelopeLimits,
+)
 
 __all__ = [
     "MAX_FIELD_AREA_SIDE_M",
@@ -41,6 +55,7 @@ __all__ = [
     "ROOM_SCALE",
     "FleetScale",
     "field_scale",
+    "scale_for",
 ]
 
 #: Phase 1 plans areas up to this side length (metres). Larger areas need
@@ -122,7 +137,7 @@ class FleetScale:
         ]
 
 
-#: The indoor Tello plan: the coordinator's and the edge's defaults.
+#: The indoor plan: the room profile's defaults, which are the coordinator's and the edge's.
 ROOM_SCALE = FleetScale(
     profile="room",
     area_cm=(400, 400),
@@ -241,6 +256,99 @@ def field_scale(
         coverage_fraction=fraction,
         coverage_note=note,
     )
+
+
+#: The environments ``scale_for`` accepts: the envelope profile names of the two scales.
+_ENVIRONMENTS = (ROOM_LIMITS.name, FIELD_LIMITS.name)
+
+
+def _camera(
+    camera: CameraModel | None, hfov_deg: Any, width_px: Any, height_px: Any
+) -> CameraModel | None:
+    """The camera given to ``scale_for``: a ``CameraModel``, one built from plain values, or None.
+
+    Plain values describe a camera pointing straight down: the horizontal
+    field of view in degrees (above 0 and below 180) across the track, and
+    the frame width and height in pixels. All three are needed, and they
+    cannot be combined with a ``CameraModel``. The built model takes the
+    frame and field of view given; its other fields (speed, endurance) are
+    ``PI_CAMERA_MODULE_3``'s and are not used for a scale.
+    """
+    values = {"hfov_deg": hfov_deg, "width_px": width_px, "height_px": height_px}
+    given = sorted(name for name, value in values.items() if value is not None)
+    if camera is not None:
+        if given:
+            raise ValueError(
+                f"give the camera either as a CameraModel or as values, not both (got {', '.join(given)})"
+            )
+        if not isinstance(camera, CameraModel):
+            raise ValueError(f"camera must be a coverage.CameraModel, got {type(camera).__name__}")
+        return camera
+    if not given:
+        return None
+    if len(given) < len(values):
+        missing = sorted(set(values) - set(given))
+        raise ValueError(
+            f"a camera given as values needs hfov_deg, width_px and height_px; missing {', '.join(missing)}"
+        )
+    hfov = _positive("hfov_deg", hfov_deg)
+    if hfov >= math.degrees(math.pi):
+        raise ValueError(f"hfov_deg must be below a half turn, got {hfov_deg!r}")
+    for name in ("width_px", "height_px"):
+        value = values[name]
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{name} must be a positive whole number of pixels, got {value!r}")
+    return replace(
+        PI_CAMERA_MODULE_3,
+        name=f"nadir camera, {hfov:g} deg across {width_px} x {height_px} px",
+        width_px=width_px,
+        height_px=height_px,
+        hfov_deg=hfov,
+        source="given by the caller",
+    )
+
+
+def scale_for(
+    environment: str,
+    n_drones: int,
+    *,
+    camera: CameraModel | None = None,
+    hfov_deg: float | None = None,
+    width_px: int | None = None,
+    height_px: int | None = None,
+    **field_options: Any,
+) -> FleetScale:
+    """The fleet plan scale of one environment for *n_drones* drones and the camera given. Raises ``ValueError``.
+
+    ``environment`` is ``"room"`` or ``"field"``; anything else is refused.
+    The camera is a ``coverage.CameraModel`` (``camera``) or plain values
+    (``hfov_deg``, ``width_px`` and ``height_px`` together, a camera pointing
+    straight down); it is validated for either environment.
+
+    * ``"room"`` gives ``ROOM_SCALE``, the room profile's defaults, whatever
+      camera is given: the room plan does not depend on the camera. It takes
+      no ``field_options``.
+    * ``"field"`` gives ``field_scale(n_drones, camera=<that camera>,
+      **field_options)``, so the lane spacing follows that camera's swath.
+      Without a camera it is ``field_scale``'s default camera.
+      ``field_options`` are ``field_scale``'s other keyword arguments
+      (``area_m``, ``alt_slots_m``, ``overlap``, ``zone_gap_m``,
+      ``geofence_m`` and ``limits``) with its defaults.
+    """
+    if not isinstance(environment, str) or environment not in _ENVIRONMENTS:
+        raise ValueError(f"environment must be one of {', '.join(map(repr, _ENVIRONMENTS))}, got {environment!r}")
+    if isinstance(n_drones, bool) or not isinstance(n_drones, int) or n_drones <= 0:
+        raise ValueError(f"n_drones must be a positive integer, got {n_drones!r}")
+    model = _camera(camera, hfov_deg, width_px, height_px)
+    if environment == ROOM_LIMITS.name:
+        if field_options:
+            raise ValueError(
+                f"the room scale is fixed and takes no field options, got {', '.join(sorted(field_options))}"
+            )
+        return ROOM_SCALE
+    if model is None:
+        return field_scale(n_drones, **field_options)
+    return field_scale(n_drones, camera=model, **field_options)
 
 
 def _coverage(

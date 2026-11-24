@@ -6,3 +6,5 @@
 /tests/golden/flight_params.json -text
 /tests/param_literal_allowlist.py -text
 /docs/design/hardware-profiles/safety-value-changes.md -text
+# The snapshot test compares the raw bytes of these files, so a checkout must not convert their line endings.
+/tests/fixtures/plan_snapshots/*.json -text

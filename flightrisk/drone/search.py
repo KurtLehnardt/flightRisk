@@ -8,13 +8,22 @@ Implements standard aerial SAR (Search and Rescue) patterns:
 - Contour (OS): Concentric circles at varying altitudes
 - Spiral: Continuous outward spiral
 
-The Tello has no GPS, so all distances are relative to launch position
-and subject to drift. Good enough for park/field demos.
+All distances are relative to the launch position and subject to drift.
+Every move is within the move range of one unit's ``safety.EnvelopeLimits``
+profile, given as the keyword-only ``limits`` of each generator:
+``ROOM_LIMITS`` by default, whose 20-500 cm range is the room profile's
+default. A leg longer than the longest move is split into several moves, and
+a leg shorter than the shortest move is lengthened to it. The multi-drone
+splitters use one profile for every zone; a fleet whose units have different
+limits generates each zone with that unit's own ``limits``.
 """
 
 import math
 from dataclasses import dataclass
 from enum import Enum
+
+from flightrisk.drone.move_range import _move_range
+from flightrisk.drone.safety import ROOM_LIMITS, EnvelopeLimits
 
 
 class PatternType(Enum):
@@ -41,17 +50,24 @@ class Waypoint:
         return " -> ".join(parts)
 
 
-def _clamp_distance(cm: int) -> int:
-    """Clamp distance to Tello's 20-500cm range."""
-    return max(20, min(500, cm))
+def _clamp_distance(cm: int, *, limits: EnvelopeLimits = ROOM_LIMITS) -> int:
+    """Clamp a distance to the move range of ``limits`` (20-500 cm for the room profile)."""
+    shortest, longest = _move_range(limits)
+    return max(shortest, min(longest, cm))
 
 
-def _split_long_move(direction: str, total_cm: int) -> list[Waypoint]:
-    """Split a long movement into multiple 500cm max segments."""
+def _split_long_move(direction: str, total_cm: int, *, limits: EnvelopeLimits = ROOM_LIMITS) -> list[Waypoint]:
+    """Split a movement into segments of at most the longest move of ``limits`` (500 cm for the room profile).
+
+    The segments are as long as possible, so a leg up to the longest move
+    stays one segment. A remainder shorter than the shortest move is
+    lengthened to it.
+    """
+    shortest, longest = _move_range(limits)
     waypoints = []
     remaining = total_cm
     while remaining > 0:
-        segment = _clamp_distance(min(remaining, 500))
+        segment = max(shortest, min(remaining, longest))
         waypoints.append(Waypoint(direction, segment))
         remaining -= segment
     return waypoints
@@ -64,6 +80,8 @@ def generate_expanding_square(
     initial_side_cm: int = 100,
     growth_cm: int = 100,
     num_expansions: int = 4,
+    *,
+    limits: EnvelopeLimits = ROOM_LIMITS,
 ) -> list[Waypoint]:
     """Expanding Square (SS) — standard SAR pattern.
 
@@ -80,7 +98,7 @@ def generate_expanding_square(
         # Each expansion is a full square: forward, right turn, forward, right turn, ...
         # But each pair of sides is the same length, growing after every 2 sides
         for i in range(4):
-            waypoints.extend(_split_long_move("forward", side))
+            waypoints.extend(_split_long_move("forward", side, limits=limits))
             waypoints.append(Waypoint("forward", 0, rotate_degrees=90))
             if i % 2 == 1:
                 side += growth_cm
@@ -91,6 +109,8 @@ def generate_expanding_square(
 def generate_sector(
     radius_cm: int = 300,
     num_sectors: int = 6,
+    *,
+    limits: EnvelopeLimits = ROOM_LIMITS,
 ) -> list[Waypoint]:
     """Sector / Radial Search (VS) — standard SAR pattern.
 
@@ -105,11 +125,11 @@ def generate_sector(
 
     for i in range(num_sectors):
         # Fly outward
-        waypoints.extend(_split_long_move("forward", radius_cm))
+        waypoints.extend(_split_long_move("forward", radius_cm, limits=limits))
         # Rotate to next sector angle
         waypoints.append(Waypoint("forward", 0, rotate_degrees=180))
         # Fly back to center
-        waypoints.extend(_split_long_move("forward", radius_cm))
+        waypoints.extend(_split_long_move("forward", radius_cm, limits=limits))
         # Rotate to next sector heading
         waypoints.append(Waypoint("forward", 0, rotate_degrees=180 + sector_angle))
 
@@ -120,6 +140,8 @@ def generate_parallel_track(
     width_cm: int = 400,
     depth_cm: int = 400,
     strip_width_cm: int = 150,
+    *,
+    limits: EnvelopeLimits = ROOM_LIMITS,
 ) -> list[Waypoint]:
     """Parallel Track / Lawnmower (PS) — standard SAR pattern.
 
@@ -133,6 +155,7 @@ def generate_parallel_track(
         width_cm: Total width to cover (left-right).
         depth_cm: How far forward each strip goes.
         strip_width_cm: Spacing between strips (based on camera FOV at altitude).
+        limits: The unit's envelope profile; every move is within its move range.
     """
     waypoints = []
     num_strips = max(1, width_cm // strip_width_cm)
@@ -140,10 +163,10 @@ def generate_parallel_track(
 
     for i in range(num_strips):
         direction = "forward" if going_forward else "back"
-        waypoints.extend(_split_long_move(direction, depth_cm))
+        waypoints.extend(_split_long_move(direction, depth_cm, limits=limits))
 
         if i < num_strips - 1:
-            waypoints.extend(_split_long_move("right", strip_width_cm))
+            waypoints.extend(_split_long_move("right", strip_width_cm, limits=limits))
 
         going_forward = not going_forward
 
@@ -154,6 +177,8 @@ def generate_track_line(
     length_cm: int = 500,
     sweep_width_cm: int = 100,
     num_sweeps: int = 3,
+    *,
+    limits: EnvelopeLimits = ROOM_LIMITS,
 ) -> list[Waypoint]:
     """Track Line (TS) — standard SAR pattern.
 
@@ -168,20 +193,20 @@ def generate_track_line(
 
     for i in range(num_sweeps):
         # Forward along track
-        waypoints.extend(_split_long_move("forward", segment))
+        waypoints.extend(_split_long_move("forward", segment, limits=limits))
         # Sweep left
-        waypoints.extend(_split_long_move("left", sweep_width_cm))
+        waypoints.extend(_split_long_move("left", sweep_width_cm, limits=limits))
         # Forward
-        waypoints.extend(_split_long_move("forward", segment))
+        waypoints.extend(_split_long_move("forward", segment, limits=limits))
         # Sweep right (back to center + to right side)
-        waypoints.extend(_split_long_move("right", sweep_width_cm * 2))
+        waypoints.extend(_split_long_move("right", sweep_width_cm * 2, limits=limits))
         # Forward
-        waypoints.extend(_split_long_move("forward", segment))
+        waypoints.extend(_split_long_move("forward", segment, limits=limits))
         # Back to center
-        waypoints.extend(_split_long_move("left", sweep_width_cm))
+        waypoints.extend(_split_long_move("left", sweep_width_cm, limits=limits))
 
     # Final forward segment
-    waypoints.extend(_split_long_move("forward", segment))
+    waypoints.extend(_split_long_move("forward", segment, limits=limits))
 
     return waypoints
 
@@ -191,6 +216,8 @@ def generate_spiral(
     growth_per_turn_cm: int = 100,
     num_turns: int = 3,
     segments_per_turn: int = 8,
+    *,
+    limits: EnvelopeLimits = ROOM_LIMITS,
 ) -> list[Waypoint]:
     """Spiral search pattern.
 
@@ -205,7 +232,7 @@ def generate_spiral(
         segment_length = int(
             2 * math.pi * current_radius / segments_per_turn
         )
-        segment_length = _clamp_distance(segment_length)
+        segment_length = _clamp_distance(segment_length, limits=limits)
 
         for _ in range(segments_per_turn):
             waypoints.append(
@@ -271,15 +298,22 @@ def split_parallel_track_zones(
     width_cm: int = 400,
     depth_cm: int = 400,
     strip_width_cm: int = 150,
+    *,
+    limits: EnvelopeLimits = ROOM_LIMITS,
 ) -> list[list[Waypoint]]:
-    """Split parallel track into N zones for multi-drone."""
+    """Split parallel track into N zones for multi-drone.
+
+    ``limits`` is the envelope profile of every zone's unit, so every zone's
+    pattern has the same moves. A fleet whose units have different limits
+    calls ``generate_parallel_track`` for each zone with that unit's limits.
+    """
     if num_zones <= 1:
-        return [generate_parallel_track(width_cm, depth_cm, strip_width_cm)]
+        return [generate_parallel_track(width_cm, depth_cm, strip_width_cm, limits=limits)]
     zone_width = width_cm // num_zones
     zones = []
     for i in range(num_zones):
-        offset = _split_long_move("right", zone_width * i) if i > 0 else []
-        pattern = generate_parallel_track(zone_width, depth_cm, strip_width_cm)
+        offset = _split_long_move("right", zone_width * i, limits=limits) if i > 0 else []
+        pattern = generate_parallel_track(zone_width, depth_cm, strip_width_cm, limits=limits)
         zones.append(offset + pattern)
     return zones
 
@@ -288,10 +322,12 @@ def split_sector_zones(
     num_zones: int,
     radius_cm: int = 300,
     num_sectors: int = 6,
+    *,
+    limits: EnvelopeLimits = ROOM_LIMITS,
 ) -> list[list[Waypoint]]:
-    """Split sector search across drones."""
+    """Split sector search across drones, every zone flown with the envelope profile ``limits``."""
     if num_zones <= 1:
-        return [generate_sector(radius_cm, num_sectors)]
+        return [generate_sector(radius_cm, num_sectors, limits=limits)]
     sectors_per_zone = max(1, num_sectors // num_zones)
     zones = []
     for i in range(num_zones):
@@ -300,5 +336,5 @@ def split_sector_zones(
             break
         rotation = int((360 / num_sectors) * (i * sectors_per_zone))
         prefix = [Waypoint("forward", 0, rotate_degrees=rotation)] if rotation > 0 else []
-        zones.append(prefix + generate_sector(radius_cm, count))
+        zones.append(prefix + generate_sector(radius_cm, count, limits=limits))
     return zones
