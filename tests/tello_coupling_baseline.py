@@ -27,9 +27,7 @@ from __future__ import annotations
 COUPLING_BASELINE: dict[str, dict[tuple[str, str, str, str], int]] = {
     "X-core": {
         # flightrisk/params/docs.py
-        ('flightrisk/params/docs.py', '', 'literal', 'tello'): 1,
         ('flightrisk/params/docs.py', '_fact_table', 'literal', 'tello'): 1,
-        ('flightrisk/params/docs.py', '_settings_table', 'literal', 'tello'): 2,
     },
     "X-legacy": {
         # flightrisk/drone/fleet.py

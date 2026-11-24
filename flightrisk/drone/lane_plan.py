@@ -4,8 +4,8 @@ This module holds the plan half of the edge lane executor
 (``flightrisk.drone.lane_executor``):
 
 * ``split_lane_moves`` (re-exported from ``flightrisk.drone.lane_steps``)
-  and ``parse_lanes`` turn an ``assign_lanes`` lane list into Tello-sized
-  horizontal moves. An executor with an obstacle sensor splits every lane
+  and ``parse_lanes`` turn an ``assign_lanes`` lane list into horizontal
+  moves of the unit's move range. An executor with an obstacle sensor splits every lane
   into sensed steps of at most its step length instead (``split_steps``),
   and keeps lanes that follow a cut on the planned grid with the deficit
   rule (``lane_targets``; see ``flightrisk.drone.lane_flight``). The first
@@ -477,7 +477,7 @@ class LanePlanMixin:
         ]
 
     def _split_lane(self, distance_cm: int, limits: Any) -> list[int]:
-        """The moves one lane of *distance_cm* is flown as: sensed steps, or Tello-sized moves."""
+        """The moves one lane of *distance_cm* is flown as: sensed steps, or moves of the unit's move range."""
         step_cm = self._lane_step_cm()
         if step_cm is not None:
             return split_steps(distance_cm, min(step_cm, limits.max_move_cm), limits.min_move_cm)
