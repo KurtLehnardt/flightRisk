@@ -9,10 +9,10 @@ The module provides:
 
 * ``snap_path`` and ``path_to_lanes``: turn a drawn polyline into the moves the
   edge lane executor can really fly. The executor accepts only ``forward``,
-  ``back``, ``left`` and ``right`` moves of 20-500 cm and never rotates
-  (``flightrisk.drone.lane_plan.parse_lanes``), so a slanted segment becomes
-  an axis-aligned staircase (see ``staircase``). The snapped path passes
-  exactly through every drawn vertex and stays less than
+  ``back``, ``left`` and ``right`` moves within the drone's move range and
+  never rotates (``flightrisk.drone.lane_plan.parse_lanes``), so a slanted
+  segment becomes an axis-aligned staircase (see ``staircase``). The snapped
+  path passes exactly through every drawn vertex and stays less than
   ``SNAP_TOLERANCE_CM`` from the drawn path.
 * ``geofence_violation``: the first point of a path outside the square
   geofence around its takeoff point.
@@ -23,10 +23,33 @@ The module provides:
 * ``split_area`` and ``pattern_vertices``: the zone split of the coordinator
   and the search patterns fitted to a zone, as drawn vertices.
 
+Per-unit limits
+---------------
+Every helper that makes moves for one drone takes that drone's
+``safety.EnvelopeLimits`` as the keyword-only ``limits``, ``ROOM_LIMITS`` by
+default. Its ``min_move_cm`` and ``max_move_cm`` (20 and 500 cm, the room
+profile's defaults) replace the fixed move range: legs are split into moves
+of at most the longest move, a leg shorter than the shortest move is flown as
+an overshoot pair of that length, and the staircase steps and the round
+patterns keep the shortest move. The range is taken with
+``fleet_plan_check._move_range``, which refuses a profile whose longest move
+is less than twice its shortest, so the moves are whole centimetres and a
+plan is checked with the same rule it was built with. ``SNAP_TOLERANCE_CM``
+is twice the room profile's shortest move; a profile with a longer shortest
+move keeps the snapped path within twice its own shortest move instead.
+
+``split_area`` is the one fleet-level helper. Its zones keep equal widths and
+take ``zone_limits``, the profile of the unit flying each zone in zone order
+(``ROOM_LIMITS`` for every zone when None): every zone must be at least the
+largest minimum move of those profiles wide, so each unit can fly one move
+across its zone. The zone's pattern and path are then made with that zone's
+own profile.
+
 ``flightrisk/dashboard/static/ui/plan_geom.js`` mirrors ``staircase``,
 ``snap_path`` and ``path_to_lanes`` for live display in the browser; the test
 vectors in ``tests/fixtures/plan_geometry_vectors.json`` keep the two equal.
-The dashboard server's result is the one that counts.
+The mirror and the vectors cover the room profile only. The dashboard
+server's result is the one that counts.
 """
 
 from __future__ import annotations
@@ -38,7 +61,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from flightrisk.drone.safety import MAX_MOVE_CM, MIN_MOVE_CM
+from flightrisk.drone.fleet_plan_check import _move_range
+from flightrisk.drone.safety import ROOM_LIMITS, EnvelopeLimits
 from flightrisk.drone.search import generate_parallel_track, generate_track_line
 
 __all__ = [
@@ -65,10 +89,10 @@ __all__ = [
 Point = tuple[int, int]
 
 SNAP_TARGET_CM = 25
-"""A staircase step's corner is kept this close to the drawn segment when the 20 cm minimum move allows it."""
+"""A staircase step's corner is kept this close to the drawn segment when the minimum move allows it."""
 
 SNAP_TOLERANCE_CM = 40
-"""Guaranteed bound: no point of a snapped path is this far, or farther, from the drawn path."""
+"""Guaranteed bound for the room profile: no point of a snapped path is this far, or farther, from the drawn path."""
 
 MAX_VERTICES = 200
 """Most vertices one drawn path may have."""
@@ -145,14 +169,17 @@ class Rect:
 # ----------------------------------------------------------------------
 
 
-def _steps(ax: int, ay: int) -> int:
-    """Number of staircase steps for a slanted segment with components ``ax``, ``ay`` (both > 0)."""
-    most = max(1, min(ax, ay) // MIN_MOVE_CM)
+def _steps(ax: int, ay: int, *, shortest: int) -> int:
+    """Number of staircase steps for a slanted segment with components ``ax``, ``ay`` (both > 0).
+
+    No step on either axis is shorter than ``shortest``, the minimum move.
+    """
+    most = max(1, min(ax, ay) // shortest)
     wanted = math.ceil(ax * ay / (SNAP_TARGET_CM * math.hypot(ax, ay)) - 1e-9)
     return min(most, max(1, wanted))
 
 
-def staircase(start: Sequence[int], end: Sequence[int]) -> list[Point]:
+def staircase(start: Sequence[int], end: Sequence[int], *, limits: EnvelopeLimits = ROOM_LIMITS) -> list[Point]:
     """The corner points of the axis-aligned path from ``start`` to ``end``, ending exactly at ``end``.
 
     A segment along one axis is returned as its end point. A slanted one
@@ -160,10 +187,13 @@ def staircase(start: Sequence[int], end: Sequence[int]) -> list[Point]:
     component first, then along the other, and the step lengths add up
     exactly. ``k`` is the smallest count that keeps every step corner within
     ``SNAP_TARGET_CM`` of the segment, but never so large that a step on
-    either axis is shorter than the 20 cm minimum move; a segment whose
-    smaller component is below 20 cm is flown as an L. Either way every
-    corner is less than ``SNAP_TOLERANCE_CM`` from the segment.
+    either axis is shorter than the minimum move of ``limits`` (20 cm for
+    the room profile); a segment whose smaller component is below that
+    minimum is flown as an L. Either way every corner is less than
+    ``SNAP_TOLERANCE_CM`` from the segment for the room profile, and less
+    than twice the minimum move for a profile with a longer one.
     """
+    shortest = _move_range(limits)[0]
     x, y = int(start[0]), int(start[1])
     ex, ey = int(end[0]), int(end[1])
     dx, dy = ex - x, ey - y
@@ -173,7 +203,7 @@ def staircase(start: Sequence[int], end: Sequence[int]) -> list[Point]:
         return [(ex, ey)]
     ax, ay = abs(dx), abs(dy)
     sx, sy = (1 if dx > 0 else -1), (1 if dy > 0 else -1)
-    k = _steps(ax, ay)
+    k = _steps(ax, ay, shortest=shortest)
     xs, ys = _parts(ax, k), _parts(ay, k)
     points: list[Point] = []
     for step_x, step_y in zip(xs, ys):
@@ -212,13 +242,15 @@ def simplify(points: Iterable[Sequence[float]]) -> list[Point]:
     return out
 
 
-def snap_path(vertices: Sequence[Sequence[int]]) -> tuple[list[Point], list[int]]:
+def snap_path(
+    vertices: Sequence[Sequence[int]], *, limits: EnvelopeLimits = ROOM_LIMITS
+) -> tuple[list[Point], list[int]]:
     """The axis-aligned corner points of a drawn path, and for each the drawn segment it belongs to.
 
     The first point is the first vertex (segment 0). Every later point
     carries the 1-based index of the drawn vertex that ends its segment, so a
     problem found on the snapped path can be shown on the vertex the operator
-    dragged.
+    dragged. Slanted segments are snapped with ``staircase`` for ``limits``.
     """
     if not vertices:
         return [], []
@@ -226,54 +258,60 @@ def snap_path(vertices: Sequence[Sequence[int]]) -> tuple[list[Point], list[int]
     out = [pts[0]]
     segment = [0]
     for index in range(1, len(pts)):
-        for point in staircase(pts[index - 1], pts[index]):
+        for point in staircase(pts[index - 1], pts[index], limits=limits):
             out.append(point)
             segment.append(index)
     return out, segment
 
 
-def _leg_count(distance: int) -> int:
+def _leg_count(distance: int, *, shortest: int, longest: int) -> int:
+    """How many moves ``_leg_moves`` makes for one leg, with the move range ``shortest`` to ``longest``."""
     if distance == 0:
         return 0
-    return 2 if distance < MIN_MOVE_CM else math.ceil(distance / MAX_MOVE_CM)
+    return 2 if distance < shortest else math.ceil(distance / longest)
 
 
-def count_moves(vertices: Sequence[Sequence[int]]) -> int:
-    """How many moves ``path_to_lanes`` makes for ``vertices``, computed without building them."""
+def count_moves(vertices: Sequence[Sequence[int]], *, limits: EnvelopeLimits = ROOM_LIMITS) -> int:
+    """How many moves ``path_to_lanes`` makes for ``vertices`` and ``limits``, computed without building them."""
+    shortest, longest = _move_range(limits)
     pts = [_point(v) for v in vertices]
     total = 0
     for (x0, y0), (x1, y1) in itertools.pairwise(pts):
         ax, ay = abs(x1 - x0), abs(y1 - y0)
         if ax == 0 or ay == 0:
-            total += _leg_count(ax + ay)
+            total += _leg_count(ax + ay, shortest=shortest, longest=longest)
             continue
-        k = _steps(ax, ay)
-        total += sum(_leg_count(p) for p in _parts(ax, k)) + sum(_leg_count(p) for p in _parts(ay, k))
+        k = _steps(ax, ay, shortest=shortest)
+        total += sum(_leg_count(p, shortest=shortest, longest=longest) for p in _parts(ax, k))
+        total += sum(_leg_count(p, shortest=shortest, longest=longest) for p in _parts(ay, k))
     return total
 
 
-def _leg_moves(start: Point, end: Point, inside: Callable[[Point], bool] | None) -> list[tuple[str, int]]:
-    """Executor moves for one axis-aligned leg.
+def _leg_moves(
+    start: Point, end: Point, inside: Callable[[Point], bool] | None, *, shortest: int, longest: int
+) -> list[tuple[str, int]]:
+    """Executor moves for one axis-aligned leg, with the move range ``shortest`` to ``longest``.
 
-    A leg of 20 cm or more is split into equal moves of at most 500 cm. A
-    shorter one is flown as an overshoot pair: 20 cm past the end and back,
-    or, when that extra point would be outside ``inside``, 20 cm back first
-    and then through to the end. The geofence check sees the extra point
-    either way.
+    A leg of ``shortest`` or more is split into equal moves of at most
+    ``longest`` (20 cm and 500 cm for the room profile). A shorter one is
+    flown as an overshoot pair: ``shortest`` past the end and back, or, when
+    that extra point would be outside ``inside``, ``shortest`` back first and
+    then through to the end. The geofence check sees the extra point either
+    way.
     """
     dx, dy = end[0] - start[0], end[1] - start[1]
     distance = abs(dx) + abs(dy)
     if distance == 0:
         return []
     direction = _direction(dx, dy)
-    if distance >= MIN_MOVE_CM:
-        return [(direction, part) for part in _parts(distance, math.ceil(distance / MAX_MOVE_CM))]
+    if distance >= shortest:
+        return [(direction, part) for part in _parts(distance, math.ceil(distance / longest))]
     ux, uy = _VECTORS[direction]
-    past_end = (end[0] + ux * MIN_MOVE_CM, end[1] + uy * MIN_MOVE_CM)
-    before_start = (start[0] - ux * MIN_MOVE_CM, start[1] - uy * MIN_MOVE_CM)
+    past_end = (end[0] + ux * shortest, end[1] + uy * shortest)
+    before_start = (start[0] - ux * shortest, start[1] - uy * shortest)
     if inside is not None and not inside(past_end) and inside(before_start):
-        return [(_OPPOSITE[direction], MIN_MOVE_CM), (direction, distance + MIN_MOVE_CM)]
-    return [(direction, distance + MIN_MOVE_CM), (_OPPOSITE[direction], MIN_MOVE_CM)]
+        return [(_OPPOSITE[direction], shortest), (direction, distance + shortest)]
+    return [(direction, distance + shortest), (_OPPOSITE[direction], shortest)]
 
 
 def trace_lanes(start: Sequence[int], lanes: Iterable[dict]) -> list[Point]:
@@ -323,18 +361,24 @@ class ConvertedPath:
         return self.trace[0]
 
 
-def path_to_lanes(vertices: Sequence[Sequence[int]], *, fence_cm: float | None = None) -> ConvertedPath:
+def path_to_lanes(
+    vertices: Sequence[Sequence[int]], *, fence_cm: float | None = None, limits: EnvelopeLimits = ROOM_LIMITS
+) -> ConvertedPath:
     """Convert a drawn path into executor moves (see the module docstring).
 
     ``fence_cm`` is the geofence half-width around the first vertex; it only
-    decides which way a short leg's overshoot goes. Raises ``ValueError`` for
-    fewer than two vertices, or a path needing more than ``MAX_PATH_MOVES``
-    moves (checked before any move is built).
+    decides which way a short leg's overshoot goes. Every move is within the
+    move range of ``limits``, the drone's envelope profile (``ROOM_LIMITS``
+    by default). Raises ``ValueError`` for fewer than two vertices, or a path
+    needing more than ``MAX_PATH_MOVES`` moves (checked before any move is
+    built), and ``TypeError`` or ``ValueError`` for a ``limits`` that is not
+    a usable profile.
     """
+    shortest, longest = _move_range(limits)
     drawn = tuple(_point(v) for v in vertices)
     if len(drawn) < 2:
         raise ValueError("a path needs at least two vertices")
-    moves_needed = count_moves(drawn)
+    moves_needed = count_moves(drawn, limits=limits)
     if moves_needed > MAX_PATH_MOVES:
         raise ValueError(
             f"the path needs {moves_needed} moves, above the {MAX_PATH_MOVES} move cap of one assign_lanes; "
@@ -348,13 +392,13 @@ def path_to_lanes(vertices: Sequence[Sequence[int]], *, fence_cm: float | None =
         def inside(point: Point) -> bool:
             return abs(point[0] - takeoff[0]) <= limit and abs(point[1] - takeoff[1]) <= limit
 
-    corners, corner_segment = snap_path(drawn)
+    corners, corner_segment = snap_path(drawn, limits=limits)
     lanes: list[dict] = []
     trace = [takeoff]
     trace_segment = [0]
     for (start, end), segment in zip(itertools.pairwise(corners), corner_segment[1:]):
         x, y = start
-        for direction, distance in _leg_moves(start, end, inside):
+        for direction, distance in _leg_moves(start, end, inside, shortest=shortest, longest=longest):
             lanes.append({"direction": direction, "distance_cm": distance})
             ux, uy = _VECTORS[direction]
             x, y = x + ux * distance, y + uy * distance
@@ -503,12 +547,34 @@ def coverage(
 # ----------------------------------------------------------------------
 
 
-def split_area(area: Rect, count: int, gap_cm: int) -> list[Rect]:
-    """Split ``area`` into ``count`` side-by-side zones ``gap_cm`` apart, as ``FleetCoordinator.plan`` does."""
+def _zone_min_move(zone_limits: Sequence[EnvelopeLimits] | None, count: int) -> int:
+    """The largest minimum move of ``zone_limits``, one profile per zone (the room profile's when None)."""
+    if zone_limits is None:
+        return _move_range(ROOM_LIMITS)[0]
+    if isinstance(zone_limits, (str, bytes)) or not isinstance(zone_limits, Sequence):
+        raise TypeError(
+            f"zone_limits must be a sequence of safety.EnvelopeLimits, one per zone, got {type(zone_limits).__name__}"
+        )
+    if len(zone_limits) != count:
+        raise ValueError(f"zone_limits has {len(zone_limits)} profiles for {count} zones")
+    return max(_move_range(limits)[0] for limits in zone_limits)
+
+
+def split_area(
+    area: Rect, count: int, gap_cm: int, *, zone_limits: Sequence[EnvelopeLimits] | None = None
+) -> list[Rect]:
+    """Split ``area`` into ``count`` side-by-side zones ``gap_cm`` apart, as ``FleetCoordinator.plan`` does.
+
+    ``zone_limits`` is the envelope profile of the unit flying each zone, in
+    zone order (``ROOM_LIMITS`` for every zone when None). The zones keep
+    equal widths, and each must be at least the largest minimum move of
+    those profiles wide (20 cm for the room profile).
+    """
     if count < 1:
         raise ValueError("at least one zone is needed")
+    shortest = _zone_min_move(zone_limits, count)
     zone_w = (area.w - gap_cm * (count - 1)) // count
-    if zone_w < MIN_MOVE_CM:
+    if zone_w < shortest:
         raise ValueError(f"area width {area.w} cm is too narrow for {count} zones with {gap_cm} cm gaps")
     return [Rect(area.x + i * (zone_w + gap_cm), area.y, zone_w, area.h) for i in range(count)]
 
@@ -537,26 +603,32 @@ def _polar(center: Point, radius: float, bearing_deg: float) -> tuple[float, flo
     return center[0] + radius * math.sin(rad), center[1] + radius * math.cos(rad)
 
 
-def pattern_vertices(pattern: str, zone: Rect, strip_cm: int) -> list[Point]:
+def pattern_vertices(pattern: str, zone: Rect, strip_cm: int, *, limits: EnvelopeLimits = ROOM_LIMITS) -> list[Point]:
     """A search pattern fitted to ``zone``, as the drawn vertices of a path from the zone's near-left corner.
 
     ``parallel_track`` is the coordinator's pattern (``search.generate_parallel_track``
     for the zone). ``expanding_square`` and ``spiral`` start at the zone
     centre, ``sector`` flies out to the zone's inscribed circle and back
     six times, and ``track_line`` sweeps along the zone's centre line. Sector
-    and spiral have slanted legs; ``path_to_lanes`` snaps them.
+    and spiral have slanted legs; ``path_to_lanes`` snaps them. ``limits``
+    is the envelope profile of the zone's unit: the strip, the legs and the
+    margins below are sized from its minimum move (20 cm for the room
+    profile).
     """
+    shortest = _move_range(limits)[0]
     corner = (zone.x, zone.y)
-    strip = max(MIN_MOVE_CM, int(strip_cm))
+    strip = max(shortest, int(strip_cm))
     if pattern == "parallel_track":
-        return simplify(_trace_waypoints(corner, generate_parallel_track(zone.w, zone.h, strip)))
+        return simplify(_trace_waypoints(corner, generate_parallel_track(zone.w, zone.h, strip, limits=limits)))
     if pattern == "track_line":
         centre_line = (zone.x + zone.w // 2, zone.y)
-        sweep = max(MIN_MOVE_CM, min(strip, zone.w // 2))
+        sweep = max(shortest, min(strip, zone.w // 2))
         # The legacy generator flies ten forward segments of length // 7, so
         # pass a length that keeps the whole track inside the zone's depth.
-        length = max(7 * MIN_MOVE_CM, (zone.h // 10) * 7)
-        return simplify([corner] + _trace_waypoints(centre_line, generate_track_line(length, sweep, 3)))
+        length = max(7 * shortest, (zone.h // 10) * 7)
+        return simplify(
+            [corner] + _trace_waypoints(centre_line, generate_track_line(length, sweep, 3, limits=limits))
+        )
     centre = zone.center
     points: list[Sequence[float]] = list(_transit_to(corner, centre))
     if pattern == "expanding_square":
@@ -568,16 +640,16 @@ def pattern_vertices(pattern: str, zone: Rect, strip_cm: int) -> list[Point]:
             tx, ty = x + ux * length, y + uy * length
             nx = min(max(tx, zone.x), zone.x1)
             ny = min(max(ty, zone.y), zone.y1)
-            if abs(nx - x) + abs(ny - y) >= MIN_MOVE_CM:
+            if abs(nx - x) + abs(ny - y) >= shortest:
                 x, y = nx, ny
                 points.append((x, y))
             if (nx, ny) != (tx, ty):
                 # The leg reached the zone edge: the square is as large as the zone allows.
                 break
         return simplify(points)
-    # Short slanted legs may be flown with a 20 cm overshoot, so the round
-    # patterns keep one minimum move away from the zone's edges.
-    radius = max(MIN_MOVE_CM, min(zone.w, zone.h) // 2 - MIN_MOVE_CM)
+    # Short slanted legs may be flown with an overshoot of one minimum move, so
+    # the round patterns keep one minimum move away from the zone's edges.
+    radius = max(shortest, min(zone.w, zone.h) // 2 - shortest)
     if pattern == "sector":
         for i in range(6):
             points.append(_polar(centre, radius, 60 * i))
@@ -591,7 +663,7 @@ def pattern_vertices(pattern: str, zone: Rect, strip_cm: int) -> list[Point]:
         last = centre
         for k in range(1, turns * per_turn + 1):
             point = _polar(centre, radius * k / (turns * per_turn), 360.0 * k / per_turn)
-            if k < turns * per_turn and math.hypot(point[0] - last[0], point[1] - last[1]) < 2 * MIN_MOVE_CM:
+            if k < turns * per_turn and math.hypot(point[0] - last[0], point[1] - last[1]) < 2 * shortest:
                 continue
             points.append(point)
             last = point
