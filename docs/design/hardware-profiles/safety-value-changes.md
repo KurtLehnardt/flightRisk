@@ -63,6 +63,21 @@ unless every later hash is also recomputed; CODEOWNERS review of this file is th
 - SHA-256 golden: 7403c28493386027b0c383326d30d2bb2645fa54c154e289276f9246289d2504
 - SHA-256 allowlist: fe448eec579b0074675a2081053542143105f710da82ab86ecae76f4a598b1c2
 
+## XL: legacy MAVLink limits from one params constant
+
+- Value: none changed. The legacy `MavlinkController` declares `LEGACY_MAVLINK_MIN_MOVE_CM`,
+  `LEGACY_MAVLINK_MAX_MOVE_CM` and `LEGACY_MAVLINK_MAX_ALTITUDE_M` from `flightrisk/params/legacy.py`.
+- Old and new: unchanged, 10 cm, 50000 cm and 120 m.
+- Reason: the three `DroneCapabilities` literals of the legacy `MavlinkController` moved into
+  `flightrisk/params/legacy.py`, so the allowlist drops their three legacy entries. The 120 m is the legacy
+  controller's own declaration, not row 8 and not the generic_multirotor airframe limit that section 27 item 53
+  removes.
+- Section 27 item: none.
+- SHA-256 previous: 2c084fb72e228cdb48ed6e2da64b4252c8fadb8795afbb8cd299bdf0128d35a9
+- SHA-256 table: f949df64f14cee5c1c025d683cabea1d56a493941db05c214c33f7deac628378
+- SHA-256 golden: 7403c28493386027b0c383326d30d2bb2645fa54c154e289276f9246289d2504
+- SHA-256 allowlist: dd1af99c5e3615ed79b51d9efbed782d2f3abf41cd3855f08831cdde67c68621
+
 ## A3 item 53 part 1: the regulatory altitude cap rows and an unknown airframe maximum
 
 - Value: row 8 `envelope.max_altitude_cm` for `generic_multirotor`; new rows 163
@@ -77,7 +92,7 @@ unless every later hash is also recomputed; CODEOWNERS review of this file is th
   as a known airframe maximum. With the cap off the limit is the known airframe maximum, and a unit with
   no known maximum cannot turn the cap off (`flightrisk/params/altitude.py`).
 - Section 27 item: 53 (A3).
-- SHA-256 previous: 2c084fb72e228cdb48ed6e2da64b4252c8fadb8795afbb8cd299bdf0128d35a9
+- SHA-256 previous: 232c2d910939388ccb34883b2e83f3605c60aedafed6a69da687e85872a5bab6
 - SHA-256 table: 368dff8eb8f05ff05ba5ad8b850e07ed9e731a6d9a2419556cef8e80ed3f20f8
 - SHA-256 golden: 1e201af91affbe8345b11b4fca93c128541f119b1a138e23800ffbb09788f3f2
-- SHA-256 allowlist: fe448eec579b0074675a2081053542143105f710da82ab86ecae76f4a598b1c2
+- SHA-256 allowlist: dd1af99c5e3615ed79b51d9efbed782d2f3abf41cd3855f08831cdde67c68621

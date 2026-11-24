@@ -1,0 +1,237 @@
+{
+  "cases": {
+    "field_1200x800": {
+      "area_cm": [
+        1200,
+        800
+      ],
+      "assign_lanes_message": {
+        "d1": {
+          "refused": {
+            "message": "refusing assign_lanes for d1: the plan is infeasible: d1: waypoint (0, 668) (relative to takeoff) leaves the 500 cm geofence",
+            "type": "ValueError"
+          }
+        }
+      },
+      "check_plan": [
+        "d1: waypoint (0, 668) (relative to takeoff) leaves the 500 cm geofence"
+      ],
+      "lkp_cm": null,
+      "plan": {
+        "area_cm": [
+          1200,
+          800
+        ],
+        "coverage": 1.0,
+        "drones": [
+          {
+            "alt_cm": 100,
+            "drone_id": "d1",
+            "lanes": [
+              {
+                "direction": "forward",
+                "distance_cm": 334
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 334
+              },
+              {
+                "direction": "right",
+                "distance_cm": 291
+              },
+              {
+                "direction": "back",
+                "distance_cm": 334
+              },
+              {
+                "direction": "back",
+                "distance_cm": 334
+              },
+              {
+                "direction": "right",
+                "distance_cm": 291
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 334
+              },
+              {
+                "direction": "forward",
+                "distance_cm": 334
+              },
+              {
+                "direction": "right",
+                "distance_cm": 292
+              },
+              {
+                "direction": "back",
+                "distance_cm": 334
+              },
+              {
+                "direction": "back",
+                "distance_cm": 334
+              }
+            ],
+            "start_offset_s": 0.0,
+            "takeoff_cm": [
+              163,
+              -257
+            ],
+            "transit_lanes": 0,
+            "zone": {
+              "h_cm": 1057,
+              "takeoff_x_cm": 163,
+              "takeoff_y_cm": -257,
+              "w_cm": 1200,
+              "x_cm": 0,
+              "y_cm": -257
+            }
+          }
+        ],
+        "feasible": false,
+        "flight_area": {
+          "h_cm": 1057,
+          "w_cm": 1200,
+          "x_cm": 0,
+          "y_cm": -257
+        },
+        "footprint": {
+          "ahead_cm": 323,
+          "along_cm": 132,
+          "far_cm": 389,
+          "kind": "forward",
+          "lateral_cm": 326,
+          "near_cm": 257,
+          "slot_cm": null
+        },
+        "gap_cm": 170,
+        "geofence_cm": 500.0,
+        "lkp_cm": null,
+        "max_standoff_cm": 500.0,
+        "min_separation_cm": 150.0,
+        "pattern": "parallel_split",
+        "placement_tolerance_cm": 10.0,
+        "problems": [
+          "d1: waypoint (0, 668) (relative to takeoff) leaves the 500 cm geofence"
+        ],
+        "reason": "no last-known point: the parallel split minimises makespan",
+        "separation_cm": null,
+        "standoff_cm": 257,
+        "sweep_cm": 326,
+        "unchecked": []
+      }
+    },
+    "room_400x400": {
+      "area_cm": [
+        400,
+        400
+      ],
+      "assign_lanes_message": {
+        "d1": {
+          "alt_cm": 100,
+          "drone_id": "d1",
+          "lanes": [
+            {
+              "direction": "forward",
+              "distance_cm": 268
+            },
+            {
+              "direction": "right",
+              "distance_cm": 74
+            },
+            {
+              "direction": "back",
+              "distance_cm": 268
+            }
+          ],
+          "type": "assign_lanes",
+          "zone": {
+            "h_cm": 657,
+            "takeoff_x_cm": 163,
+            "takeoff_y_cm": -257,
+            "w_cm": 400,
+            "x_cm": 0,
+            "y_cm": -257
+          }
+        }
+      },
+      "check_plan": [],
+      "lkp_cm": null,
+      "plan": {
+        "area_cm": [
+          400,
+          400
+        ],
+        "coverage": 1.0,
+        "drones": [
+          {
+            "alt_cm": 100,
+            "drone_id": "d1",
+            "lanes": [
+              {
+                "direction": "forward",
+                "distance_cm": 268
+              },
+              {
+                "direction": "right",
+                "distance_cm": 74
+              },
+              {
+                "direction": "back",
+                "distance_cm": 268
+              }
+            ],
+            "start_offset_s": 0.0,
+            "takeoff_cm": [
+              163,
+              -257
+            ],
+            "transit_lanes": 0,
+            "zone": {
+              "h_cm": 657,
+              "takeoff_x_cm": 163,
+              "takeoff_y_cm": -257,
+              "w_cm": 400,
+              "x_cm": 0,
+              "y_cm": -257
+            }
+          }
+        ],
+        "feasible": true,
+        "flight_area": {
+          "h_cm": 657,
+          "w_cm": 400,
+          "x_cm": 0,
+          "y_cm": -257
+        },
+        "footprint": {
+          "ahead_cm": 323,
+          "along_cm": 132,
+          "far_cm": 389,
+          "kind": "forward",
+          "lateral_cm": 326,
+          "near_cm": 257,
+          "slot_cm": null
+        },
+        "gap_cm": 170,
+        "geofence_cm": 500.0,
+        "lkp_cm": null,
+        "max_standoff_cm": 500.0,
+        "min_separation_cm": 150.0,
+        "pattern": "parallel_split",
+        "placement_tolerance_cm": 10.0,
+        "problems": [],
+        "reason": "no last-known point: the parallel split minimises makespan",
+        "separation_cm": null,
+        "standoff_cm": 257,
+        "sweep_cm": 326,
+        "unchecked": []
+      }
+    }
+  },
+  "drone_ids": [
+    "d1"
+  ],
+  "kind": "parallel_split"
+}

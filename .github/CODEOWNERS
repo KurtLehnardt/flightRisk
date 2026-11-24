@@ -4,6 +4,7 @@
 /flightrisk/params/table.py @KurtLehnardt
 /flightrisk/params/altitude.py @KurtLehnardt
 /flightrisk/params/resolver.py @KurtLehnardt
+/flightrisk/params/legacy.py @KurtLehnardt
 /tests/golden/flight_params.json @KurtLehnardt
 /tests/param_literal_allowlist.py @KurtLehnardt
 /flightrisk/drone/rth/ @KurtLehnardt
@@ -17,5 +18,6 @@
 /tests/test_tello_coupling.py @KurtLehnardt
 /tests/fixtures/edge_start_baseline.json @KurtLehnardt
 /tests/test_edge_start_baseline.py @KurtLehnardt
+/tests/test_params_legacy.py @KurtLehnardt
 /tests/tools/make_edge_baseline.py @KurtLehnardt
 /docs/design/hardware-profiles/safety-value-changes.md @KurtLehnardt
