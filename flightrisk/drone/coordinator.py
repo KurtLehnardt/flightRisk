@@ -1213,6 +1213,9 @@ class FleetCoordinator:
                 state.lanes = [dict(lane) for lane in zone.lanes]
                 state.lost = False
                 state.lost_at = None
+                # A new mission starts from the edge's own fence again; a margin it
+                # still holds comes back in its next geofence nack.
+                state.reported_fence_cm = None
                 state.offer = None
                 state.nack_reason = None
                 state.executed_at_ground_s = None
@@ -1725,7 +1728,12 @@ class FleetCoordinator:
                 return
             logger.warning("%s refused its assign_lanes (%s)", drone_id, described)
             reported = _number(msg.get("geofence_cm")) if reason == "geofence" else None
-            if reported is not None and reported > 0:
+            effective = _number(msg.get("effective_geofence_cm")) if reason == "geofence" else None
+            if effective is not None and effective > 0:
+                # The edge's current fence, after its refused-step margin. It is the
+                # truth now, so it replaces an older (possibly narrower) report.
+                state.reported_fence_cm = effective
+            elif reported is not None and reported > 0:
                 state.reported_fence_cm = (
                     reported if state.reported_fence_cm is None else min(state.reported_fence_cm, reported)
                 )

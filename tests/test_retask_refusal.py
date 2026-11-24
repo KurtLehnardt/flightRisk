@@ -176,7 +176,8 @@ def test_edge_sends_nack_on_geofence_refusal():
         # it starts, relative to the takeoff point (NACK_GEOFENCE_FIELDS).
         assert nack == {"type": "nack", "for": "assign_lanes", "drone_id": "drone-1",
                         "reason": "geofence", "lanes_total": 3, "geofence_cm": 500.0,
-                        "x_cm": 600.0, "y_cm": 400.0, "rel_x_cm": 0.0, "rel_y_cm": 0.0}
+                        "x_cm": 600.0, "y_cm": 400.0, "rel_x_cm": 0.0, "rel_y_cm": 0.0,
+                        "effective_geofence_cm": 500.0}
         assert fp.validate_message(nack) == fp.NACK
         assert edge.replies_of_type("ack") == []
         # The refused plan was not stored.
@@ -548,3 +549,38 @@ def test_retask_is_never_planned_beyond_the_edges_geofence(executor_fleet, monke
         for x, y in walk((zone.x_cm, zone.y_cm), coord.lanes(drone_id)):
             assert abs(x - zone.x_cm) <= 450 and abs(y - zone.y_cm) <= 450, (drone_id, x, y)
         assert edges[drone_id].replies_of_type("nack") == []
+
+
+def _geofence_nack(coord, drone_id, **fields):
+    msg = {"type": "nack", "for": "assign_lanes", "drone_id": drone_id, "reason": "geofence",
+           "lanes_total": len(coord.lanes(drone_id)), **fields}
+    coord.handle_message(drone_id, msg)
+
+
+def test_refusal_reports_the_fence_narrowed_by_a_refused_step():
+    edge = ExecutorEdge("drone-1", geofence_cm=FENCE_CM)
+    try:
+        edge.executor.envelope.add_fence_margin(50)
+        far = [{"direction": "forward", "distance_cm": 480}]
+        assert edge.executor.handle_assign_lanes({"type": "assign_lanes", "drone_id": "drone-1", "lanes": far}) is False
+        nack = edge.replies[-1]
+        assert nack["geofence_cm"] == FENCE_CM
+        assert nack["effective_geofence_cm"] == FENCE_CM - 50
+        assert fp.validate_message(nack) == fp.NACK
+    finally:
+        edge.executor.shutdown() if hasattr(edge.executor, "shutdown") else None
+
+
+def test_ground_plans_against_the_effective_fence_and_an_old_edge_still_works(executor_fleet):
+    coord, edges, _events = executor_fleet()
+    drone_id = "drone-1"
+    _geofence_nack(coord, drone_id, geofence_cm=500.0, effective_geofence_cm=400.0)
+    assert coord._fence_cm(drone_id) == 400.0
+    # A later report of a wider effective fence (margin reset on takeoff) replaces it.
+    _geofence_nack(coord, drone_id, geofence_cm=500.0, effective_geofence_cm=450.0)
+    assert coord._fence_cm(drone_id) == 450.0
+    # An old edge sends only the full width, and the ground still takes the smaller.
+    _geofence_nack(coord, "drone-2", geofence_cm=500.0)
+    assert coord._fence_cm("drone-2") == 500.0
+    _geofence_nack(coord, "drone-2", geofence_cm=420.0)
+    assert coord._fence_cm("drone-2") == 420.0
