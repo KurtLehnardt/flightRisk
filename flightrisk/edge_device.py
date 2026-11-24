@@ -105,6 +105,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import dataclasses
 import json
 import math
 import os
@@ -114,7 +115,7 @@ import sys
 import threading
 import time
 from collections import deque
-from typing import Any, Callable, Iterable, TextIO
+from typing import Any, Callable, Iterable, Sequence, TextIO
 
 from flightrisk import fleet_protocol as fp
 from flightrisk.drone.flight_guards import (
@@ -1529,6 +1530,16 @@ def _parse_drone_id(raw: str) -> str:
     return raw
 
 
+def _parse_confirm_less_safe(raw: str) -> tuple[str, str]:
+    """Parse one ``--confirm-less-safe id=value``: a parameter id and the exact value it confirms."""
+    key, sep, value = raw.partition("=")
+    key, value = key.strip(), value.strip()
+    if not sep or not key or not value:
+        raise argparse.ArgumentTypeError("--confirm-less-safe takes id=value: a parameter id and the exact "
+                                         "value it confirms, both non-empty")
+    return key, value
+
+
 def _parse_frame_stride(raw: str) -> int:
     """Parse ``--frame-stride``: a whole number from 1 to ``MAX_FRAME_STRIDE``."""
     try:
@@ -1575,6 +1586,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="The drone this edge flies: tello, fake (simulated Tello) or mavlink (a PX4 or ArduPilot "
              "autopilot; run the edge on the drone's companion computer). Default: --source tello or fake "
              "picks the drone as before; camera, file and url fly nothing",
+    )
+    parser.add_argument(
+        "--model", type=str, default=None,
+        help="The drone model this edge flies, a built-in model or one defined in the inventory (default: $"
+             "FLIGHTRISK_MODEL, else --airframe, else the inventory unit for --drone-id, else the launcher's "
+             "model, else the backend's default: tello for --drone tello and fake, generic_multirotor for "
+             "--drone mavlink). The edge refuses to start when the model's scale, adapter or frame path "
+             "differs from the backend's",
+    )
+    parser.add_argument(
+        "--airframe", type=str, default=None,
+        help="The drone model, when neither --model nor $FLIGHTRISK_MODEL names one (default $FLIGHTRISK_AIRFRAME)",
+    )
+    parser.add_argument(
+        "--confirm-less-safe", type=_parse_confirm_less_safe, action="append", default=None, metavar="ID=VALUE",
+        help="Confirm one less-safe value, as the parameter id and the exact value; repeat for each value",
     )
     mav = parser.add_argument_group("MAVLink drone (--drone mavlink)", "See docs/open-drone-support.md")
     mav.add_argument(
@@ -1970,7 +1997,7 @@ def _obstacle_sidestep_cm(environ: Any) -> int:
     return value
 
 
-def _flight_guards(environ: Any) -> FlightGuards:
+def _flight_guards(environ: Any, args: argparse.Namespace | None = None) -> FlightGuards:
     """The flight guard settings of the environment (``flightrisk.drone.flight_guards``); a bad value refuses to start.
 
     ``FLIGHTRISK_TELLO_SETTLE_SAMPLES``, ``_SETTLE_TOLERANCE_CM``,
@@ -1979,7 +2006,8 @@ def _flight_guards(environ: Any) -> FlightGuards:
     ``FLIGHTRISK_HOVER_TEST`` (``1`` takes off and hovers: no move to the
     slot, no lane, nudge, manual step or way back; ``0``, the default, flies
     normally). Read whatever the drone kind, so a malformed value always
-    refuses to start.
+    refuses to start. Once the edge has resolved its unit (``args.edge_resolution``), the settings
+    are built from the resolved values (``_resolved_flight_guards``).
     """
     raw = (environ.get(ENV_HOVER_TEST) or "").strip().lower()
     if raw in ("", "0", "false", "no", "off"):
@@ -1988,7 +2016,7 @@ def _flight_guards(environ: Any) -> FlightGuards:
         hover_test = True
     else:
         raise SystemExit(f"edge_device: {ENV_HOVER_TEST}={raw!r} must be 0 or 1. Refusing to start.")
-    return FlightGuards(
+    guards = FlightGuards(
         settle_samples=_obstacle_number(
             ENV_SETTLE_SAMPLES, DEFAULT_SETTLE_SAMPLES, *SETTLE_SAMPLES_RANGE, environ, integer=True
         ),
@@ -2006,6 +2034,30 @@ def _flight_guards(environ: Any) -> FlightGuards:
         ),
         hover_test=hover_test,
     )
+    return guards if args is None else _resolved_flight_guards(args, guards)
+
+
+def _resolved_flight_guards(args: argparse.Namespace, guards: FlightGuards) -> FlightGuards:
+    """``guards`` rebuilt from the resolved values in ``args.edge_resolution`` (EDGE-2). Raises ``SystemExit``.
+
+    Without a resolution, or when every resolved value equals today's, it is ``guards`` itself.
+    ``edge_resolution.fact_arguments`` says which value comes from where; the hover-only test keeps
+    today's reader.
+    """
+    resolution = getattr(args, "edge_resolution", None)
+    if resolution is None:
+        return guards
+    from flightrisk.edge_resolution import GUARD_ROWS, fact_arguments
+
+    defaults = FlightGuards()
+    today = {name: getattr(guards, name) for name in GUARD_ROWS}
+    arguments = fact_arguments(resolution, GUARD_ROWS, today, {name: getattr(defaults, name) for name in GUARD_ROWS})
+    if arguments == today:
+        return guards
+    try:
+        return dataclasses.replace(guards, **arguments)
+    except ValueError as exc:
+        raise SystemExit(f"edge_device: the resolved flight guard settings are invalid: {exc}. Refusing to start.") from None
 
 
 def _warn_flight_guards(guards: FlightGuards, log: StructuredLogger, drone_id: str | None) -> None:
@@ -2390,7 +2442,8 @@ def _field_envelope(args: argparse.Namespace, environ: Any = None) -> SafetyEnve
 
     Metres from the ``--*-m`` flags or the ``FLIGHTRISK_FIELD_*_M`` variables;
     the battery and link-loss settings come from the same variables as the
-    indoor edge. Anything invalid refuses the start with the reason.
+    indoor edge. Anything invalid refuses the start with the reason. Once the edge has resolved its
+    unit, the envelope is built from the resolved values (``_resolved_envelope``).
     """
     env = os.environ if environ is None else environ
 
@@ -2403,7 +2456,7 @@ def _field_envelope(args: argparse.Namespace, environ: Any = None) -> SafetyEnve
         return float(raw) if raw else default
 
     try:
-        return SafetyEnvelope.for_field(
+        envelope = SafetyEnvelope.for_field(
             alt_slot_cm=_cm("alt_slot_m"),
             geofence_cm=_cm("geofence_m"),
             ceiling_cm=_cm("ceiling_m"),
@@ -2420,33 +2473,108 @@ def _field_envelope(args: argparse.Namespace, environ: Any = None) -> SafetyEnve
             f"edge_device: {exc}. Refusing to start: check --alt-slot-m, --ceiling-m, --ceiling-margin-m and "
             "--geofence-m (or the FLIGHTRISK_FIELD_*_M variables; docs/open-drone-support.md)."
         ) from exc
+    return _resolved_envelope(args, envelope)
 
 
-def _temp_limits(log: StructuredLogger | None = None, drone_id: str | None = None, environ: Any = None) -> TempLimits:
+def _resolved_envelope(args: argparse.Namespace, envelope: SafetyEnvelope) -> SafetyEnvelope:
+    """``envelope`` rebuilt from the resolved values in ``args.edge_resolution`` (EDGE-2). Raises ``SystemExit``.
+
+    Without a resolution (an envelope built before or without the edge's start resolution), or when
+    every resolved value equals today's, it is ``envelope`` itself, today's. ``envelope_arguments``
+    says which value comes from where; the envelope keeps today's limits for its scale.
+    """
+    resolution = getattr(args, "edge_resolution", None)
+    if resolution is None:
+        return envelope
+    from flightrisk.edge_resolution import EdgeStartRefused, envelope_arguments, todays_envelope_arguments
+
+    today = todays_envelope_arguments(envelope)
+    try:
+        arguments = envelope_arguments(resolution, today)
+    except EdgeStartRefused as exc:
+        raise SystemExit(f"edge_device: {exc}") from None
+    if arguments == today:
+        return envelope
+    try:
+        return SafetyEnvelope(**arguments, limits=envelope.limits)
+    except ValueError as exc:
+        raise SystemExit(f"edge_device: the resolved envelope is invalid: {exc}. Refusing to start.") from None
+
+
+def _temp_limits(
+    log: StructuredLogger | None = None, drone_id: str | None = None, environ: Any = None,
+    args: argparse.Namespace | None = None,
+) -> TempLimits:
     """The takeoff temperature check's levels (``FLIGHTRISK_TELLO_TEMP_WARN_C``, ``..._REFUSE_C``).
 
     Read and validated at every flying edge's start, whatever the drone kind (only a Tello's
     temperature is checked), like the obstacle settings: a malformed value, or a refusal level
     below the warn level, refuses to start with the reason. A level that differs from its
-    default is logged once as ``edge_temp_setting_non_default``.
+    default is logged once as ``edge_temp_setting_non_default``. Once the edge has resolved its unit
+    (``args.edge_resolution``), the levels are built from the resolved values (``_resolved_temp_limits``).
     """
     env = os.environ if environ is None else environ
     try:
         limits = TempLimits.from_env(env)
     except ValueError as exc:
         raise SystemExit(f"edge_device: {exc}. Refusing to start (docs/fleet-setup.md, \"Takeoff temperature check\").") from None
+    if args is not None:
+        limits = _resolved_temp_limits(args, limits)
     if log is not None:
-        for name, value, default in (
-            (ENV_TELLO_TEMP_WARN_C, limits.warn_c, DEFAULT_TEMP_WARN_C),
-            (ENV_TELLO_TEMP_REFUSE_C, limits.refuse_c, DEFAULT_TEMP_REFUSE_C),
+        for field, name, value, default in (
+            ("warn_c", ENV_TELLO_TEMP_WARN_C, limits.warn_c, DEFAULT_TEMP_WARN_C),
+            ("refuse_c", ENV_TELLO_TEMP_REFUSE_C, limits.refuse_c, DEFAULT_TEMP_REFUSE_C),
         ):
             if value != default:
+                name, where = _temp_level_source(args, field, name)
                 log.warning(
                     "edge_temp_setting_non_default", drone_id=drone_id, variable=name,
                     value="off" if value is None else value, default=default,
-                    detail=f"{name}={'off' if value is None else value!r} is not the default ({default!r})",
+                    detail=f"{name}={'off' if value is None else value!r}{where} is not the default ({default!r})",
                 )
     return limits
+
+
+def _temp_level_source(args: argparse.Namespace | None, field: str, variable: str) -> tuple[str, str]:
+    """The name of the temperature level ``field`` and where it came from, for its non-default log line.
+
+    A level from the environment, or one read without a resolution, is named by ``variable`` alone. A
+    level the profile, the params file or the launcher set is named by its row and that source, for
+    example ``("tello.temp_warn_c", " from launcher")``.
+    """
+    resolution = getattr(args, "edge_resolution", None) if args is not None else None
+    if resolution is None:
+        return variable, ""
+    from flightrisk.edge_resolution import TEMP_ROWS, resolved_elsewhere
+
+    row = TEMP_ROWS[field]
+    where = resolved_elsewhere(resolution, row)
+    if where is None:
+        return variable, ""
+    return row, f" from {where}"
+
+
+def _resolved_temp_limits(args: argparse.Namespace, limits: TempLimits) -> TempLimits:
+    """``limits`` rebuilt from the resolved values in ``args.edge_resolution`` (EDGE-2). Raises ``SystemExit``.
+
+    Without a resolution, or when every resolved value equals today's, it is ``limits`` itself.
+    ``edge_resolution.fact_arguments`` says which value comes from where. Both levels are facts of the
+    drone, and the refusal switch is only read here: nothing new is confirmed or reported for it.
+    """
+    resolution = getattr(args, "edge_resolution", None)
+    if resolution is None:
+        return limits
+    from flightrisk.edge_resolution import TEMP_ROWS, fact_arguments
+
+    defaults = TempLimits()
+    today = {name: getattr(limits, name) for name in TEMP_ROWS}
+    arguments = fact_arguments(resolution, TEMP_ROWS, today, {name: getattr(defaults, name) for name in TEMP_ROWS})
+    if arguments == today:
+        return limits
+    try:
+        return TempLimits(**arguments)
+    except ValueError as exc:
+        raise SystemExit(f"edge_device: the resolved temperature levels are invalid: {exc}. Refusing to start.") from None
 
 
 def _startup_envelope(args: argparse.Namespace, environ: Any = None) -> SafetyEnvelope:
@@ -2457,16 +2585,20 @@ def _startup_envelope(args: argparse.Namespace, environ: Any = None) -> SafetyEn
     limit (``FLIGHTRISK_CEILING_CM`` minus ``FLIGHTRISK_CEILING_MARGIN_CM``,
     200 - 60 = 140 cm by default): the edge refuses to start rather than
     clamp the slot.
+
+    Once the edge has resolved its unit (``args.edge_resolution``), the envelope is built from the
+    resolved values; before that, and wherever no resolution exists, it is today's.
     """
     if _drone_kind(args) == "mavlink":
         return _field_envelope(args, environ)
     try:
-        return SafetyEnvelope.from_env(alt_slot_cm=args.alt_slot, environ=environ)
+        envelope = SafetyEnvelope.from_env(alt_slot_cm=args.alt_slot, environ=environ)
     except ValueError as exc:
         raise SystemExit(
             f"edge_device: {exc}. Refusing to start: lower --alt-slot (ALT_CM), or set "
             f"{CEILING_CM_ENV} / {CEILING_MARGIN_CM_ENV} for this room (docs/ceiling-and-altitude.md)."
         ) from exc
+    return _resolved_envelope(args, envelope)
 
 
 def _run_flight_edge(
@@ -2474,15 +2606,30 @@ def _run_flight_edge(
     log: StructuredLogger,
     stop_event: threading.Event | None = None,
     envelope: SafetyEnvelope | None = None,
+    argv: Sequence[str] | None = None,
+    parser: argparse.ArgumentParser | None = None,
 ) -> None:
     """Run a flying edge: drone, lane executor, safety controls and the edge loop.
 
-    Setting ``stop_event`` ends the edge loop; the drone lands first.
+    Setting ``stop_event`` ends the edge loop; the drone lands first. ``argv`` and ``parser`` are the
+    command line and parser ``main`` read, which give the resolution its command-line layer.
     """
-    if envelope is None:
+    start_envelope = envelope is None
+    if start_envelope:
         envelope = _startup_envelope(args)
-    temp_limits = _temp_limits(log, getattr(args, "drone_id", None))
-    guards = _flight_guards(os.environ)
+    _temp_limits(None, getattr(args, "drone_id", None))
+    _flight_guards(os.environ)
+    # After today's own start checks, so they keep refusing with today's messages, and before the
+    # drone is built or contacted (EDGE-1).
+    _resolve_edge_start(args, log, argv=argv, parser=parser)
+    if start_envelope:
+        # Built again from the resolved values (EDGE-2). An envelope the caller passed is never rebuilt
+        # from the resolution and wins over it; only tests pass one, main never does.
+        envelope = _startup_envelope(args)
+    # The temperature levels and the flight guards from the resolved values (EDGE-2); a level that is
+    # not its default is logged here, once.
+    temp_limits = _temp_limits(log, getattr(args, "drone_id", None), args=args)
+    guards = _flight_guards(os.environ, args)
     kind = _drone_kind(args)
     holder: dict[str, Any] = {}
     if kind == "mavlink":
@@ -2648,7 +2795,9 @@ def _resolve_drone_and_source(args: argparse.Namespace, parser: argparse.Argumen
     same name and may not be another). ``--drone mavlink`` needs
     ``--source`` camera, file or url (default camera) and the outdoor
     settings in metres; the indoor ``--alt-slot`` (centimetres) and the Tello
-    options do not apply to it.
+    options do not apply to it. Once they are settled, the edge chooses its
+    model and checks it against the backend (``_resolve_model``), still before
+    it contacts any drone.
     """
     drone = args.drone
     explicit_source = not isinstance(args.source, _Default)
@@ -2667,11 +2816,13 @@ def _resolve_drone_and_source(args: argparse.Namespace, parser: argparse.Argumen
         parser.error(f"{', '.join(mavlink_only)} only apply to --drone mavlink")
     if drone is None:
         args.source = str(args.source)
+        _resolve_model(args, parser)
         return
     if drone in ("tello", "fake"):
         if explicit_source and args.source != drone:
             parser.error(f"--drone {drone} takes its frames from the drone; use --source {drone} or leave it out")
         args.source = drone
+        _resolve_model(args, parser)
         return
     # --drone mavlink
     if explicit_source and args.source not in _CAPTURE_SOURCES:
@@ -2701,6 +2852,80 @@ def _resolve_drone_and_source(args: argparse.Namespace, parser: argparse.Argumen
         )
     except ValueError as exc:
         parser.error(str(exc))
+    _resolve_model(args, parser)
+
+
+def _resolve_model(args: argparse.Namespace, parser: argparse.ArgumentParser, environ: Any = None) -> None:
+    """Choose the model of a flying edge and check it against its backend; ``parser.error`` on a mismatch.
+
+    Runs before the edge contacts any drone. An edge that flies nothing has no
+    backend to check, so it chooses no model. Without ``--model``,
+    ``FLIGHTRISK_MODEL``, ``--airframe``, an inventory unit or a launcher model,
+    the model is the backend's default, which always matches.
+    """
+    from flightrisk.edge_resolution import ModelRefused, resolve_model
+
+    args.model_choice = None
+    drone = _drone_kind(args)
+    if drone is None:
+        return
+    frame_path = "drone_video" if args.source in _FLIGHT_SOURCES else "capture_source"
+    try:
+        args.model_choice = resolve_model(
+            drone=drone, drone_id=args.drone_id, frame_path=frame_path, model_flag=getattr(args, "model", None),
+            airframe_flag=getattr(args, "airframe", None), environ=os.environ if environ is None else environ,
+        )
+    except ModelRefused as exc:
+        parser.error(str(exc))
+
+
+def _resolve_edge_start(
+    args: argparse.Namespace,
+    log: StructuredLogger,
+    *,
+    argv: Sequence[str] | None = None,
+    parser: argparse.ArgumentParser | None = None,
+    environ: Any = None,
+) -> None:
+    """Resolve a flying edge's unit before it contacts its drone (EDGE-1); ``SystemExit`` on a refusal.
+
+    Keeps the result in ``args.edge_resolution``, which the start log, the start envelope
+    (``_startup_envelope``) and the consumers rewired from A3.3 on read. Runs once: a second call
+    returns at once. An edge that flies nothing resolves nothing.
+    """
+    from flightrisk.edge_resolution import (
+        EdgeStartRefused,
+        ModelRefused,
+        log_edge_start,
+        resolve_edge,
+        resolve_model,
+    )
+
+    if getattr(args, "edge_resolution", None) is not None:
+        return
+    args.edge_resolution = None
+    drone = _drone_kind(args)
+    if drone is None:
+        return
+    environ = os.environ if environ is None else environ
+    drone_id = getattr(args, "drone_id", None)
+    try:
+        choice = getattr(args, "model_choice", None)
+        if choice is None:
+            frame_path = "drone_video" if getattr(args, "source", None) in _FLIGHT_SOURCES else "capture_source"
+            choice = resolve_model(
+                drone=drone, drone_id=drone_id, frame_path=frame_path, model_flag=getattr(args, "model", None),
+                airframe_flag=getattr(args, "airframe", None), environ=environ,
+            )
+        args.edge_resolution = resolve_edge(
+            choice=choice, drone=drone, drone_id=drone_id, source=getattr(args, "source", None),
+            environ=environ, argv=() if argv is None else argv, parser=parser,
+        )
+        log_edge_start(args.edge_resolution, log, drone_id=drone_id)
+    except (EdgeStartRefused, ModelRefused) as exc:
+        text = str(exc) if isinstance(exc, EdgeStartRefused) else f"{exc} Refusing to start."
+        log.error("edge_start_refused", drone_id=drone_id, reason=text)
+        raise SystemExit(f"edge_device: {text}") from None
 
 
 def _init_edge_telemetry(log: StructuredLogger) -> bool:
@@ -2770,8 +2995,10 @@ def main(argv: list[str] | None = None) -> None:
     if _drone_kind(args) is not None:
         # Checked before anything connects, so a slot above the ceiling
         # limit stops the edge at once with the reason.
-        envelope = _startup_envelope(args)
-        _run_flight_edge(args, log, envelope=envelope)
+        _startup_envelope(args)
+        # ``_run_flight_edge`` resolves the unit with this command line before it builds the drone, and
+        # builds the envelope from the resolved values.
+        _run_flight_edge(args, log, argv=sys.argv[1:] if argv is None else list(argv), parser=parser)
         return
 
     source = _build_source(args, parser, log)

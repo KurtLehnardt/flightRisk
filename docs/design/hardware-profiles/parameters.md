@@ -32,8 +32,10 @@ so ("incident" is #207, "sensing" is #198).
   stay only as developer overrides for test-adapter bring-up (logged at start and shown with source
   `env`), so today's tests and scripts keep working (`design.md` section 26, decision R-5). They are
   honoured only on test-adapter units and verified simulated units; a production unit ignores them
-  with a log line naming the variable (N-10). Exceptions: rows 38 and 39 are safety switches, so their
-  off value is `less_safe` and is listed and confirmed at Start; row 33 (hover-only test) keeps #207's
+  with a log line naming the variable (N-10). Exceptions: rows 38 and 39 are safety switches. Their
+  off value must be listed and confirmed at Start (FACT-4, C5), selected by `safety_switch` and
+  `off_value`, not by `less_safe`: the resolver never marks a fact row less safe, so that no fact is
+  shown or logged as a setting to tune (A3); row 33 (hover-only test) keeps #207's
   launcher warning about an inherited `FLIGHTRISK_HOVER_TEST` (N-16).
 - **Applies:** `next_start`, `on_ground` (changed between flights by the ground), `plan`, or `in_flight` (a
   mission setting that may change during the flight, spec 10.1(5)).

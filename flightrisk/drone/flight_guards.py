@@ -42,9 +42,11 @@ have a refusal retried.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from flightrisk.drone.safety import MIN_ALT_SLOT_CM
 from flightrisk.fleet_protocol import MAX_TEXT_LEN
+from flightrisk.params import table as _registry
 
 __all__ = [
     "DEFAULT_REFUSALS_PER_FLIGHT",
@@ -87,17 +89,25 @@ ENV_REFUSAL_HOLD_S = "FLIGHTRISK_TELLO_REFUSAL_HOLD_S"
 ENV_REFUSALS_PER_FLIGHT = "FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT"
 ENV_HOVER_TEST = "FLIGHTRISK_HOVER_TEST"
 
+def _registry_default(param_id: str) -> Any:
+    """The registry default of ``param_id`` in the indoor reference profile column."""
+    for spec in _registry.TABLE:
+        if spec.id == param_id:
+            return spec.defaults[_registry.T]
+    raise KeyError(f"no registry row {param_id!r}")
+
+
 # The Tello sends about ten state packets a second, so five is about half a
 # second of steady readings.
-DEFAULT_SETTLE_SAMPLES = 5
+DEFAULT_SETTLE_SAMPLES = _registry_default("takeoff.settle_samples")
 SETTLE_SAMPLES_RANGE = (2, 50)
 # Expect a few cm of error in the Tello's own height (docs/ceiling-and-altitude.md).
-DEFAULT_SETTLE_TOLERANCE_CM = 10.0
+DEFAULT_SETTLE_TOLERANCE_CM = _registry_default("takeoff.settle_tolerance_cm")
 SETTLE_TOLERANCE_RANGE_CM = (2.0, 50.0)
 # Long enough for a hovering Tello to show it, short enough that a drone that
 # never settles is landed soon. The Tello lands by itself after 15 s without
 # a command; the edge's keepalive covers that, and this stays well below it.
-DEFAULT_SETTLE_TIMEOUT_S = 5.0
+DEFAULT_SETTLE_TIMEOUT_S = _registry_default("takeoff.settle_timeout_s")
 SETTLE_TIMEOUT_RANGE_S = (1.0, 10.0)
 # A Tello lifts within about 2 s of a takeoff and hovers within about 5 s
 # (flightrisk/drone/tello.py). With two edges on one laptop the ``ok`` has
@@ -105,18 +115,18 @@ SETTLE_TIMEOUT_RANGE_S = (1.0, 10.0)
 # covers a late reply up to this; beyond it, so much of the takeoff went
 # unobserved that the drone lands instead of climbing. Set it lower (for
 # example 3) for a first test flight.
-DEFAULT_TAKEOFF_LATE_S = 10.0
+DEFAULT_TAKEOFF_LATE_S = _registry_default("takeoff.late_s")
 TAKEOFF_LATE_RANGE_S = (2.0, 20.0)
 # Each retry costs one hover of the hold time plus one reply wait in the air,
 # with a drone that may not hold its position well, so they stay few.
-DEFAULT_REFUSAL_RETRIES = 2
+DEFAULT_REFUSAL_RETRIES = _registry_default("takeoff.refusal_retries")
 REFUSAL_RETRIES_RANGE = (0, 3)
-DEFAULT_REFUSAL_HOLD_S = 2.5
+DEFAULT_REFUSAL_HOLD_S = _registry_default("takeoff.refusal_hold_s")
 REFUSAL_HOLD_RANGE_S = (0.5, 5.0)
 # A flight retries at most this many refusals in all, across its steps: a
 # drone that refuses every step (drone-2 on 2026-11-22) lands rather than
 # retry each one. Reset at every takeoff.
-DEFAULT_REFUSALS_PER_FLIGHT = 2
+DEFAULT_REFUSALS_PER_FLIGHT = _registry_default("tello.refusals_per_flight")
 REFUSALS_PER_FLIGHT_RANGE = (0, 6)
 
 #: Logged once per flight guard setting that is not its default, at startup.

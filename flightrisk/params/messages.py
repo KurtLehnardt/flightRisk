@@ -65,3 +65,39 @@ def render_fallback_landing(unit_id: str, quantity: str, value: float, unit: str
         f"{unit_id} landed in place: {quantity} {_num(value)} {unit} "
         f"is above the {_num(bound)} {unit} bound."
     )
+
+
+def render_launcher_for_other_unit(variable: str, launcher_unit_id: str, unit_id: str) -> str:
+    """Refuse a launcher layer written for another unit than the one this edge flies.
+
+    Example: "FLIGHTRISK_LAUNCHER_PARAMS is for unit drone-9, but this edge is --drone-id drone-1.
+    Start the edge from the launcher again for drone-1, or unset FLIGHTRISK_LAUNCHER_PARAMS."
+    """
+    return (
+        f"{variable} is for unit {launcher_unit_id}, but this edge is --drone-id {unit_id}. "
+        f"Start the edge from the launcher again for {unit_id}, or unset {variable}."
+    )
+
+
+def render_unconfirmed_switch_off(unit_id: str, reason: str, source: str) -> str:
+    """Refuse a safety feature switched off without the operator's confirmation.
+
+    Example: "drone-1: switching forward_obstacle_sensing off needs the operator's confirmation,
+    which a feature switch from the launcher cannot give."
+    """
+    return f"{unit_id}: {reason}, which a feature switch from {source} cannot give."
+
+
+def render_shadowed_value(
+    unit_id: str, param_id: str, variable: str, value: float, layer: str, layer_value: float, flown: float,
+) -> str:
+    """Refuse a variable the edge does not read for this unit that would hide a launcher or params-file value.
+
+    Example: "drone-1: FLIGHTRISK_FIELD_ALT_SLOT_M sets `envelope.alt_slot_cm` to 120 over 130 from
+    FLIGHTRISK_LAUNCHER_PARAMS, but this edge does not read FLIGHTRISK_FIELD_ALT_SLOT_M for its drone and
+    would fly 100. Unset FLIGHTRISK_FIELD_ALT_SLOT_M."
+    """
+    return (
+        f"{unit_id}: {variable} sets `{param_id}` to {_num(value)} over {_num(layer_value)} from {layer}, "
+        f"but this edge does not read {variable} for its drone and would fly {_num(flown)}. Unset {variable}."
+    )

@@ -86,7 +86,9 @@ Safety (step S7):
     layer, only the launcher's ``confirmed`` object counts; it is passed as
     the reserved ``confirmed`` key of that layer (RES-11). Less-safe values
     from the launcher, the environment or a flag are accepted, and those from
-    the environment or a flag are logged at warning level.
+    the environment or a flag are logged at warning level. A test-adapter
+    fact is never less safe and never logged as less safe, from any layer or
+    value (R7, R8).
 14. A safety switch stored as off in ``params.json`` or the inventory is
     refused (RES-10). A switch that is a test-adapter fact is refused earlier
     by decision 7, without naming it. A unit's inventory ``features`` are
@@ -641,6 +643,29 @@ _NUMERIC_KINDS = (Kind.INT, Kind.FLOAT, Kind.INT_LIST, Kind.INT_PAIR)
 #: and the row has no bound. C7 must add the bound before any code reads it. Pinned by a test.
 IGNORED_WITHOUT_BOUND = frozenset({("tello", "FLIGHTRISK_LINK_LOSS_WAIT_S")})
 
+#: Fact rows whose variable the edge still reads itself on every unit, so a test-adapter override of one on
+#: a production unit is left out of the resolution but is not ignored: the hover-only test is a mission
+#: switch that today's reader honours (``edge_device._flight_guards``). Pinned by a test.
+READ_BY_THE_EDGE = frozenset({"mode.hover_test"})
+
+
+#: Test-adapter fact rows that a production unit's model does not hold, but whose variable today's edge
+#: reads on every unit: the Tello flight guards (``edge_device._flight_guards``) and takeoff temperature
+#: levels (``edge_device._temp_limits``). An override of one on a production unit is ignored, as for the
+#: facts the model holds, with the same warning naming the variable (N-10, FACT-3; design section 27,
+#: item 47). Pinned by a test.
+IGNORED_WHERE_NOT_APPLICABLE = frozenset({
+    "takeoff.settle_samples",
+    "takeoff.settle_tolerance_cm",
+    "takeoff.settle_timeout_s",
+    "takeoff.late_s",
+    "takeoff.refusal_retries",
+    "takeoff.refusal_hold_s",
+    "tello.refusals_per_flight",
+    "tello.temp_warn_c",
+    "tello.temp_refuse_c",
+})
+
 
 def _new_name_without_bound(spec: ParamSpec, profile: str, name: str) -> bool:
     """True for a number from a name today's code does not read, on a row with no target bound."""
@@ -779,7 +804,10 @@ def resolve(
             continue
         for param_id, (_, raw, detail, name) in _entries(source, layer, scale, drone, unit_id).items():
             if param_id not in result:
-                log.debug("%s from %s does not apply to %s; skipped", param_id, detail, drone.id)
+                if name is not None and not test_unit and param_id in IGNORED_WHERE_NOT_APPLICABLE:
+                    log.warning("%s is ignored on %s: it is a test-adapter override", detail, unit_id)
+                else:
+                    log.debug("%s from %s does not apply to %s; skipped", param_id, detail, drone.id)
                 continue
             spec = specs[param_id]
             edit = spec.edit.get(profile)
@@ -800,7 +828,11 @@ def resolve(
                 continue
             if edit is Edit.FACT:
                 if not test_unit:
-                    log.warning("%s is ignored on %s: it is a test-adapter override", detail, unit_id)
+                    if param_id in READ_BY_THE_EDGE:
+                        log.info("%s is not resolved on %s, a production unit; the edge reads it itself",
+                                 detail, unit_id)
+                    else:
+                        log.warning("%s is ignored on %s: it is a test-adapter override", detail, unit_id)
                     continue
                 log.info("test-adapter override %s=%r on %s", detail, raw, unit_id)
             try:
@@ -863,6 +895,9 @@ def check_resolved(
     confirmed = launcher_confirmed if launcher_present else (confirmations or {})
     for param_id, effective in result.items():
         spec = _BY_ID[param_id]
+        if spec.is_fact(model.profile):
+            # A fact is never confirmed or logged as less safe (R7, R8); a file or launcher cannot set one.
+            continue
         if not needs_confirmation(spec, effective):
             continue
         if effective.source in FILE_SOURCES:
@@ -907,5 +942,7 @@ def _effective(spec: ParamSpec, model: DroneModel, value: Any, base: Any, source
         model=model.id,
         applies=spec.applies,
         non_default=value != base,
-        less_safe=is_less_safe(spec, value, base) if not is_off else not _off_match(spec, base),
+        # A test-adapter fact is never classified as less safe from any layer or value (R7, R8).
+        less_safe=(not spec.is_fact(model.profile)
+                   and (is_less_safe(spec, value, base) if not is_off else not _off_match(spec, base))),
     )

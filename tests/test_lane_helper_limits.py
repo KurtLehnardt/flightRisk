@@ -78,3 +78,24 @@ def test_manual_axis_moves_reject_invalid_limits(limits):
         manual_axis_moves(1200, "forward", "back", exact=True, **limits)
     with pytest.raises(ValueError):
         manual_axis_moves(0, "forward", "back", exact=False, **limits)
+
+
+def test_transit_refuses_limits_that_cannot_keep_moves_in_range():
+    with pytest.raises(ValueError):
+        transit((0, 0), (0, 510), min_move_cm=300, max_move_cm=500)
+
+
+def test_manual_axis_moves_refuse_limits_that_cannot_keep_moves_in_range():
+    with pytest.raises(ValueError):
+        manual_axis_moves(299, "forward", "back", exact=True, min_move_cm=300, max_move_cm=500)
+
+
+def test_limit_boundary_is_twice_min_minus_one():
+    transit((0, 0), (0, 510), min_move_cm=300, max_move_cm=599)
+    manual_axis_moves(299, "forward", "back", exact=True, min_move_cm=300, max_move_cm=599)
+    for call in (
+        lambda: transit((0, 0), (0, 510), min_move_cm=300, max_move_cm=598),
+        lambda: manual_axis_moves(299, "forward", "back", exact=True, min_move_cm=300, max_move_cm=598),
+    ):
+        with pytest.raises(ValueError):
+            call()
