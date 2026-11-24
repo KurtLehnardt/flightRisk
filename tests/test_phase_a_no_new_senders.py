@@ -83,7 +83,16 @@ NEW_STRINGS = NEW_STRINGS | frozenset(name for name in NEW_NAMES if name.startsw
 
 #: The allowlist: {path relative to flightrisk/: {token, ...}}. Empty in A2;
 #: A3 and C1 add their senders here.
-ALLOWED: dict[str, frozenset[tuple[str, str]]] = {}
+ALLOWED: dict[str, frozenset[tuple[str, str]]] = {
+    # The edge's describe_unit reply (PROTO-4): the ack built from the
+    # start-time report, and the nack for a refused or too fast query.
+    "edge_query.py": frozenset({
+        ("make_describe_unit_ack", "_build"),
+        ("make_describe_unit_nack", "_build"),
+        ("make_describe_unit_nack", "_refuse"),
+        ("make_describe_unit_nack", "answer"),
+    }),
+}
 
 #: The only tokens Phase A3 may add to ``ALLOWED``: the edge's ``describe_unit``
 #: reply (PROTO-4) and the ``unit_rev`` it sends in its v2 ``hello`` (PROTO-3).
