@@ -137,9 +137,10 @@ def launcher_model(environ: Mapping[str, str]) -> Optional[str]:
         return None
     try:
         layer = json.loads(raw)
-    except ValueError as exc:
-        raise ModelRefused(f"{LAUNCHER_PARAMS_ENV_VAR} is not valid JSON ({exc}); "
-                           "start the edge from the launcher again or unset it.") from exc
+    except (ValueError, RecursionError) as exc:
+        # A deeply nested value raises RecursionError; it is refused as invalid JSON too (review L1).
+        raise ModelRefused(f"{LAUNCHER_PARAMS_ENV_VAR} is not valid JSON ({type(exc).__name__}); "
+                           "start the edge from the launcher again or unset it.") from None
     if not isinstance(layer, dict):
         raise ModelRefused(f"{LAUNCHER_PARAMS_ENV_VAR} must be a JSON object; start the edge from the "
                            "launcher again or unset it.")
@@ -160,6 +161,8 @@ def _load_inventory(environ: Mapping[str, str]) -> Any:
         return InventoryStore(environ.get(ENV_FILE) or None).load()
     except InventoryRefused as exc:
         raise ModelRefused(f"the inventory is refused: {exc}") from exc
+    except RecursionError:
+        raise ModelRefused("the inventory is refused: it is nested too deeply to read.") from None
 
 
 def choose_model(
@@ -350,9 +353,13 @@ def parse_launcher_layer(environ: Mapping[str, str]) -> Optional[LauncherLayer]:
     if extra:
         raise _launcher_refused(f"has unknown keys {', '.join(extra)}.")
     for key in ("unit_id", "model"):
-        if data.get(key) is not None and (not isinstance(data[key], str) or not data[key].strip()):
+        # A key that is present must hold text: a null unit_id would switch off the unit check (review L2).
+        if key in data and (not isinstance(data[key], str) or not data[key].strip()):
             raise _launcher_refused(f"has a `{key}` that is not text.")
-    features = data.get("features") or {}
+    for key in ("values", "confirmed"):
+        if key in data and not isinstance(data[key], dict):
+            raise _launcher_refused(f"`{key}` must be an object of parameter ids.")
+    features = data.get("features", {})
     if not isinstance(features, dict):
         raise _launcher_refused("`features` must be an object of feature switches.")
     unknown = sorted(str(k) for k in features if k not in FEATURES)

@@ -114,3 +114,69 @@ def test_no_fact_row_log_line_uses_setting_or_safety_wording(edge_env, caplog):
     assert texts
     for text in texts:
         assert not [word for word in _BANNED if word in text], text
+
+
+def _fact_values(spec, profile="tello"):
+    """The values the sweep sets for one fact row: the off value, each bound, and values outside the bound
+    that today's reader accepts (with no recorded range today accepts any value its parse accepts)."""
+    from flightrisk.params.spec import Kind
+    from flightrisk.params.today import TODAY_ACCEPTS
+
+    if spec.kind is Kind.BOOL:
+        return ["0", "1", "false", "true"]
+    whole = spec.kind is Kind.INT
+    shown = (lambda v: str(int(v))) if whole else (lambda v: repr(float(v)))
+    values = []
+    if spec.off_value is not None:
+        values.append(spec.off_value if isinstance(spec.off_value, str) else shown(spec.off_value))
+    bound = spec.bounds.get(profile)
+    if bound is None:
+        return values or ["1"]
+    values += [shown(bound.lo), shown(bound.hi)]
+    today = TODAY_ACCEPTS.get(spec.env, {}).get(profile)
+    for outside in (bound.lo - (1 if whole else bound.lo / 2), bound.hi + (1 if whole else bound.hi)):
+        if outside < 0:
+            continue
+        if today is None or ((today.lo is None or outside >= today.lo) and (today.hi is None or outside <= today.hi)):
+            values.append(shown(outside))
+    return list(dict.fromkeys(values))
+
+
+_FACT_SWEEP = [
+    (spec, value)
+    for spec in TABLE
+    if spec.is_fact("tello") and spec.env
+    for value in _fact_values(spec)
+]
+
+
+def test_the_fact_sweep_covers_every_fact_row_with_a_variable():
+    swept = {spec.id for spec, _ in _FACT_SWEEP}
+    assert swept == {s.id for s in TABLE if s.is_fact("tello") and s.env}
+    assert ("sensing.turn", "0") in {(s.id, v) for s, v in _FACT_SWEEP}
+
+
+@pytest.mark.parametrize("source", ["fake", "tello"])
+@pytest.mark.parametrize("spec,value", _FACT_SWEEP, ids=[f"{s.id}={v}" for s, v in _FACT_SWEEP])
+def test_no_fact_value_from_any_variable_is_logged_as_less_safe_or_as_a_setting(edge_env, caplog, source, spec,
+                                                                                value):
+    """B1: every fact row at its off value, each bound and an out-of-range value today accepts (R7, R8)."""
+    edge_env.setenv(spec.env, value)
+    log = _Log()
+    with caplog.at_level(logging.DEBUG):
+        try:
+            _start(["--source", source, "--drone-id", "drone-1"], log)
+        except SystemExit as exc:
+            refused = str(exc).lower()
+            assert not [word for word in _BANNED if word in refused], refused
+    texts = [json.dumps([e[0], e[1], e[2]], default=str).lower() for e in log.events
+             if e[2].get("param_id") == spec.id or spec.env in json.dumps(e[2], default=str)]
+    texts += [r.getMessage().lower() for r in caplog.records
+              if spec.env in r.getMessage() or spec.id in r.getMessage()]
+    for text in texts:
+        assert not [word for word in _BANNED if word in text], text
+    fact_rows = [e for e in log.events if e[2].get("param_id") == spec.id]
+    assert all((level, event) == ("info", "edge_fact_override") and fields["source"] == "env"
+               for level, event, fields in fact_rows), fact_rows
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING and spec.env in r.getMessage()
+                and "refused" not in r.getMessage()]

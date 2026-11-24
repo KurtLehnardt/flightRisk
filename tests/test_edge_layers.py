@@ -277,3 +277,59 @@ def test_airframe_variable_that_does_not_fit_the_backend_refuses_the_edge(monkey
         edge_device._resolve_drone_and_source(args, parser)
     assert exc.value.code == 2
     assert f"model tello_edu (from {AIRFRAME_ENV_VAR}) does not match --drone mavlink" in capsys.readouterr().err
+
+
+# --- Absent and broken files (design section 27, A3 item 47) ------------------------------------------
+
+
+def test_an_absent_params_file_and_inventory_are_treated_as_empty(environ, tmp_path):
+    """A missing file is no layer content, exactly as a present empty one; it never stops the start."""
+    absent = _build(environ)
+    empty_params = tmp_path / "empty-params.json"
+    empty_params.write_text(json.dumps({"version": 1, "units": {}}), encoding="utf-8")
+    empty_inventory = tmp_path / "empty-inventory.json"
+    empty_inventory.write_text(json.dumps({"version": 1, "rev": 0, "models": {}, "units": []}), encoding="utf-8")
+    present = _build({**environ, PARAMS_FILE_ENV_VAR: str(empty_params), ENV_FILE: str(empty_inventory)})
+    # The environment layer differs only by the two path variables, which name no parameter.
+    assert {k: v for k, v in absent.layers.items() if k is not Source.ENV} == {
+        k: v for k, v in present.layers.items() if k is not Source.ENV}
+    assert absent.layers[Source.FILE] == {} and absent.layers[Source.INVENTORY] == {}
+    assert (absent.profile, absent.features, absent.confirmations) == (present.profile, present.features,
+                                                                     present.confirmations)
+    assert {k: v.value for k, v in _resolve(absent).items()} == {k: v.value for k, v in _resolve(present).items()}
+
+
+@pytest.mark.parametrize("content", ["{", "[]", '{"version": 99, "units": []}'])
+def test_a_broken_inventory_stops_the_start(environ, tmp_path, content):
+    path = tmp_path / "inventory.json"
+    path.write_text(content, encoding="utf-8")
+    environ[ENV_FILE] = str(path)
+    with pytest.raises(ValueError):
+        _build(environ)
+
+
+@pytest.mark.parametrize("variable", [PARAMS_FILE_ENV_VAR, ENV_FILE])
+def test_a_params_file_or_inventory_that_is_a_directory_stops_the_start(environ, tmp_path, variable):
+    environ[variable] = str(tmp_path)
+    with pytest.raises(ValueError):
+        _build(environ)
+
+
+# --- Review L1 and L2: the launcher layer's strict form ---------------------------------------------------
+
+
+def test_a_deeply_nested_launcher_variable_is_refused_not_a_traceback(environ):
+    from flightrisk.edge_resolution import ModelRefused, launcher_model
+
+    environ[LAUNCHER_PARAMS_ENV_VAR] = "[" * 100000 + "]" * 100000
+    with pytest.raises(ModelRefused, match="not valid JSON"):
+        launcher_model(environ)
+
+
+@pytest.mark.parametrize("data", [
+    {"unit_id": None}, {"model": None}, {"features": []}, {"values": 0}, {"confirmed": ""}, {"values": None},
+])
+def test_a_launcher_key_that_is_present_must_have_its_type(environ, data):
+    environ[LAUNCHER_PARAMS_ENV_VAR] = json.dumps(data)
+    with pytest.raises(ValueError):
+        parse_launcher_layer(environ)

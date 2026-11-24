@@ -164,3 +164,59 @@ def test_the_a3_edge_refuses_the_input_before_it_builds_the_drone(edge_env, key)
     argv, args = _start_input(key, edge_env.monkeypatch)
     with pytest.raises(SystemExit):
         edge_device._resolve_edge_start(args, _Log(), argv=argv, parser=_PARSER)
+
+
+# --- The ranges of item 47, swept at each boundary on both sides ----------------------------------------
+# "new" is accepted by today's start path and refused by the A3 resolution; "ok" is accepted by both;
+# "today" is refused by today's start path already, so refusing it changes nothing.
+_T_START = ["--source", "tello"]
+_M_START = _MAVLINK + ["--source", "camera"]
+RANGE_CASES = [
+    # K-3 on the Tello: a takeoff minimum from 15 to 25 %, at or under the 25 % return floor.
+    ("K-3", _T_START, {G + "MIN_TAKEOFF_BATTERY": "14"}, "today"),
+    ("K-3", _T_START, {G + "MIN_TAKEOFF_BATTERY": "15"}, "new"),
+    ("K-3", _T_START, {G + "MIN_TAKEOFF_BATTERY": "25"}, "new"),
+    ("K-3", _T_START, {G + "MIN_TAKEOFF_BATTERY": "25.5"}, "ok"),
+    ("K-3", _T_START, {G + "MIN_TAKEOFF_BATTERY": "26"}, "ok"),
+    # K-6 on both backends: a link-loss land time above 0 and under 1.5 s.
+    *[("K-6", start, {G + "LINK_LOSS_LAND_S": raw}, outcome)
+      for start in (_T_START, _M_START)
+      for raw, outcome in (("0", "today"), ("0.01", "new"), ("1.49", "new"), ("1.5", "ok"))],
+    # K-8 on the Tello: ceiling minus margin under 130 cm, while today accepts it (at least the start's slot,
+    # --alt-slot or 100 cm, and at least the 50 cm lowest slot).
+    ("K-8", _T_START, {G + "CEILING_CM": "1000", G + "CEILING_MARGIN_CM": "870"}, "ok"),
+    ("K-8", _T_START, {G + "CEILING_CM": "1000", G + "CEILING_MARGIN_CM": "871"}, "new"),
+    ("K-8", _T_START, {G + "CEILING_CM": "1000", G + "CEILING_MARGIN_CM": "900"}, "new"),
+    ("K-8", _T_START, {G + "CEILING_CM": "1000", G + "CEILING_MARGIN_CM": "901"}, "today"),
+    ("K-8", _T_START + ["--alt-slot", "50"], {G + "CEILING_CM": "1000", G + "CEILING_MARGIN_CM": "870"}, "ok"),
+    ("K-8", _T_START + ["--alt-slot", "50"], {G + "CEILING_CM": "1000", G + "CEILING_MARGIN_CM": "871"}, "new"),
+    ("K-8", _T_START + ["--alt-slot", "50"], {G + "CEILING_CM": "1000", G + "CEILING_MARGIN_CM": "950"}, "new"),
+    ("K-8", _T_START + ["--alt-slot", "50"], {G + "CEILING_CM": "1000", G + "CEILING_MARGIN_CM": "951"}, "today"),
+    ("K-8", _T_START + ["--alt-slot", "130"], {G + "CEILING_CM": "1000", G + "CEILING_MARGIN_CM": "870"}, "ok"),
+    ("K-8", _T_START + ["--alt-slot", "130"], {G + "CEILING_CM": "1000", G + "CEILING_MARGIN_CM": "871"}, "today"),
+    ("K-8", _T_START, {G + "CEILING_CM": "150", G + "CEILING_MARGIN_CM": "50"}, "new"),
+]
+
+
+@pytest.mark.parametrize("rule,start,env,outcome", RANGE_CASES,
+                         ids=[f"{r}:{' '.join(s[-2:])}:{e}" for r, s, e, _ in RANGE_CASES])
+def test_each_item_47_range_is_newly_refused_inside_and_unchanged_outside(edge_env, rule, start, env, outcome):
+    for name, value in env.items():
+        edge_env.monkeypatch.setenv(name, value)
+    argv = start + ["--drone-id", "drone-1"]
+    args = _PARSER.parse_args(argv)
+    edge_device._resolve_drone_and_source(args, _PARSER)
+    today_refused = _refused_by_todays_start_path(args)
+    args = _PARSER.parse_args(argv)
+    edge_device._resolve_drone_and_source(args, _PARSER)
+    try:
+        edge_device._resolve_edge_start(args, _Log(), argv=argv, parser=_PARSER)
+        a3_refused = False
+    except SystemExit:
+        a3_refused = True
+    if outcome == "today":
+        assert today_refused and a3_refused
+    elif outcome == "new":
+        assert not today_refused and a3_refused
+    else:
+        assert not today_refused and not a3_refused

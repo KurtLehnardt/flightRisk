@@ -1596,7 +1596,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--airframe", type=str, default=None,
-        help="The drone model, when neither --model nor $FLIGHTRISK_MODEL names one",
+        help="The drone model, when neither --model nor $FLIGHTRISK_MODEL names one (default $FLIGHTRISK_AIRFRAME)",
     )
     parser.add_argument(
         "--confirm-less-safe", type=_parse_confirm_less_safe, action="append", default=None, metavar="ID=VALUE",
