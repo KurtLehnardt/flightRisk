@@ -657,13 +657,14 @@ UI-6, ROLES-1 to ROLES-12, MOB-9; AC-10 → PAR, RES, CONF, FACT and C5 items.
   `registry.py` and `backends.py` imports a Tello module, compares against a Tello adapter or model name, or
   uses a Tello-only constant, except the named permanent exemptions; the remaining violations are a baseline
   that may only shrink. Test: `tests/test_tello_coupling.py`.
-- [ ] SEAM-10 [XCb] Runtime code gets today's accepted environment and flag ranges from
+- [ ] SEAM-10 [A3] Runtime code gets today's accepted environment and flag ranges from
   `flightrisk/params/today.py`, which equals `today_accepts_from_golden` of the golden file exactly, so
   adopting `resolve_unit` keeps today's range checks. Every runtime call of `resolve_unit` passes today's
-  accepted ranges from `params/today.py`, never `None`. Test: `tests/test_param_today.py`, which also runs an
-  AST check over `flightrisk/` that every `resolve_unit` call names the `today_accepts` keyword, that its value
-  comes from `flightrisk.params.today`, that it is not a literal `None`, and that the call has no `**`
-  arguments; the check follows import aliases and wrappers that forward a `None` default.
+  accepted ranges from `params/today.py`, never `None`. Test: `tests/test_param_today.py`, which lands with
+  A3's `flightrisk/params/today.py` and also runs an AST check over `flightrisk/` that every `resolve_unit` call
+  names the `today_accepts` keyword, that its value comes from `flightrisk.params.today`, that it is not a
+  literal `None`, and that the call has no `**` arguments; the check follows import aliases and wrappers that
+  forward a `None` default.
 
 ### Edge (EDGE)
 
