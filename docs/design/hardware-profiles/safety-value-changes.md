@@ -96,3 +96,24 @@ unless every later hash is also recomputed; CODEOWNERS review of this file is th
 - SHA-256 table: 368dff8eb8f05ff05ba5ad8b850e07ed9e731a6d9a2419556cef8e80ed3f20f8
 - SHA-256 golden: 1e201af91affbe8345b11b4fca93c128541f119b1a138e23800ffbb09788f3f2
 - SHA-256 allowlist: dd1af99c5e3615ed79b51d9efbed782d2f3abf41cd3855f08831cdde67c68621
+
+## PR-A3.5: Tello adapter and fake constants from the registry
+
+- Value: none changed.
+- Old and new: not applicable.
+- Reason: PR-A3.5 moves 29 + 3 + 2 deferred allowlist entries to registry lookups with no value change: 29 in
+  `flightrisk/drone/tello.py`, 3 in `flightrisk/drone/tello_bound.py` (the command, state and video ports) and 2
+  in `flightrisk/drone/fake.py` (`move.min_cm` and `move.max_cm`). Each constant keeps its name, value and type.
+  One of the 29 is the `max_altitude_m=10` of `TelloController.__init__`, now derived from row 8
+  (`envelope.max_altitude_cm`, 1000 cm in the Tello column) as whole metres, an int. It is FlightRisk's stricter
+  10 m ceiling, not an SDK limit. Two `tello.py` entries are reclassified from deferred to sdk under section
+  3.3, because they have no registry row: `_SETTLE_MIN_GAP_S` and `_SETTLE_BURST_GAP_S`. `_LAND_STALL_PACKETS` is
+  FlightRisk's own land-resend threshold, not an SDK value, so it stays deferred for phase C1 (the return and
+  landing state machine that owns terminal landing).
+  The five module copies of the registry lookup are replaced by `model_default` in
+  `flightrisk/params/defaults.py`.
+- Section 27 item: none.
+- SHA-256 previous: bc54b498c0348beb1e6391edbfad011c4fd54373ea69935773d8d262e61dc523
+- SHA-256 table: 368dff8eb8f05ff05ba5ad8b850e07ed9e731a6d9a2419556cef8e80ed3f20f8
+- SHA-256 golden: 1e201af91affbe8345b11b4fca93c128541f119b1a138e23800ffbb09788f3f2
+- SHA-256 allowlist: 2d1f684e22577a885abe706fbcada993b9609871ac50cec3a5ff1ff329becaf4

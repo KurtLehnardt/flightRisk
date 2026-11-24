@@ -62,6 +62,8 @@ from flightrisk.drone.udp_endpoints import (
     wildcard_holders,
 )
 from flightrisk.obs_log import Throttle, log_event, notice
+from flightrisk.params import table as _registry
+from flightrisk.params.defaults import model_default
 
 _log = logging.getLogger(__name__)
 
@@ -85,10 +87,12 @@ __all__ = [
 #: a 4-byte integer in network byte order.
 IP_UNICAST_IF = 31
 
+
+
 #: The Tello's UDP ports: commands and replies, state, and video.
-TELLO_CMD_PORT = 8889
-TELLO_STATE_PORT = 8890
-TELLO_VIDEO_PORT = 11111
+TELLO_CMD_PORT = model_default("tello_sdk.command_port", _registry.T)
+TELLO_STATE_PORT = model_default("tello_sdk.state_port", _registry.T)
+TELLO_VIDEO_PORT = model_default("tello_sdk.video_port", _registry.T)
 
 # Receiver threads wake this often to notice that their socket was closed.
 _RECV_POLL_S = 0.2
