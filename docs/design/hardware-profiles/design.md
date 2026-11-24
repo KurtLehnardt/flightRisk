@@ -1193,6 +1193,36 @@ every "from <PR>" tag in `parameters.md` matches an item below naming that PR an
   line naming each variable (N-10, FACT-3). Environment and flag ranges stay today's (SEAM-10). Assertions:
   any existing test that starts an edge, a ground or a launcher with one of the pinned combinations, named in
   the description. For A5 the assertions are `tests/test_launcher_commands.py:67` and `:119-121`.
+  A3's detail: the edge resolves its unit at start with `resolve_unit`, so before it contacts the drone it
+  refuses these ranges of input, which a real edge start accepts today. K-3 on the Tello:
+  `FLIGHTRISK_MIN_TAKEOFF_BATTERY` from 15 to 25 %, both included, because a takeoff minimum at or under the
+  25 % return floor lets a drone take off with its battery already at the level where it must return. Today
+  accepts 15 to 100 % and keeps a fraction, so 25.5 and 26 are still accepted; no variable sets the Tello's
+  return floor. K-6 on a Tello or a MAVLink unit: `FLIGHTRISK_LINK_LOSS_LAND_S` above 0 and under 1.5 s,
+  because a detect time under 1.5 times the 1 s heartbeat interval can trigger on one missed heartbeat plus
+  0.5 s of jitter. Today accepts any value above 0, so 1.5 s and more are still accepted. K-8 on the Tello:
+  any `FLIGHTRISK_CEILING_CM` minus `FLIGHTRISK_CEILING_MARGIN_CM` under 130 cm, the highest of the Tello's
+  altitude slots (100 and 130 cm) or `--alt-slot` when that is higher, that today accepts. Today accepts a
+  ceiling minus margin of at least the start's slot (`--alt-slot`, 100 cm by default) and at least the 50 cm
+  lowest slot. So with no `--alt-slot`, 100 to 129 cm left under the ceiling is newly refused (for example a
+  margin of 871 to 900 cm under a 1000 cm ceiling); with an `--alt-slot` under 130 cm, from that slot (or
+  50 cm, if higher) to 129 cm; with an `--alt-slot` of 130 cm or more, nothing. K-12 and the Tello
+  temperature pair: none newly refused, because today's start checks already refuse every input the probes
+  find. Today's start checks also refuse the other inputs of `ACCEPTED_TODAY_REFUSED_BY_RESOLVE_UNIT` in
+  `tests/test_param_parity.py`, so refusing them changes nothing; `tests/test_edge_a3_changes.py` pins the
+  split and sweeps each range above at both of its ends. The edge also now reads the params file
+  (`~/.flightrisk/params.json`, or `FLIGHTRISK_PARAMS_FILE`) and the inventory (`FLIGHTRISK_INVENTORY_FILE`),
+  which today's edge does not read. A file that is present but cannot be read or is not valid (bad JSON, a
+  wrong shape or version, or a directory) now stops the start, as do an inventory unit whose model does not
+  fit the backend and a safety feature stored off in either file. A file that is absent is treated as empty,
+  so a start without one is unchanged. The launcher preflight and `docs/launcher.md` row still let a Tello
+  takeoff minimum of 15 to 25 % pass until A4 aligns the check (tasks.md, A4); the edge refuses it at start.
+  A production MAVLink unit also ignores the 9 overrides of the Tello obstacle-sensor facts that a MAVLink
+  edge honours today, and logs one line naming each ignored variable (FACT-3, N-10). Until B1 adds the SITL
+  board identity check (CAP-6), only the fake adapter counts as simulated, so every MAVLink unit counts as
+  production. A test-adapter fact is never classified or logged as less safe, from any layer or value
+  (R7, R8). Assertions: `tests/test_param_resolver.py:142` (a fact's off value is applied but no longer
+  marked less safe).
 - **A3:** 53. A MAVLink `generic_multirotor` no longer declares an airframe maximum altitude:
   `MavlinkFleetDrone` drops its 120 m declaration (`int(FIELD_LIMITS.max_alt_slot_cm / 100)` in
   `flightrisk/drone/mavlink_fleet.py`), and row 8 (`envelope.max_altitude_cm`) of `generic_multirotor` records
