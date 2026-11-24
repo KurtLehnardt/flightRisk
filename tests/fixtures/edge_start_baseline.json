@@ -1,0 +1,3318 @@
+{
+ "probes": {
+  "0000|tello|FLIGHTRISK_GEOFENCE_CM|env|'-5'": "refused",
+  "0001|tello|FLIGHTRISK_GEOFENCE_CM|env|'0'": "refused",
+  "0002|tello|FLIGHTRISK_GEOFENCE_CM|env|'1'": 1.0,
+  "0003|tello|FLIGHTRISK_GEOFENCE_CM|env|'39'": 39.0,
+  "0004|tello|FLIGHTRISK_GEOFENCE_CM|env|'40'": 40.0,
+  "0005|tello|FLIGHTRISK_GEOFENCE_CM|env|'500'": 500.0,
+  "0006|tello|FLIGHTRISK_GEOFENCE_CM|env|'5000'": 5000.0,
+  "0007|tello|FLIGHTRISK_GEOFENCE_CM|env|'5001'": 5001.0,
+  "0008|tello|FLIGHTRISK_GEOFENCE_CM|env|'100000'": 100000.0,
+  "0009|tello|FLIGHTRISK_GEOFENCE_CM|env|'abc'": "refused",
+  "0010|tello|FLIGHTRISK_GEOFENCE_CM|env|''": 500.0,
+  "0011|tello|FLIGHTRISK_GEOFENCE_CM|env|' '": 500.0,
+  "0012|tello|FLIGHTRISK_GEOFENCE_CM|env|'nan'": "refused",
+  "0013|tello|FLIGHTRISK_GEOFENCE_CM|env|'inf'": "refused",
+  "0014|generic_multirotor|FLIGHTRISK_GEOFENCE_CM|env|'150'": 3000.0,
+  "0015|generic_multirotor|FLIGHTRISK_GEOFENCE_CM|env|'99999'": 3000.0,
+  "0016|generic_multirotor|FLIGHTRISK_GEOFENCE_CM|env|'-1'": 3000.0,
+  "0017|generic_multirotor|FLIGHTRISK_GEOFENCE_CM|env|'abc'": 3000.0,
+  "0018|generic_multirotor|FLIGHTRISK_GEOFENCE_CM|env|''": 3000.0,
+  "0019|generic_multirotor|FLIGHTRISK_GEOFENCE_CM|env|' '": 3000.0,
+  "0020|generic_multirotor|FLIGHTRISK_GEOFENCE_CM|env|'nan'": 3000.0,
+  "0021|generic_multirotor|FLIGHTRISK_GEOFENCE_CM|env|'inf'": 3000.0,
+  "0022|tello|FLIGHTRISK_CEILING_CM|env|'149'": "refused",
+  "0023|tello|FLIGHTRISK_CEILING_CM|env|'150'": 150.0,
+  "0024|tello|FLIGHTRISK_CEILING_CM|env|'200'": 200.0,
+  "0025|tello|FLIGHTRISK_CEILING_CM|env|'1000'": 1000.0,
+  "0026|tello|FLIGHTRISK_CEILING_CM|env|'1001'": "refused",
+  "0027|tello|FLIGHTRISK_CEILING_CM|env|'150.5'": 150.5,
+  "0028|tello|FLIGHTRISK_CEILING_CM|env|'1e+308'": "refused",
+  "0029|tello|FLIGHTRISK_CEILING_CM|env|'abc'": "refused",
+  "0030|tello|FLIGHTRISK_CEILING_CM|env|''": 200.0,
+  "0031|tello|FLIGHTRISK_CEILING_CM|env|' '": 200.0,
+  "0032|tello|FLIGHTRISK_CEILING_CM|env|'nan'": "refused",
+  "0033|tello|FLIGHTRISK_CEILING_CM|env|'inf'": "refused",
+  "0034|generic_multirotor|FLIGHTRISK_CEILING_CM|env|'150'": 3000.0,
+  "0035|generic_multirotor|FLIGHTRISK_CEILING_CM|env|'99999'": 3000.0,
+  "0036|generic_multirotor|FLIGHTRISK_CEILING_CM|env|'-1'": 3000.0,
+  "0037|generic_multirotor|FLIGHTRISK_CEILING_CM|env|'abc'": 3000.0,
+  "0038|generic_multirotor|FLIGHTRISK_CEILING_CM|env|''": 3000.0,
+  "0039|generic_multirotor|FLIGHTRISK_CEILING_CM|env|' '": 3000.0,
+  "0040|generic_multirotor|FLIGHTRISK_CEILING_CM|env|'nan'": 3000.0,
+  "0041|generic_multirotor|FLIGHTRISK_CEILING_CM|env|'inf'": 3000.0,
+  "0042|tello|FLIGHTRISK_CEILING_MARGIN_CM|env|'29'": "refused",
+  "0043|tello|FLIGHTRISK_CEILING_MARGIN_CM|env|'30'": 30.0,
+  "0044|tello|FLIGHTRISK_CEILING_MARGIN_CM|env|'60'": 60.0,
+  "0045|tello|FLIGHTRISK_CEILING_MARGIN_CM|env|'500'": 500.0,
+  "0046|tello|FLIGHTRISK_CEILING_MARGIN_CM|env|'501'": 501.0,
+  "0047|tello|FLIGHTRISK_CEILING_MARGIN_CM|env|'900'": 900.0,
+  "0048|tello|FLIGHTRISK_CEILING_MARGIN_CM|env|'abc'": "refused",
+  "0049|tello|FLIGHTRISK_CEILING_MARGIN_CM|env|''": 60.0,
+  "0050|tello|FLIGHTRISK_CEILING_MARGIN_CM|env|' '": 60.0,
+  "0051|tello|FLIGHTRISK_CEILING_MARGIN_CM|env|'nan'": "refused",
+  "0052|tello|FLIGHTRISK_CEILING_MARGIN_CM|env|'inf'": "refused",
+  "0053|generic_multirotor|FLIGHTRISK_CEILING_MARGIN_CM|env|'150'": 500.0,
+  "0054|generic_multirotor|FLIGHTRISK_CEILING_MARGIN_CM|env|'99999'": 500.0,
+  "0055|generic_multirotor|FLIGHTRISK_CEILING_MARGIN_CM|env|'-1'": 500.0,
+  "0056|generic_multirotor|FLIGHTRISK_CEILING_MARGIN_CM|env|'abc'": 500.0,
+  "0057|generic_multirotor|FLIGHTRISK_CEILING_MARGIN_CM|env|''": 500.0,
+  "0058|generic_multirotor|FLIGHTRISK_CEILING_MARGIN_CM|env|' '": 500.0,
+  "0059|generic_multirotor|FLIGHTRISK_CEILING_MARGIN_CM|env|'nan'": 500.0,
+  "0060|generic_multirotor|FLIGHTRISK_CEILING_MARGIN_CM|env|'inf'": 500.0,
+  "0061|tello|--alt-slot|flag|'49'": "refused",
+  "0062|tello|--alt-slot|flag|'50'": 50.0,
+  "0063|tello|--alt-slot|flag|'100'": 100.0,
+  "0064|tello|--alt-slot|flag|'500'": 500.0,
+  "0065|tello|--alt-slot|flag|'501'": "refused",
+  "0066|tello|--alt-slot|flag|'5'": 500.0,
+  "0067|tello|--alt-slot|flag|'1.6'": 160.0,
+  "0068|tello|--alt-slot|flag|'0.4'": "refused",
+  "0069|tello|--alt-slot|flag|'100.5'": 100.5,
+  "0070|tello|--alt-slot|flag|'0'": "refused",
+  "0071|tello|--alt-slot|flag|'-5'": "refused",
+  "0072|tello|--alt-slot|flag|'abc'": "refused",
+  "0073|tello|--alt-slot|flag|''": "refused",
+  "0074|generic_multirotor|FLIGHTRISK_FIELD_GEOFENCE_M|env|'-1'": "refused",
+  "0075|generic_multirotor|FLIGHTRISK_FIELD_GEOFENCE_M|env|'0'": "refused",
+  "0076|generic_multirotor|FLIGHTRISK_FIELD_GEOFENCE_M|env|'4.99'": 499.0,
+  "0077|generic_multirotor|FLIGHTRISK_FIELD_GEOFENCE_M|env|'5'": 500.0,
+  "0078|generic_multirotor|FLIGHTRISK_FIELD_GEOFENCE_M|env|'30'": 3000.0,
+  "0079|generic_multirotor|FLIGHTRISK_FIELD_GEOFENCE_M|env|'500'": 50000.0,
+  "0080|generic_multirotor|FLIGHTRISK_FIELD_GEOFENCE_M|env|'500.01'": "refused",
+  "0081|generic_multirotor|FLIGHTRISK_FIELD_GEOFENCE_M|env|'1.234'": 123.4,
+  "0082|generic_multirotor|FLIGHTRISK_FIELD_GEOFENCE_M|env|'1e+307'": "refused",
+  "0083|generic_multirotor|FLIGHTRISK_FIELD_GEOFENCE_M|env|'abc'": "refused",
+  "0084|generic_multirotor|FLIGHTRISK_FIELD_GEOFENCE_M|env|''": 3000,
+  "0085|generic_multirotor|FLIGHTRISK_FIELD_GEOFENCE_M|env|' '": 3000,
+  "0086|generic_multirotor|FLIGHTRISK_FIELD_GEOFENCE_M|env|'nan'": "refused",
+  "0087|generic_multirotor|FLIGHTRISK_FIELD_GEOFENCE_M|env|'inf'": "refused",
+  "0088|generic_multirotor|--geofence-m|flag|'-1'": "refused",
+  "0089|generic_multirotor|--geofence-m|flag|'0'": "refused",
+  "0090|generic_multirotor|--geofence-m|flag|'4.99'": 499.0,
+  "0091|generic_multirotor|--geofence-m|flag|'5'": 500.0,
+  "0092|generic_multirotor|--geofence-m|flag|'30'": 3000.0,
+  "0093|generic_multirotor|--geofence-m|flag|'500'": 50000.0,
+  "0094|generic_multirotor|--geofence-m|flag|'500.01'": "refused",
+  "0095|generic_multirotor|--geofence-m|flag|'1.234'": 123.4,
+  "0096|generic_multirotor|--geofence-m|flag|'1e+307'": "refused",
+  "0097|generic_multirotor|--geofence-m|flag|'abc'": "refused",
+  "0098|generic_multirotor|--geofence-m|flag|'nan'": "refused",
+  "0099|generic_multirotor|--geofence-m|flag|'inf'": "refused",
+  "0100|generic_multirotor|FLIGHTRISK_FIELD_CEILING_M|env|'9.99'": "refused",
+  "0101|generic_multirotor|FLIGHTRISK_FIELD_CEILING_M|env|'10'": 1000.0,
+  "0102|generic_multirotor|FLIGHTRISK_FIELD_CEILING_M|env|'30'": 3000.0,
+  "0103|generic_multirotor|FLIGHTRISK_FIELD_CEILING_M|env|'120'": 12000.0,
+  "0104|generic_multirotor|FLIGHTRISK_FIELD_CEILING_M|env|'120.01'": "refused",
+  "0105|generic_multirotor|FLIGHTRISK_FIELD_CEILING_M|env|'12.345'": 1234.5,
+  "0106|generic_multirotor|FLIGHTRISK_FIELD_CEILING_M|env|'1e+307'": "refused",
+  "0107|generic_multirotor|FLIGHTRISK_FIELD_CEILING_M|env|'abc'": "refused",
+  "0108|generic_multirotor|FLIGHTRISK_FIELD_CEILING_M|env|''": 3000,
+  "0109|generic_multirotor|FLIGHTRISK_FIELD_CEILING_M|env|' '": 3000,
+  "0110|generic_multirotor|FLIGHTRISK_FIELD_CEILING_M|env|'nan'": "refused",
+  "0111|generic_multirotor|FLIGHTRISK_FIELD_CEILING_M|env|'inf'": "refused",
+  "0112|generic_multirotor|--ceiling-m|flag|'9.99'": "refused",
+  "0113|generic_multirotor|--ceiling-m|flag|'10'": 1000.0,
+  "0114|generic_multirotor|--ceiling-m|flag|'30'": 3000.0,
+  "0115|generic_multirotor|--ceiling-m|flag|'120'": 12000.0,
+  "0116|generic_multirotor|--ceiling-m|flag|'120.01'": "refused",
+  "0117|generic_multirotor|--ceiling-m|flag|'12.345'": 1234.5,
+  "0118|generic_multirotor|--ceiling-m|flag|'1e+307'": "refused",
+  "0119|generic_multirotor|--ceiling-m|flag|'abc'": "refused",
+  "0120|generic_multirotor|--ceiling-m|flag|'nan'": "refused",
+  "0121|generic_multirotor|--ceiling-m|flag|'inf'": "refused",
+  "0122|generic_multirotor|FLIGHTRISK_FIELD_CEILING_MARGIN_M|env|'2.99'": "refused",
+  "0123|generic_multirotor|FLIGHTRISK_FIELD_CEILING_MARGIN_M|env|'3'": 300.0,
+  "0124|generic_multirotor|FLIGHTRISK_FIELD_CEILING_MARGIN_M|env|'5'": 500.0,
+  "0125|generic_multirotor|FLIGHTRISK_FIELD_CEILING_MARGIN_M|env|'30'": 3000.0,
+  "0126|generic_multirotor|FLIGHTRISK_FIELD_CEILING_MARGIN_M|env|'30.01'": 3001.0,
+  "0127|generic_multirotor|FLIGHTRISK_FIELD_CEILING_MARGIN_M|env|'1e+307'": "refused",
+  "0128|generic_multirotor|FLIGHTRISK_FIELD_CEILING_MARGIN_M|env|'abc'": "refused",
+  "0129|generic_multirotor|FLIGHTRISK_FIELD_CEILING_MARGIN_M|env|''": 500,
+  "0130|generic_multirotor|FLIGHTRISK_FIELD_CEILING_MARGIN_M|env|' '": 500,
+  "0131|generic_multirotor|FLIGHTRISK_FIELD_CEILING_MARGIN_M|env|'nan'": "refused",
+  "0132|generic_multirotor|FLIGHTRISK_FIELD_CEILING_MARGIN_M|env|'inf'": "refused",
+  "0133|generic_multirotor|--ceiling-margin-m|flag|'2.99'": "refused",
+  "0134|generic_multirotor|--ceiling-margin-m|flag|'3'": 300.0,
+  "0135|generic_multirotor|--ceiling-margin-m|flag|'5'": 500.0,
+  "0136|generic_multirotor|--ceiling-margin-m|flag|'30'": 3000.0,
+  "0137|generic_multirotor|--ceiling-margin-m|flag|'30.01'": 3001.0,
+  "0138|generic_multirotor|--ceiling-margin-m|flag|'1e+307'": "refused",
+  "0139|generic_multirotor|--ceiling-margin-m|flag|'abc'": "refused",
+  "0140|generic_multirotor|--ceiling-margin-m|flag|'nan'": "refused",
+  "0141|generic_multirotor|--ceiling-margin-m|flag|'inf'": "refused",
+  "0142|generic_multirotor|FLIGHTRISK_FIELD_ALT_SLOT_M|env|'9.99'": "refused",
+  "0143|generic_multirotor|FLIGHTRISK_FIELD_ALT_SLOT_M|env|'10'": 1000.0,
+  "0144|generic_multirotor|FLIGHTRISK_FIELD_ALT_SLOT_M|env|'15'": 1500.0,
+  "0145|generic_multirotor|FLIGHTRISK_FIELD_ALT_SLOT_M|env|'120'": 12000.0,
+  "0146|generic_multirotor|FLIGHTRISK_FIELD_ALT_SLOT_M|env|'120.01'": "refused",
+  "0147|generic_multirotor|FLIGHTRISK_FIELD_ALT_SLOT_M|env|'1e+307'": "refused",
+  "0148|generic_multirotor|FLIGHTRISK_FIELD_ALT_SLOT_M|env|'abc'": "refused",
+  "0149|generic_multirotor|FLIGHTRISK_FIELD_ALT_SLOT_M|env|''": 1500,
+  "0150|generic_multirotor|FLIGHTRISK_FIELD_ALT_SLOT_M|env|' '": 1500,
+  "0151|generic_multirotor|FLIGHTRISK_FIELD_ALT_SLOT_M|env|'nan'": "refused",
+  "0152|generic_multirotor|FLIGHTRISK_FIELD_ALT_SLOT_M|env|'inf'": "refused",
+  "0153|generic_multirotor|--alt-slot-m|flag|'9.99'": "refused",
+  "0154|generic_multirotor|--alt-slot-m|flag|'10'": 1000.0,
+  "0155|generic_multirotor|--alt-slot-m|flag|'15'": 1500.0,
+  "0156|generic_multirotor|--alt-slot-m|flag|'120'": 12000.0,
+  "0157|generic_multirotor|--alt-slot-m|flag|'120.01'": "refused",
+  "0158|generic_multirotor|--alt-slot-m|flag|'1e+307'": "refused",
+  "0159|generic_multirotor|--alt-slot-m|flag|'abc'": "refused",
+  "0160|generic_multirotor|--alt-slot-m|flag|'nan'": "refused",
+  "0161|generic_multirotor|--alt-slot-m|flag|'inf'": "refused",
+  "0162|tello|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'14'": "refused",
+  "0163|tello|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'15'": 15.0,
+  "0164|tello|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'19'": 19.0,
+  "0165|tello|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'20'": 20.0,
+  "0166|tello|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'30'": 30.0,
+  "0167|tello|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'95'": 95.0,
+  "0168|tello|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'96'": 96.0,
+  "0169|tello|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'100'": 100.0,
+  "0170|tello|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'101'": "refused",
+  "0171|tello|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'30.5'": 30.5,
+  "0172|tello|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'-1'": "refused",
+  "0173|tello|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'abc'": "refused",
+  "0174|tello|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|''": 30.0,
+  "0175|tello|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|' '": 30.0,
+  "0176|tello|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'nan'": "refused",
+  "0177|tello|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'inf'": "refused",
+  "0178|generic_multirotor|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'14'": "refused",
+  "0179|generic_multirotor|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'15'": 15.0,
+  "0180|generic_multirotor|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'19'": 19.0,
+  "0181|generic_multirotor|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'20'": 20.0,
+  "0182|generic_multirotor|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'30'": 30.0,
+  "0183|generic_multirotor|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'95'": 95.0,
+  "0184|generic_multirotor|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'96'": 96.0,
+  "0185|generic_multirotor|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'100'": 100.0,
+  "0186|generic_multirotor|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'101'": "refused",
+  "0187|generic_multirotor|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'30.5'": 30.5,
+  "0188|generic_multirotor|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'-1'": "refused",
+  "0189|generic_multirotor|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'abc'": "refused",
+  "0190|generic_multirotor|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|''": 30.0,
+  "0191|generic_multirotor|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|' '": 30.0,
+  "0192|generic_multirotor|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'nan'": "refused",
+  "0193|generic_multirotor|FLIGHTRISK_MIN_TAKEOFF_BATTERY|env|'inf'": "refused",
+  "0194|tello|FLIGHTRISK_LINK_LOSS_LAND_S|env|'-1'": "refused",
+  "0195|tello|FLIGHTRISK_LINK_LOSS_LAND_S|env|'0'": "refused",
+  "0196|tello|FLIGHTRISK_LINK_LOSS_LAND_S|env|'1.4'": 1.4,
+  "0197|tello|FLIGHTRISK_LINK_LOSS_LAND_S|env|'1.5'": 1.5,
+  "0198|tello|FLIGHTRISK_LINK_LOSS_LAND_S|env|'3'": 3.0,
+  "0199|tello|FLIGHTRISK_LINK_LOSS_LAND_S|env|'10'": 10.0,
+  "0200|tello|FLIGHTRISK_LINK_LOSS_LAND_S|env|'10.1'": 10.1,
+  "0201|tello|FLIGHTRISK_LINK_LOSS_LAND_S|env|'30'": 30.0,
+  "0202|tello|FLIGHTRISK_LINK_LOSS_LAND_S|env|'31'": 31.0,
+  "0203|tello|FLIGHTRISK_LINK_LOSS_LAND_S|env|'abc'": "refused",
+  "0204|tello|FLIGHTRISK_LINK_LOSS_LAND_S|env|''": 3.0,
+  "0205|tello|FLIGHTRISK_LINK_LOSS_LAND_S|env|' '": 3.0,
+  "0206|tello|FLIGHTRISK_LINK_LOSS_LAND_S|env|'nan'": "refused",
+  "0207|tello|FLIGHTRISK_LINK_LOSS_LAND_S|env|'inf'": "refused",
+  "0208|generic_multirotor|FLIGHTRISK_LINK_LOSS_LAND_S|env|'-1'": "refused",
+  "0209|generic_multirotor|FLIGHTRISK_LINK_LOSS_LAND_S|env|'0'": "refused",
+  "0210|generic_multirotor|FLIGHTRISK_LINK_LOSS_LAND_S|env|'1.4'": 1.4,
+  "0211|generic_multirotor|FLIGHTRISK_LINK_LOSS_LAND_S|env|'1.5'": 1.5,
+  "0212|generic_multirotor|FLIGHTRISK_LINK_LOSS_LAND_S|env|'3'": 3.0,
+  "0213|generic_multirotor|FLIGHTRISK_LINK_LOSS_LAND_S|env|'10'": 10.0,
+  "0214|generic_multirotor|FLIGHTRISK_LINK_LOSS_LAND_S|env|'10.1'": 10.1,
+  "0215|generic_multirotor|FLIGHTRISK_LINK_LOSS_LAND_S|env|'30'": 30.0,
+  "0216|generic_multirotor|FLIGHTRISK_LINK_LOSS_LAND_S|env|'31'": 31.0,
+  "0217|generic_multirotor|FLIGHTRISK_LINK_LOSS_LAND_S|env|'abc'": "refused",
+  "0218|generic_multirotor|FLIGHTRISK_LINK_LOSS_LAND_S|env|''": 3.0,
+  "0219|generic_multirotor|FLIGHTRISK_LINK_LOSS_LAND_S|env|' '": 3.0,
+  "0220|generic_multirotor|FLIGHTRISK_LINK_LOSS_LAND_S|env|'nan'": "refused",
+  "0221|generic_multirotor|FLIGHTRISK_LINK_LOSS_LAND_S|env|'inf'": "refused",
+  "0222|generic_multirotor|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|'-1'": "refused",
+  "0223|generic_multirotor|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|'0'": 0.0,
+  "0224|generic_multirotor|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|'1.4'": 1.4,
+  "0225|generic_multirotor|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|'1.5'": 1.5,
+  "0226|generic_multirotor|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|'10'": 10.0,
+  "0227|generic_multirotor|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|'30'": 30.0,
+  "0228|generic_multirotor|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|'30.1'": 30.1,
+  "0229|generic_multirotor|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|'abc'": "refused",
+  "0230|generic_multirotor|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|''": 10.0,
+  "0231|generic_multirotor|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|' '": 10.0,
+  "0232|generic_multirotor|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|'nan'": "refused",
+  "0233|generic_multirotor|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|'inf'": "refused",
+  "0234|tello|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|'-1'": 0.0,
+  "0235|tello|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|'0'": 0.0,
+  "0236|tello|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|'1.4'": 0.0,
+  "0237|tello|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|'1.5'": 0.0,
+  "0238|tello|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|'10'": 0.0,
+  "0239|tello|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|'30'": 0.0,
+  "0240|tello|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|'30.1'": 0.0,
+  "0241|tello|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|'abc'": 0.0,
+  "0242|tello|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|''": 0.0,
+  "0243|tello|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|' '": 0.0,
+  "0244|tello|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|'nan'": 0.0,
+  "0245|tello|FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S|env|'inf'": 0.0,
+  "0246|generic_multirotor|--link-loss-hold-s|flag|'-1'": "refused",
+  "0247|generic_multirotor|--link-loss-hold-s|flag|'0'": 0.0,
+  "0248|generic_multirotor|--link-loss-hold-s|flag|'1.4'": 1.4,
+  "0249|generic_multirotor|--link-loss-hold-s|flag|'1.5'": 1.5,
+  "0250|generic_multirotor|--link-loss-hold-s|flag|'10'": 10.0,
+  "0251|generic_multirotor|--link-loss-hold-s|flag|'30'": 30.0,
+  "0252|generic_multirotor|--link-loss-hold-s|flag|'30.1'": 30.1,
+  "0253|generic_multirotor|--link-loss-hold-s|flag|'abc'": "refused",
+  "0254|generic_multirotor|--link-loss-hold-s|flag|'nan'": "refused",
+  "0255|generic_multirotor|FLIGHTRISK_FAILSAFE_ACTION|env|'rtl'": "return",
+  "0256|generic_multirotor|FLIGHTRISK_FAILSAFE_ACTION|env|'land'": "land",
+  "0257|generic_multirotor|FLIGHTRISK_FAILSAFE_ACTION|env|'RTL'": "return",
+  "0258|generic_multirotor|FLIGHTRISK_FAILSAFE_ACTION|env|' Land '": "land",
+  "0259|generic_multirotor|FLIGHTRISK_FAILSAFE_ACTION|env|'return'": "refused",
+  "0260|generic_multirotor|FLIGHTRISK_FAILSAFE_ACTION|env|'hover'": "refused",
+  "0261|generic_multirotor|FLIGHTRISK_FAILSAFE_ACTION|env|'abc'": "refused",
+  "0262|generic_multirotor|FLIGHTRISK_FAILSAFE_ACTION|env|''": "return",
+  "0263|generic_multirotor|FLIGHTRISK_FAILSAFE_ACTION|env|' '": "return",
+  "0264|generic_multirotor|FLIGHTRISK_FAILSAFE_ACTION|env|'nan'": "refused",
+  "0265|generic_multirotor|FLIGHTRISK_FAILSAFE_ACTION|env|'inf'": "refused",
+  "0266|generic_multirotor|--failsafe-action|flag|'rtl'": "return",
+  "0267|generic_multirotor|--failsafe-action|flag|'land'": "land",
+  "0268|generic_multirotor|--failsafe-action|flag|'RTL'": "refused",
+  "0269|generic_multirotor|--failsafe-action|flag|'return'": "refused",
+  "0270|generic_multirotor|--failsafe-action|flag|'hover'": "refused",
+  "0271|tello|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|'-5'": 30.0,
+  "0272|tello|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|'0'": 30.0,
+  "0273|tello|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|'29'": 30.0,
+  "0274|tello|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|'30'": 30.0,
+  "0275|tello|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|'120'": 120.0,
+  "0276|tello|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|'600'": 600.0,
+  "0277|tello|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|'601'": 601.0,
+  "0278|tello|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|'45.5'": 45.5,
+  "0279|tello|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|'abc'": "refused",
+  "0280|tello|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|''": 120.0,
+  "0281|tello|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|' '": 120.0,
+  "0282|tello|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|'nan'": "refused",
+  "0283|tello|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|'inf'": "refused",
+  "0284|tello|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|'-5'": 5.0,
+  "0285|tello|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|'4'": 5.0,
+  "0286|tello|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|'5'": 5.0,
+  "0287|tello|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|'30'": 30.0,
+  "0288|tello|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|'300'": 300.0,
+  "0289|tello|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|'301'": 301.0,
+  "0290|tello|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|'7.5'": 7.5,
+  "0291|tello|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|'abc'": "refused",
+  "0292|tello|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|''": 30.0,
+  "0293|tello|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|' '": 30.0,
+  "0294|tello|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|'nan'": "refused",
+  "0295|tello|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|'inf'": "refused",
+  "0296|tello|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|'19'": "refused",
+  "0297|tello|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|'20'": 20,
+  "0298|tello|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|'300'": 300,
+  "0299|tello|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|'5000'": 5000,
+  "0300|tello|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|'5001'": "refused",
+  "0301|tello|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|'300.5'": "refused",
+  "0302|tello|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|'300.0'": 300,
+  "0303|tello|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|'abc'": "refused",
+  "0304|tello|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|''": "unset",
+  "0305|tello|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|' '": "unset",
+  "0306|tello|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|'nan'": "refused",
+  "0307|tello|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|'inf'": "refused",
+  "0308|generic_multirotor|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|'-5'": 30.0,
+  "0309|generic_multirotor|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|'0'": 30.0,
+  "0310|generic_multirotor|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|'29'": 30.0,
+  "0311|generic_multirotor|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|'30'": 30.0,
+  "0312|generic_multirotor|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|'120'": 120.0,
+  "0313|generic_multirotor|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|'600'": 600.0,
+  "0314|generic_multirotor|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|'601'": 601.0,
+  "0315|generic_multirotor|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|'45.5'": 45.5,
+  "0316|generic_multirotor|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|'abc'": "refused",
+  "0317|generic_multirotor|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|''": 120.0,
+  "0318|generic_multirotor|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|' '": 120.0,
+  "0319|generic_multirotor|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|'nan'": "refused",
+  "0320|generic_multirotor|FLIGHTRISK_MANUAL_ORPHAN_LAND_S|env|'inf'": "refused",
+  "0321|generic_multirotor|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|'-5'": 5.0,
+  "0322|generic_multirotor|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|'4'": 5.0,
+  "0323|generic_multirotor|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|'5'": 5.0,
+  "0324|generic_multirotor|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|'30'": 30.0,
+  "0325|generic_multirotor|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|'300'": 300.0,
+  "0326|generic_multirotor|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|'301'": 301.0,
+  "0327|generic_multirotor|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|'7.5'": 7.5,
+  "0328|generic_multirotor|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|'abc'": "refused",
+  "0329|generic_multirotor|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|''": 30.0,
+  "0330|generic_multirotor|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|' '": 30.0,
+  "0331|generic_multirotor|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|'nan'": "refused",
+  "0332|generic_multirotor|FLIGHTRISK_MANUAL_LOST_IDLE_S|env|'inf'": "refused",
+  "0333|generic_multirotor|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|'19'": "refused",
+  "0334|generic_multirotor|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|'20'": 20,
+  "0335|generic_multirotor|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|'300'": 300,
+  "0336|generic_multirotor|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|'5000'": 5000,
+  "0337|generic_multirotor|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|'5001'": "refused",
+  "0338|generic_multirotor|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|'300.5'": "refused",
+  "0339|generic_multirotor|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|'300.0'": 300,
+  "0340|generic_multirotor|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|'abc'": "refused",
+  "0341|generic_multirotor|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|''": "unset",
+  "0342|generic_multirotor|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|' '": "unset",
+  "0343|generic_multirotor|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|'nan'": "refused",
+  "0344|generic_multirotor|FLIGHTRISK_CAMERA_FOOTPRINT_CM|env|'inf'": "refused",
+  "0345|tello|FLIGHTRISK_TELLO_SETTLE_SAMPLES|env|'1'": "refused",
+  "0346|tello|FLIGHTRISK_TELLO_SETTLE_SAMPLES|env|'2'": 2,
+  "0347|tello|FLIGHTRISK_TELLO_SETTLE_SAMPLES|env|'5'": 5,
+  "0348|tello|FLIGHTRISK_TELLO_SETTLE_SAMPLES|env|'50'": 50,
+  "0349|tello|FLIGHTRISK_TELLO_SETTLE_SAMPLES|env|'51'": "refused",
+  "0350|tello|FLIGHTRISK_TELLO_SETTLE_SAMPLES|env|'5.0'": "refused",
+  "0351|tello|FLIGHTRISK_TELLO_SETTLE_SAMPLES|env|'+5'": "refused",
+  "0352|tello|FLIGHTRISK_TELLO_SETTLE_SAMPLES|env|'abc'": "refused",
+  "0353|tello|FLIGHTRISK_TELLO_SETTLE_SAMPLES|env|''": 5,
+  "0354|tello|FLIGHTRISK_TELLO_SETTLE_SAMPLES|env|' '": 5,
+  "0355|tello|FLIGHTRISK_TELLO_SETTLE_SAMPLES|env|'nan'": "refused",
+  "0356|tello|FLIGHTRISK_TELLO_SETTLE_SAMPLES|env|'inf'": "refused",
+  "0357|tello|FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM|env|'1.9'": "refused",
+  "0358|tello|FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM|env|'2'": 2.0,
+  "0359|tello|FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM|env|'10'": 10.0,
+  "0360|tello|FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM|env|'50'": 50.0,
+  "0361|tello|FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM|env|'50.1'": "refused",
+  "0362|tello|FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM|env|'+10'": 10.0,
+  "0363|tello|FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM|env|'1e1'": 10.0,
+  "0364|tello|FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM|env|'abc'": "refused",
+  "0365|tello|FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM|env|''": 10.0,
+  "0366|tello|FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM|env|' '": 10.0,
+  "0367|tello|FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM|env|'nan'": "refused",
+  "0368|tello|FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM|env|'inf'": "refused",
+  "0369|tello|FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S|env|'0.9'": "refused",
+  "0370|tello|FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S|env|'1'": 1.0,
+  "0371|tello|FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S|env|'5'": 5.0,
+  "0372|tello|FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S|env|'10'": 10.0,
+  "0373|tello|FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S|env|'10.1'": "refused",
+  "0374|tello|FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S|env|'abc'": "refused",
+  "0375|tello|FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S|env|''": 5.0,
+  "0376|tello|FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S|env|' '": 5.0,
+  "0377|tello|FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S|env|'nan'": "refused",
+  "0378|tello|FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S|env|'inf'": "refused",
+  "0379|tello|FLIGHTRISK_TELLO_TAKEOFF_LATE_S|env|'1.9'": "refused",
+  "0380|tello|FLIGHTRISK_TELLO_TAKEOFF_LATE_S|env|'2'": 2.0,
+  "0381|tello|FLIGHTRISK_TELLO_TAKEOFF_LATE_S|env|'10'": 10.0,
+  "0382|tello|FLIGHTRISK_TELLO_TAKEOFF_LATE_S|env|'20'": 20.0,
+  "0383|tello|FLIGHTRISK_TELLO_TAKEOFF_LATE_S|env|'20.1'": "refused",
+  "0384|tello|FLIGHTRISK_TELLO_TAKEOFF_LATE_S|env|'abc'": "refused",
+  "0385|tello|FLIGHTRISK_TELLO_TAKEOFF_LATE_S|env|''": 10.0,
+  "0386|tello|FLIGHTRISK_TELLO_TAKEOFF_LATE_S|env|' '": 10.0,
+  "0387|tello|FLIGHTRISK_TELLO_TAKEOFF_LATE_S|env|'nan'": "refused",
+  "0388|tello|FLIGHTRISK_TELLO_TAKEOFF_LATE_S|env|'inf'": "refused",
+  "0389|tello|FLIGHTRISK_TELLO_REFUSAL_RETRIES|env|'-1'": "refused",
+  "0390|tello|FLIGHTRISK_TELLO_REFUSAL_RETRIES|env|'0'": 0,
+  "0391|tello|FLIGHTRISK_TELLO_REFUSAL_RETRIES|env|'2'": 2,
+  "0392|tello|FLIGHTRISK_TELLO_REFUSAL_RETRIES|env|'3'": 3,
+  "0393|tello|FLIGHTRISK_TELLO_REFUSAL_RETRIES|env|'4'": "refused",
+  "0394|tello|FLIGHTRISK_TELLO_REFUSAL_RETRIES|env|'2.0'": "refused",
+  "0395|tello|FLIGHTRISK_TELLO_REFUSAL_RETRIES|env|'abc'": "refused",
+  "0396|tello|FLIGHTRISK_TELLO_REFUSAL_RETRIES|env|''": 2,
+  "0397|tello|FLIGHTRISK_TELLO_REFUSAL_RETRIES|env|' '": 2,
+  "0398|tello|FLIGHTRISK_TELLO_REFUSAL_RETRIES|env|'nan'": "refused",
+  "0399|tello|FLIGHTRISK_TELLO_REFUSAL_RETRIES|env|'inf'": "refused",
+  "0400|tello|FLIGHTRISK_TELLO_REFUSAL_HOLD_S|env|'0.4'": "refused",
+  "0401|tello|FLIGHTRISK_TELLO_REFUSAL_HOLD_S|env|'0.5'": 0.5,
+  "0402|tello|FLIGHTRISK_TELLO_REFUSAL_HOLD_S|env|'2.5'": 2.5,
+  "0403|tello|FLIGHTRISK_TELLO_REFUSAL_HOLD_S|env|'5'": 5.0,
+  "0404|tello|FLIGHTRISK_TELLO_REFUSAL_HOLD_S|env|'5.1'": "refused",
+  "0405|tello|FLIGHTRISK_TELLO_REFUSAL_HOLD_S|env|'abc'": "refused",
+  "0406|tello|FLIGHTRISK_TELLO_REFUSAL_HOLD_S|env|''": 2.5,
+  "0407|tello|FLIGHTRISK_TELLO_REFUSAL_HOLD_S|env|' '": 2.5,
+  "0408|tello|FLIGHTRISK_TELLO_REFUSAL_HOLD_S|env|'nan'": "refused",
+  "0409|tello|FLIGHTRISK_TELLO_REFUSAL_HOLD_S|env|'inf'": "refused",
+  "0410|tello|FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT|env|'-1'": "refused",
+  "0411|tello|FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT|env|'0'": 0,
+  "0412|tello|FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT|env|'2'": 2,
+  "0413|tello|FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT|env|'6'": 6,
+  "0414|tello|FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT|env|'7'": "refused",
+  "0415|tello|FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT|env|'abc'": "refused",
+  "0416|tello|FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT|env|''": 2,
+  "0417|tello|FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT|env|' '": 2,
+  "0418|tello|FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT|env|'nan'": "refused",
+  "0419|tello|FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT|env|'inf'": "refused",
+  "0420|tello|FLIGHTRISK_HOVER_TEST|env|'0'": false,
+  "0421|tello|FLIGHTRISK_HOVER_TEST|env|'1'": true,
+  "0422|tello|FLIGHTRISK_HOVER_TEST|env|'true'": true,
+  "0423|tello|FLIGHTRISK_HOVER_TEST|env|'off'": false,
+  "0424|tello|FLIGHTRISK_HOVER_TEST|env|'YES'": true,
+  "0425|tello|FLIGHTRISK_HOVER_TEST|env|'2'": "refused",
+  "0426|tello|FLIGHTRISK_HOVER_TEST|env|'maybe'": "refused",
+  "0427|tello|FLIGHTRISK_HOVER_TEST|env|'abc'": "refused",
+  "0428|tello|FLIGHTRISK_HOVER_TEST|env|''": false,
+  "0429|tello|FLIGHTRISK_HOVER_TEST|env|' '": false,
+  "0430|tello|FLIGHTRISK_HOVER_TEST|env|'nan'": "refused",
+  "0431|tello|FLIGHTRISK_HOVER_TEST|env|'inf'": "refused",
+  "0432|tello|FLIGHTRISK_TELLO_TEMP_WARN_C|env|'39'": "refused",
+  "0433|tello|FLIGHTRISK_TELLO_TEMP_WARN_C|env|'40'": 40,
+  "0434|tello|FLIGHTRISK_TELLO_TEMP_WARN_C|env|'92'": 92,
+  "0435|tello|FLIGHTRISK_TELLO_TEMP_WARN_C|env|'120'": 120,
+  "0436|tello|FLIGHTRISK_TELLO_TEMP_WARN_C|env|'121'": "refused",
+  "0437|tello|FLIGHTRISK_TELLO_TEMP_WARN_C|env|'92.5'": "refused",
+  "0438|tello|FLIGHTRISK_TELLO_TEMP_WARN_C|env|'+92'": "refused",
+  "0439|tello|FLIGHTRISK_TELLO_TEMP_WARN_C|env|'abc'": "refused",
+  "0440|tello|FLIGHTRISK_TELLO_TEMP_WARN_C|env|''": 92,
+  "0441|tello|FLIGHTRISK_TELLO_TEMP_WARN_C|env|' '": 92,
+  "0442|tello|FLIGHTRISK_TELLO_TEMP_WARN_C|env|'nan'": "refused",
+  "0443|tello|FLIGHTRISK_TELLO_TEMP_WARN_C|env|'inf'": "refused",
+  "0444|tello|FLIGHTRISK_TELLO_TEMP_REFUSE_C|env|'39'": "refused",
+  "0445|tello|FLIGHTRISK_TELLO_TEMP_REFUSE_C|env|'40'": 40,
+  "0446|tello|FLIGHTRISK_TELLO_TEMP_REFUSE_C|env|'95'": 95,
+  "0447|tello|FLIGHTRISK_TELLO_TEMP_REFUSE_C|env|'120'": 120,
+  "0448|tello|FLIGHTRISK_TELLO_TEMP_REFUSE_C|env|'121'": "refused",
+  "0449|tello|FLIGHTRISK_TELLO_TEMP_REFUSE_C|env|'off'": "off",
+  "0450|tello|FLIGHTRISK_TELLO_TEMP_REFUSE_C|env|'OFF'": "off",
+  "0451|tello|FLIGHTRISK_TELLO_TEMP_REFUSE_C|env|'95.0'": "refused",
+  "0452|tello|FLIGHTRISK_TELLO_TEMP_REFUSE_C|env|'abc'": "refused",
+  "0453|tello|FLIGHTRISK_TELLO_TEMP_REFUSE_C|env|''": 95,
+  "0454|tello|FLIGHTRISK_TELLO_TEMP_REFUSE_C|env|' '": 95,
+  "0455|tello|FLIGHTRISK_TELLO_TEMP_REFUSE_C|env|'nan'": "refused",
+  "0456|tello|FLIGHTRISK_TELLO_TEMP_REFUSE_C|env|'inf'": "refused",
+  "0457|tello|FLIGHTRISK_OBSTACLE_SENSING|env|'required'": "required",
+  "0458|tello|FLIGHTRISK_OBSTACLE_SENSING|env|'off'": "off",
+  "0459|tello|FLIGHTRISK_OBSTACLE_SENSING|env|'OFF'": "off",
+  "0460|tello|FLIGHTRISK_OBSTACLE_SENSING|env|'on'": "refused",
+  "0461|tello|FLIGHTRISK_OBSTACLE_SENSING|env|'none'": "refused",
+  "0462|tello|FLIGHTRISK_OBSTACLE_SENSING|env|'abc'": "refused",
+  "0463|tello|FLIGHTRISK_OBSTACLE_SENSING|env|''": "required",
+  "0464|tello|FLIGHTRISK_OBSTACLE_SENSING|env|' '": "required",
+  "0465|tello|FLIGHTRISK_OBSTACLE_SENSING|env|'nan'": "refused",
+  "0466|tello|FLIGHTRISK_OBSTACLE_SENSING|env|'inf'": "refused",
+  "0467|tello|FLIGHTRISK_OBSTACLE_TURN|env|'1'": true,
+  "0468|tello|FLIGHTRISK_OBSTACLE_TURN|env|'0'": false,
+  "0469|tello|FLIGHTRISK_OBSTACLE_TURN|env|'true'": true,
+  "0470|tello|FLIGHTRISK_OBSTACLE_TURN|env|'off'": false,
+  "0471|tello|FLIGHTRISK_OBSTACLE_TURN|env|'maybe'": "refused",
+  "0472|tello|FLIGHTRISK_OBSTACLE_TURN|env|'abc'": "refused",
+  "0473|tello|FLIGHTRISK_OBSTACLE_TURN|env|''": true,
+  "0474|tello|FLIGHTRISK_OBSTACLE_TURN|env|' '": true,
+  "0475|tello|FLIGHTRISK_OBSTACLE_TURN|env|'nan'": "refused",
+  "0476|tello|FLIGHTRISK_OBSTACLE_TURN|env|'inf'": "refused",
+  "0477|tello|FLIGHTRISK_OBSTACLE_SETTLE_S|env|'0.09'": "refused",
+  "0478|tello|FLIGHTRISK_OBSTACLE_SETTLE_S|env|'0.1'": 0.1,
+  "0479|tello|FLIGHTRISK_OBSTACLE_SETTLE_S|env|'0.3'": 0.3,
+  "0480|tello|FLIGHTRISK_OBSTACLE_SETTLE_S|env|'3'": 3.0,
+  "0481|tello|FLIGHTRISK_OBSTACLE_SETTLE_S|env|'3.01'": "refused",
+  "0482|tello|FLIGHTRISK_OBSTACLE_SETTLE_S|env|'+0.3'": 0.3,
+  "0483|tello|FLIGHTRISK_OBSTACLE_SETTLE_S|env|'3e-1'": 0.3,
+  "0484|tello|FLIGHTRISK_OBSTACLE_SETTLE_S|env|'abc'": "refused",
+  "0485|tello|FLIGHTRISK_OBSTACLE_SETTLE_S|env|''": 0.3,
+  "0486|tello|FLIGHTRISK_OBSTACLE_SETTLE_S|env|' '": 0.3,
+  "0487|tello|FLIGHTRISK_OBSTACLE_SETTLE_S|env|'nan'": "refused",
+  "0488|tello|FLIGHTRISK_OBSTACLE_SETTLE_S|env|'inf'": "refused",
+  "0489|tello|FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH|env|'0.04'": "refused",
+  "0490|tello|FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH|env|'0.05'": 0.05,
+  "0491|tello|FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH|env|'0.35'": 0.35,
+  "0492|tello|FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH|env|'0.9'": 0.9,
+  "0493|tello|FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH|env|'0.91'": "refused",
+  "0494|tello|FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH|env|'abc'": "refused",
+  "0495|tello|FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH|env|''": 0.35,
+  "0496|tello|FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH|env|' '": 0.35,
+  "0497|tello|FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH|env|'nan'": "refused",
+  "0498|tello|FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH|env|'inf'": "refused",
+  "0499|tello|FLIGHTRISK_OBSTACLE_PERSON_FRACTION|env|'0.19'": "refused",
+  "0500|tello|FLIGHTRISK_OBSTACLE_PERSON_FRACTION|env|'0.2'": 0.2,
+  "0501|tello|FLIGHTRISK_OBSTACLE_PERSON_FRACTION|env|'0.55'": 0.55,
+  "0502|tello|FLIGHTRISK_OBSTACLE_PERSON_FRACTION|env|'0.9'": 0.9,
+  "0503|tello|FLIGHTRISK_OBSTACLE_PERSON_FRACTION|env|'0.91'": "refused",
+  "0504|tello|FLIGHTRISK_OBSTACLE_PERSON_FRACTION|env|'abc'": "refused",
+  "0505|tello|FLIGHTRISK_OBSTACLE_PERSON_FRACTION|env|''": 0.55,
+  "0506|tello|FLIGHTRISK_OBSTACLE_PERSON_FRACTION|env|' '": 0.55,
+  "0507|tello|FLIGHTRISK_OBSTACLE_PERSON_FRACTION|env|'nan'": "refused",
+  "0508|tello|FLIGHTRISK_OBSTACLE_PERSON_FRACTION|env|'inf'": "refused",
+  "0509|tello|FLIGHTRISK_OBSTACLE_CLEAR_VOTES|env|'0'": "refused",
+  "0510|tello|FLIGHTRISK_OBSTACLE_CLEAR_VOTES|env|'1'": 1,
+  "0511|tello|FLIGHTRISK_OBSTACLE_CLEAR_VOTES|env|'2'": 2,
+  "0512|tello|FLIGHTRISK_OBSTACLE_CLEAR_VOTES|env|'5'": 5,
+  "0513|tello|FLIGHTRISK_OBSTACLE_CLEAR_VOTES|env|'6'": "refused",
+  "0514|tello|FLIGHTRISK_OBSTACLE_CLEAR_VOTES|env|'2.0'": "refused",
+  "0515|tello|FLIGHTRISK_OBSTACLE_CLEAR_VOTES|env|'abc'": "refused",
+  "0516|tello|FLIGHTRISK_OBSTACLE_CLEAR_VOTES|env|''": 2,
+  "0517|tello|FLIGHTRISK_OBSTACLE_CLEAR_VOTES|env|' '": 2,
+  "0518|tello|FLIGHTRISK_OBSTACLE_CLEAR_VOTES|env|'nan'": "refused",
+  "0519|tello|FLIGHTRISK_OBSTACLE_CLEAR_VOTES|env|'inf'": "refused",
+  "0520|tello|FLIGHTRISK_OBSTACLE_RELOOK|env|'-1'": "refused",
+  "0521|tello|FLIGHTRISK_OBSTACLE_RELOOK|env|'0'": 0,
+  "0522|tello|FLIGHTRISK_OBSTACLE_RELOOK|env|'2'": 2,
+  "0523|tello|FLIGHTRISK_OBSTACLE_RELOOK|env|'5'": 5,
+  "0524|tello|FLIGHTRISK_OBSTACLE_RELOOK|env|'6'": "refused",
+  "0525|tello|FLIGHTRISK_OBSTACLE_RELOOK|env|'abc'": "refused",
+  "0526|tello|FLIGHTRISK_OBSTACLE_RELOOK|env|''": 2,
+  "0527|tello|FLIGHTRISK_OBSTACLE_RELOOK|env|' '": 2,
+  "0528|tello|FLIGHTRISK_OBSTACLE_RELOOK|env|'nan'": "refused",
+  "0529|tello|FLIGHTRISK_OBSTACLE_RELOOK|env|'inf'": "refused",
+  "0530|tello|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|'-1'": "refused",
+  "0531|tello|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|'0'": 0,
+  "0532|tello|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|'19'": "refused",
+  "0533|tello|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|'20'": 20,
+  "0534|tello|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|'50'": 50,
+  "0535|tello|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|'100'": 100,
+  "0536|tello|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|'101'": "refused",
+  "0537|tello|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|'abc'": "refused",
+  "0538|tello|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|''": 0,
+  "0539|tello|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|' '": 0,
+  "0540|tello|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|'nan'": "refused",
+  "0541|tello|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|'inf'": "refused",
+  "0542|tello|FLIGHTRISK_OBSTACLE_SIDESTEPS|env|'-1'": "refused",
+  "0543|tello|FLIGHTRISK_OBSTACLE_SIDESTEPS|env|'0'": 0,
+  "0544|tello|FLIGHTRISK_OBSTACLE_SIDESTEPS|env|'2'": 2,
+  "0545|tello|FLIGHTRISK_OBSTACLE_SIDESTEPS|env|'4'": 4,
+  "0546|tello|FLIGHTRISK_OBSTACLE_SIDESTEPS|env|'5'": "refused",
+  "0547|tello|FLIGHTRISK_OBSTACLE_SIDESTEPS|env|'abc'": "refused",
+  "0548|tello|FLIGHTRISK_OBSTACLE_SIDESTEPS|env|''": 2,
+  "0549|tello|FLIGHTRISK_OBSTACLE_SIDESTEPS|env|' '": 2,
+  "0550|tello|FLIGHTRISK_OBSTACLE_SIDESTEPS|env|'nan'": "refused",
+  "0551|tello|FLIGHTRISK_OBSTACLE_SIDESTEPS|env|'inf'": "refused",
+  "0552|tello|FLIGHTRISK_OBSTACLE_STEP_CM|env|'19'": "refused",
+  "0553|tello|FLIGHTRISK_OBSTACLE_STEP_CM|env|'20'": 20,
+  "0554|tello|FLIGHTRISK_OBSTACLE_STEP_CM|env|'50'": 50,
+  "0555|tello|FLIGHTRISK_OBSTACLE_STEP_CM|env|'100'": 100,
+  "0556|tello|FLIGHTRISK_OBSTACLE_STEP_CM|env|'101'": "refused",
+  "0557|tello|FLIGHTRISK_OBSTACLE_STEP_CM|env|'500'": "refused",
+  "0558|tello|FLIGHTRISK_OBSTACLE_STEP_CM|env|'5000'": "refused",
+  "0559|tello|FLIGHTRISK_OBSTACLE_STEP_CM|env|'5001'": "refused",
+  "0560|tello|FLIGHTRISK_OBSTACLE_STEP_CM|env|'abc'": "refused",
+  "0561|tello|FLIGHTRISK_OBSTACLE_STEP_CM|env|''": 50,
+  "0562|tello|FLIGHTRISK_OBSTACLE_STEP_CM|env|' '": 50,
+  "0563|tello|FLIGHTRISK_OBSTACLE_STEP_CM|env|'nan'": "refused",
+  "0564|tello|FLIGHTRISK_OBSTACLE_STEP_CM|env|'inf'": "refused",
+  "0565|tello|FLIGHTRISK_MAX_DECODE_LAG_S|env|'0.09'": "refused",
+  "0566|tello|FLIGHTRISK_MAX_DECODE_LAG_S|env|'0.1'": 0.1,
+  "0567|tello|FLIGHTRISK_MAX_DECODE_LAG_S|env|'0.3'": 0.3,
+  "0568|tello|FLIGHTRISK_MAX_DECODE_LAG_S|env|'2'": 2.0,
+  "0569|tello|FLIGHTRISK_MAX_DECODE_LAG_S|env|'2.01'": "refused",
+  "0570|tello|FLIGHTRISK_MAX_DECODE_LAG_S|env|'abc'": "refused",
+  "0571|tello|FLIGHTRISK_MAX_DECODE_LAG_S|env|''": 0.3,
+  "0572|tello|FLIGHTRISK_MAX_DECODE_LAG_S|env|' '": 0.3,
+  "0573|tello|FLIGHTRISK_MAX_DECODE_LAG_S|env|'nan'": "refused",
+  "0574|tello|FLIGHTRISK_MAX_DECODE_LAG_S|env|'inf'": "refused",
+  "0575|generic_multirotor|FLIGHTRISK_OBSTACLE_SENSING|env|'required'": "required",
+  "0576|generic_multirotor|FLIGHTRISK_OBSTACLE_SENSING|env|'off'": "off",
+  "0577|generic_multirotor|FLIGHTRISK_OBSTACLE_SENSING|env|'OFF'": "off",
+  "0578|generic_multirotor|FLIGHTRISK_OBSTACLE_SENSING|env|'on'": "refused",
+  "0579|generic_multirotor|FLIGHTRISK_OBSTACLE_SENSING|env|'none'": "refused",
+  "0580|generic_multirotor|FLIGHTRISK_OBSTACLE_SENSING|env|'abc'": "refused",
+  "0581|generic_multirotor|FLIGHTRISK_OBSTACLE_SENSING|env|''": "required",
+  "0582|generic_multirotor|FLIGHTRISK_OBSTACLE_SENSING|env|' '": "required",
+  "0583|generic_multirotor|FLIGHTRISK_OBSTACLE_SENSING|env|'nan'": "refused",
+  "0584|generic_multirotor|FLIGHTRISK_OBSTACLE_SENSING|env|'inf'": "refused",
+  "0585|generic_multirotor|FLIGHTRISK_OBSTACLE_TURN|env|'1'": true,
+  "0586|generic_multirotor|FLIGHTRISK_OBSTACLE_TURN|env|'0'": false,
+  "0587|generic_multirotor|FLIGHTRISK_OBSTACLE_TURN|env|'true'": true,
+  "0588|generic_multirotor|FLIGHTRISK_OBSTACLE_TURN|env|'off'": false,
+  "0589|generic_multirotor|FLIGHTRISK_OBSTACLE_TURN|env|'maybe'": "refused",
+  "0590|generic_multirotor|FLIGHTRISK_OBSTACLE_TURN|env|'abc'": "refused",
+  "0591|generic_multirotor|FLIGHTRISK_OBSTACLE_TURN|env|''": true,
+  "0592|generic_multirotor|FLIGHTRISK_OBSTACLE_TURN|env|' '": true,
+  "0593|generic_multirotor|FLIGHTRISK_OBSTACLE_TURN|env|'nan'": "refused",
+  "0594|generic_multirotor|FLIGHTRISK_OBSTACLE_TURN|env|'inf'": "refused",
+  "0595|generic_multirotor|FLIGHTRISK_OBSTACLE_SETTLE_S|env|'0.09'": "refused",
+  "0596|generic_multirotor|FLIGHTRISK_OBSTACLE_SETTLE_S|env|'0.1'": 0.1,
+  "0597|generic_multirotor|FLIGHTRISK_OBSTACLE_SETTLE_S|env|'0.3'": 0.3,
+  "0598|generic_multirotor|FLIGHTRISK_OBSTACLE_SETTLE_S|env|'3'": 3.0,
+  "0599|generic_multirotor|FLIGHTRISK_OBSTACLE_SETTLE_S|env|'3.01'": "refused",
+  "0600|generic_multirotor|FLIGHTRISK_OBSTACLE_SETTLE_S|env|'+0.3'": 0.3,
+  "0601|generic_multirotor|FLIGHTRISK_OBSTACLE_SETTLE_S|env|'3e-1'": 0.3,
+  "0602|generic_multirotor|FLIGHTRISK_OBSTACLE_SETTLE_S|env|'abc'": "refused",
+  "0603|generic_multirotor|FLIGHTRISK_OBSTACLE_SETTLE_S|env|''": 0.3,
+  "0604|generic_multirotor|FLIGHTRISK_OBSTACLE_SETTLE_S|env|' '": 0.3,
+  "0605|generic_multirotor|FLIGHTRISK_OBSTACLE_SETTLE_S|env|'nan'": "refused",
+  "0606|generic_multirotor|FLIGHTRISK_OBSTACLE_SETTLE_S|env|'inf'": "refused",
+  "0607|generic_multirotor|FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH|env|'0.04'": "refused",
+  "0608|generic_multirotor|FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH|env|'0.05'": 0.05,
+  "0609|generic_multirotor|FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH|env|'0.35'": 0.35,
+  "0610|generic_multirotor|FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH|env|'0.9'": 0.9,
+  "0611|generic_multirotor|FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH|env|'0.91'": "refused",
+  "0612|generic_multirotor|FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH|env|'abc'": "refused",
+  "0613|generic_multirotor|FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH|env|''": 0.35,
+  "0614|generic_multirotor|FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH|env|' '": 0.35,
+  "0615|generic_multirotor|FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH|env|'nan'": "refused",
+  "0616|generic_multirotor|FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH|env|'inf'": "refused",
+  "0617|generic_multirotor|FLIGHTRISK_OBSTACLE_PERSON_FRACTION|env|'0.19'": "refused",
+  "0618|generic_multirotor|FLIGHTRISK_OBSTACLE_PERSON_FRACTION|env|'0.2'": 0.2,
+  "0619|generic_multirotor|FLIGHTRISK_OBSTACLE_PERSON_FRACTION|env|'0.55'": 0.55,
+  "0620|generic_multirotor|FLIGHTRISK_OBSTACLE_PERSON_FRACTION|env|'0.9'": 0.9,
+  "0621|generic_multirotor|FLIGHTRISK_OBSTACLE_PERSON_FRACTION|env|'0.91'": "refused",
+  "0622|generic_multirotor|FLIGHTRISK_OBSTACLE_PERSON_FRACTION|env|'abc'": "refused",
+  "0623|generic_multirotor|FLIGHTRISK_OBSTACLE_PERSON_FRACTION|env|''": 0.55,
+  "0624|generic_multirotor|FLIGHTRISK_OBSTACLE_PERSON_FRACTION|env|' '": 0.55,
+  "0625|generic_multirotor|FLIGHTRISK_OBSTACLE_PERSON_FRACTION|env|'nan'": "refused",
+  "0626|generic_multirotor|FLIGHTRISK_OBSTACLE_PERSON_FRACTION|env|'inf'": "refused",
+  "0627|generic_multirotor|FLIGHTRISK_OBSTACLE_CLEAR_VOTES|env|'0'": "refused",
+  "0628|generic_multirotor|FLIGHTRISK_OBSTACLE_CLEAR_VOTES|env|'1'": 1,
+  "0629|generic_multirotor|FLIGHTRISK_OBSTACLE_CLEAR_VOTES|env|'2'": 2,
+  "0630|generic_multirotor|FLIGHTRISK_OBSTACLE_CLEAR_VOTES|env|'5'": 5,
+  "0631|generic_multirotor|FLIGHTRISK_OBSTACLE_CLEAR_VOTES|env|'6'": "refused",
+  "0632|generic_multirotor|FLIGHTRISK_OBSTACLE_CLEAR_VOTES|env|'2.0'": "refused",
+  "0633|generic_multirotor|FLIGHTRISK_OBSTACLE_CLEAR_VOTES|env|'abc'": "refused",
+  "0634|generic_multirotor|FLIGHTRISK_OBSTACLE_CLEAR_VOTES|env|''": 2,
+  "0635|generic_multirotor|FLIGHTRISK_OBSTACLE_CLEAR_VOTES|env|' '": 2,
+  "0636|generic_multirotor|FLIGHTRISK_OBSTACLE_CLEAR_VOTES|env|'nan'": "refused",
+  "0637|generic_multirotor|FLIGHTRISK_OBSTACLE_CLEAR_VOTES|env|'inf'": "refused",
+  "0638|generic_multirotor|FLIGHTRISK_OBSTACLE_RELOOK|env|'-1'": "refused",
+  "0639|generic_multirotor|FLIGHTRISK_OBSTACLE_RELOOK|env|'0'": 0,
+  "0640|generic_multirotor|FLIGHTRISK_OBSTACLE_RELOOK|env|'2'": 2,
+  "0641|generic_multirotor|FLIGHTRISK_OBSTACLE_RELOOK|env|'5'": 5,
+  "0642|generic_multirotor|FLIGHTRISK_OBSTACLE_RELOOK|env|'6'": "refused",
+  "0643|generic_multirotor|FLIGHTRISK_OBSTACLE_RELOOK|env|'abc'": "refused",
+  "0644|generic_multirotor|FLIGHTRISK_OBSTACLE_RELOOK|env|''": 2,
+  "0645|generic_multirotor|FLIGHTRISK_OBSTACLE_RELOOK|env|' '": 2,
+  "0646|generic_multirotor|FLIGHTRISK_OBSTACLE_RELOOK|env|'nan'": "refused",
+  "0647|generic_multirotor|FLIGHTRISK_OBSTACLE_RELOOK|env|'inf'": "refused",
+  "0648|generic_multirotor|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|'-1'": "refused",
+  "0649|generic_multirotor|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|'0'": 0,
+  "0650|generic_multirotor|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|'19'": "refused",
+  "0651|generic_multirotor|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|'20'": 20,
+  "0652|generic_multirotor|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|'50'": 50,
+  "0653|generic_multirotor|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|'100'": 100,
+  "0654|generic_multirotor|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|'101'": "refused",
+  "0655|generic_multirotor|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|'abc'": "refused",
+  "0656|generic_multirotor|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|''": 0,
+  "0657|generic_multirotor|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|' '": 0,
+  "0658|generic_multirotor|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|'nan'": "refused",
+  "0659|generic_multirotor|FLIGHTRISK_OBSTACLE_SIDESTEP_CM|env|'inf'": "refused",
+  "0660|generic_multirotor|FLIGHTRISK_OBSTACLE_SIDESTEPS|env|'-1'": "refused",
+  "0661|generic_multirotor|FLIGHTRISK_OBSTACLE_SIDESTEPS|env|'0'": 0,
+  "0662|generic_multirotor|FLIGHTRISK_OBSTACLE_SIDESTEPS|env|'2'": 2,
+  "0663|generic_multirotor|FLIGHTRISK_OBSTACLE_SIDESTEPS|env|'4'": 4,
+  "0664|generic_multirotor|FLIGHTRISK_OBSTACLE_SIDESTEPS|env|'5'": "refused",
+  "0665|generic_multirotor|FLIGHTRISK_OBSTACLE_SIDESTEPS|env|'abc'": "refused",
+  "0666|generic_multirotor|FLIGHTRISK_OBSTACLE_SIDESTEPS|env|''": 2,
+  "0667|generic_multirotor|FLIGHTRISK_OBSTACLE_SIDESTEPS|env|' '": 2,
+  "0668|generic_multirotor|FLIGHTRISK_OBSTACLE_SIDESTEPS|env|'nan'": "refused",
+  "0669|generic_multirotor|FLIGHTRISK_OBSTACLE_SIDESTEPS|env|'inf'": "refused",
+  "0670|generic_multirotor|FLIGHTRISK_OBSTACLE_STEP_CM|env|'19'": "refused",
+  "0671|generic_multirotor|FLIGHTRISK_OBSTACLE_STEP_CM|env|'20'": 20,
+  "0672|generic_multirotor|FLIGHTRISK_OBSTACLE_STEP_CM|env|'50'": 50,
+  "0673|generic_multirotor|FLIGHTRISK_OBSTACLE_STEP_CM|env|'100'": 100,
+  "0674|generic_multirotor|FLIGHTRISK_OBSTACLE_STEP_CM|env|'101'": 101,
+  "0675|generic_multirotor|FLIGHTRISK_OBSTACLE_STEP_CM|env|'500'": 500,
+  "0676|generic_multirotor|FLIGHTRISK_OBSTACLE_STEP_CM|env|'5000'": 5000,
+  "0677|generic_multirotor|FLIGHTRISK_OBSTACLE_STEP_CM|env|'5001'": "refused",
+  "0678|generic_multirotor|FLIGHTRISK_OBSTACLE_STEP_CM|env|'abc'": "refused",
+  "0679|generic_multirotor|FLIGHTRISK_OBSTACLE_STEP_CM|env|''": 500,
+  "0680|generic_multirotor|FLIGHTRISK_OBSTACLE_STEP_CM|env|' '": 500,
+  "0681|generic_multirotor|FLIGHTRISK_OBSTACLE_STEP_CM|env|'nan'": "refused",
+  "0682|generic_multirotor|FLIGHTRISK_OBSTACLE_STEP_CM|env|'inf'": "refused",
+  "0683|tello|FLIGHTRISK_FLEET_AREA_CM|env|'400'": {
+   "__seq__": [
+    400,
+    400
+   ]
+  },
+  "0684|tello|FLIGHTRISK_FLEET_AREA_CM|env|'600x400'": {
+   "__seq__": [
+    600,
+    400
+   ]
+  },
+  "0685|tello|FLIGHTRISK_FLEET_AREA_CM|env|'600X400'": {
+   "__seq__": [
+    600,
+    400
+   ]
+  },
+  "0686|tello|FLIGHTRISK_FLEET_AREA_CM|env|'600 x 400'": {
+   "__seq__": [
+    600,
+    400
+   ]
+  },
+  "0687|tello|FLIGHTRISK_FLEET_AREA_CM|env|'0'": "refused",
+  "0688|tello|FLIGHTRISK_FLEET_AREA_CM|env|'-5'": "refused",
+  "0689|tello|FLIGHTRISK_FLEET_AREA_CM|env|'0x400'": "refused",
+  "0690|tello|FLIGHTRISK_FLEET_AREA_CM|env|'600x400x2'": "refused",
+  "0691|tello|FLIGHTRISK_FLEET_AREA_CM|env|'abc'": "refused",
+  "0692|tello|FLIGHTRISK_FLEET_AREA_CM|env|'400.5'": "refused",
+  "0693|tello|--fleet-area-cm|flag|'400'": {
+   "__seq__": [
+    400,
+    400
+   ]
+  },
+  "0694|tello|--fleet-area-cm|flag|'600x400'": {
+   "__seq__": [
+    600,
+    400
+   ]
+  },
+  "0695|tello|--fleet-area-cm|flag|'600X400'": {
+   "__seq__": [
+    600,
+    400
+   ]
+  },
+  "0696|tello|--fleet-area-cm|flag|'600 x 400'": {
+   "__seq__": [
+    600,
+    400
+   ]
+  },
+  "0697|tello|--fleet-area-cm|flag|'0'": "refused",
+  "0698|tello|--fleet-area-cm|flag|'-5'": "refused",
+  "0699|tello|--fleet-area-cm|flag|'0x400'": "refused",
+  "0700|tello|--fleet-area-cm|flag|'600x400x2'": "refused",
+  "0701|tello|--fleet-area-cm|flag|'abc'": "refused",
+  "0702|tello|--fleet-area-cm|flag|'400.5'": "refused",
+  "0703|generic_multirotor|--takeoff-alt-m|flag|'-1'": "refused",
+  "0704|generic_multirotor|--takeoff-alt-m|flag|'0'": "refused",
+  "0705|generic_multirotor|--takeoff-alt-m|flag|'1.99'": "refused",
+  "0706|generic_multirotor|--takeoff-alt-m|flag|'2'": 200.0,
+  "0707|generic_multirotor|--takeoff-alt-m|flag|'5'": 500.0,
+  "0708|generic_multirotor|--takeoff-alt-m|flag|'20'": 2000.0,
+  "0709|generic_multirotor|--takeoff-alt-m|flag|'20.01'": "refused",
+  "0710|generic_multirotor|--takeoff-alt-m|flag|'1e+307'": "refused",
+  "0711|generic_multirotor|--takeoff-alt-m|flag|'abc'": "refused",
+  "0712|generic_multirotor|--takeoff-alt-m|flag|'nan'": "refused",
+  "0713|generic_multirotor|--speed-mps|flag|'-1'": "refused",
+  "0714|generic_multirotor|--speed-mps|flag|'0'": "refused",
+  "0715|generic_multirotor|--speed-mps|flag|'0.49'": 49.0,
+  "0716|generic_multirotor|--speed-mps|flag|'0.5'": 50.0,
+  "0717|generic_multirotor|--speed-mps|flag|'3'": 300.0,
+  "0718|generic_multirotor|--speed-mps|flag|'15'": 1500.0,
+  "0719|generic_multirotor|--speed-mps|flag|'15.01'": "refused",
+  "0720|generic_multirotor|--speed-mps|flag|'1e+307'": "refused",
+  "0721|generic_multirotor|--speed-mps|flag|'abc'": "refused",
+  "0722|generic_multirotor|--speed-mps|flag|'nan'": "refused"
+ },
+ "start_objects": {
+  "field_limits": {
+   "default_alt_slot_cm": 1500,
+   "default_ceiling_cm": 3000,
+   "default_ceiling_margin_cm": 500,
+   "default_geofence_cm": 3000,
+   "max_alt_slot_cm": 12000,
+   "max_ceiling_cm": 12000,
+   "max_geofence_cm": 50000,
+   "max_move_cm": 5000,
+   "min_alt_slot_cm": 1000,
+   "min_ceiling_cm": 1000,
+   "min_ceiling_margin_cm": 300,
+   "min_move_cm": 20,
+   "name": "field"
+  },
+  "flight_guards_empty_env": {
+   "hover_test": false,
+   "refusal_hold_s": 2.5,
+   "refusal_retries": 2,
+   "refusals_per_flight": 2,
+   "settle_samples": 5,
+   "settle_timeout_s": 5.0,
+   "settle_tolerance_cm": 10.0,
+   "takeoff_late_s": 10.0
+  },
+  "lane_executor_defaults": {
+   "authority": null,
+   "clock": {
+    "__repr__": "builtin_function_or_method"
+   },
+   "command_cache_size": null,
+   "fleet_v2": false,
+   "flight_guards": null,
+   "land_retry_s": 2.0,
+   "logger": null,
+   "manual_deadman_s": 1.5,
+   "max_start_late_s": 5.0,
+   "max_start_lead_s": 120.0,
+   "monitor_interval_s": 0.05,
+   "obstacle_avoid_budget_s": 45.0,
+   "obstacle_clear_votes": 1,
+   "obstacle_relook": 0,
+   "obstacle_retry_pause_s": 0.5,
+   "obstacle_sense_timeout_s": 2.0,
+   "obstacle_sensor": null,
+   "obstacle_sensor_error": null,
+   "obstacle_settle_s": 0.3,
+   "obstacle_sidestep_cm": 0,
+   "obstacle_sidesteps": 0,
+   "obstacle_step_cm": 50,
+   "obstacle_takeoff_probe": true,
+   "obstacle_turn": true,
+   "sleep": {
+    "__repr__": "builtin_function_or_method"
+   },
+   "telemetry_interval_s": 0.5,
+   "telemetry_queue_size": 4,
+   "temp_limits": null
+  },
+  "mavlink_fleet_options": {
+   "arrival_alt_m": 0.7,
+   "arrival_radius_m": 1.0,
+   "failsafe_action": "rtl",
+   "fence_breach_margin_cm": 300.0,
+   "frame_heading_deg": null,
+   "min_satellites": 8,
+   "move_timeout_margin_s": 20.0,
+   "param_refresh_s": 30.0,
+   "require_failsafes": true,
+   "rtl_accept_s": 5.0,
+   "speed_mps": 3.0,
+   "stale_after_s": 3.0,
+   "stationary_s": 3.0,
+   "sysid": 1,
+   "takeoff_alt_m": 5.0,
+   "takeoff_timeout_s": 60.0,
+   "yaw_rate_dps": 30.0
+  },
+  "module_constants": {
+   "flightrisk.drone.autopilot": {
+    "ARDUPILOT": "ardupilot",
+    "AUTOPILOTS": {
+     "__seq__": [
+      "ardupilot",
+      "px4"
+     ]
+    },
+    "AVOIDANCE_PARAMS": {
+     "ardupilot": {
+      "__seq__": [
+       "OA_TYPE",
+       "PRX1_TYPE",
+       "OA_MARGIN_MAX",
+       "OA_BR_LOOKAHEAD"
+      ]
+     },
+     "px4": {
+      "__seq__": []
+     }
+    },
+    "DEFAULT_MIN_SATELLITES": 8,
+    "DEFAULT_SYSID": 1,
+    "FAILSAFE_PARAMS": {
+     "ardupilot": {
+      "__seq__": [
+       "FENCE_ENABLE",
+       "FENCE_TYPE",
+       "FENCE_ACTION",
+       "FENCE_RADIUS",
+       "FENCE_ALT_MAX",
+       "FENCE_ALT_MAX_TP",
+       "BATT_FS_LOW_ACT",
+       "BATT_FS_CRT_ACT",
+       "BATT_LOW_VOLT",
+       "BATT_LOW_MAH",
+       "BATT_ARM_VOLT",
+       "FS_THR_ENABLE",
+       "RTL_ALT_M",
+       "RTL_ALT",
+       "MAV_SYSID",
+       "SYSID_THISMAV"
+      ]
+     },
+     "px4": {
+      "__seq__": [
+       "GF_ACTION",
+       "GF_MAX_HOR_DIST",
+       "GF_MAX_VER_DIST",
+       "COM_LOW_BAT_ACT",
+       "NAV_RCL_ACT",
+       "NAV_DLL_ACT",
+       "RTL_RETURN_ALT",
+       "MAV_SYS_ID"
+      ]
+     }
+    },
+    "FAILSAFE_RULES": {
+     "ardupilot": {
+      "__seq__": [
+       "FENCE_ENABLE",
+       "FENCE_TYPE",
+       "FENCE_ACTION",
+       "FENCE_RADIUS",
+       "FENCE_ALT_MAX",
+       "FENCE_ALT_MAX_TP",
+       "BATT_FS_LOW_ACT",
+       "BATT_FS_CRT_ACT",
+       "BATT_LOW_VOLT",
+       "BATT_LOW_MAH",
+       "BATT_ARM_VOLT",
+       "FS_THR_ENABLE",
+       "RTL_ALT_M",
+       "RTL_ALT",
+       "MAV_SYSID",
+       "SYSID_THISMAV"
+      ]
+     },
+     "px4": {
+      "__seq__": [
+       "GF_ACTION",
+       "GF_MAX_HOR_DIST",
+       "GF_MAX_VER_DIST",
+       "COM_LOW_BAT_ACT",
+       "NAV_RCL_ACT",
+       "NAV_DLL_ACT",
+       "RTL_RETURN_ALT",
+       "MAV_SYS_ID"
+      ]
+     }
+    },
+    "FENCE_MARGIN_M": 5.0,
+    "GPS_FIX_3D": 3,
+    "MAX_FENCE_ALT_M": 120.0,
+    "MIN_OA_LOOKAHEAD_M": 5.0,
+    "MIN_OA_MARGIN_M": 2.0,
+    "PX4": "px4",
+    "_AP_BATT_ACTIONS": {
+     "__set__": [
+      1,
+      2,
+      3,
+      4,
+      6,
+      7
+     ]
+    },
+    "_AP_FENCE_ACTIONS": {
+     "__set__": [
+      1,
+      2,
+      3,
+      4,
+      5
+     ]
+    },
+    "_AP_FENCE_ALT_FRAME_ABOVE_HOME": 1,
+    "_AP_FENCE_ALT_MAX_BIT": 1,
+    "_AP_FENCE_CIRCLE_BIT": 2,
+    "_AP_OA_BENDY_TYPES": {
+     "__set__": [
+      1,
+      3
+     ]
+    },
+    "_AP_OA_TYPES": {
+     "__set__": [
+      1,
+      2,
+      3
+     ]
+    },
+    "_AP_RC_LOSS_ACTIONS": {
+     "__set__": [
+      1,
+      3,
+      4,
+      5,
+      6,
+      7
+     ]
+    },
+    "_AP_RENAMED": {
+     "__seq__": [
+      {
+       "__seq__": [
+        "RTL_ALT_M",
+        100.0,
+        "RTL_ALT",
+        1.0
+       ]
+      },
+      {
+       "__seq__": [
+        "MAV_SYSID",
+        1.0,
+        "SYSID_THISMAV",
+        1.0
+       ]
+      }
+     ]
+    },
+    "_AUTONOMOUS_MODES": {
+     "ardupilot": {
+      "__set__": [
+       "LAND",
+       "OFFBOARD",
+       "RETURN_TO_LAUNCH",
+       "TAKEOFF"
+      ]
+     },
+     "px4": {
+      "__set__": [
+       "HOLD",
+       "LAND",
+       "OFFBOARD",
+       "RETURN_TO_LAUNCH",
+       "TAKEOFF"
+      ]
+     }
+    },
+    "_PX4_BATT_ACTIONS": {
+     "__set__": [
+      2,
+      3
+     ]
+    },
+    "_PX4_FENCE_ACTIONS": {
+     "__set__": [
+      2,
+      3,
+      5
+     ]
+    },
+    "_PX4_LOSS_ACTIONS": {
+     "__set__": [
+      2,
+      3
+     ]
+    },
+    "_RETURN_ALTITUDE_PARAMS": {
+     "ardupilot": {
+      "__seq__": [
+       {
+        "__seq__": [
+         "RTL_ALT_M",
+         100.0
+        ]
+       },
+       {
+        "__seq__": [
+         "RTL_ALT",
+         1.0
+        ]
+       }
+      ]
+     },
+     "px4": {
+      "__seq__": [
+       {
+        "__seq__": [
+         "RTL_RETURN_ALT",
+         100.0
+        ]
+       }
+      ]
+     }
+    },
+    "_SYSTEM_ID_PARAMS": {
+     "ardupilot": {
+      "__seq__": [
+       {
+        "__seq__": [
+         "MAV_SYSID",
+         1.0
+        ]
+       },
+       {
+        "__seq__": [
+         "SYSID_THISMAV",
+         1.0
+        ]
+       }
+      ]
+     },
+     "px4": {
+      "__seq__": [
+       {
+        "__seq__": [
+         "MAV_SYS_ID",
+         1.0
+        ]
+       }
+      ]
+     }
+    },
+    "__classes__": {
+     "AutopilotState": {
+      "init_defaults": {
+       "abs_alt_m": null,
+       "armable": null,
+       "armed": null,
+       "autopilot": null,
+       "battery_pct": null,
+       "connected": false,
+       "flight_mode": null,
+       "global_position_ok": null,
+       "gps_fix_type": null,
+       "heading_deg": null,
+       "home_abs_alt_m": null,
+       "home_lat_deg": null,
+       "home_lon_deg": null,
+       "home_position_ok": null,
+       "in_air": null,
+       "landed_state": null,
+       "lat_deg": null,
+       "lon_deg": null,
+       "rel_alt_m": null,
+       "satellites": null,
+       "stream_age_s": {},
+       "telemetry_age_s": null
+      }
+     }
+    }
+   },
+   "flightrisk.drone.fake": {
+    "BASIC_FLIGHT": {
+     "__set__": [
+      {
+       "__enum__": "Capability.HOVER"
+      },
+      {
+       "__enum__": "Capability.RC_CONTROL"
+      },
+      {
+       "__enum__": "Capability.RELATIVE_MOVE"
+      },
+      {
+       "__enum__": "Capability.ROTATE"
+      },
+      {
+       "__enum__": "Capability.TAKEOFF_LAND"
+      },
+      {
+       "__enum__": "Capability.VIDEO"
+      }
+     ]
+    },
+    "CELSIUS": "degC",
+    "DEFAULT_HOST": "sim://drone",
+    "DEGREE": "deg",
+    "IS_FLYING_COMMANDED": "commanded",
+    "METRE": "m",
+    "METRE_PER_SECOND": "m/s",
+    "PERCENT": "%",
+    "SECOND": "s",
+    "_DIRECTIONS": {
+     "__set__": [
+      "back",
+      "down",
+      "forward",
+      "left",
+      "right",
+      "up"
+     ]
+    },
+    "__classes__": {
+     "FakeDrone": {
+      "init_defaults": {
+       "clock": {
+        "__repr__": "builtin_function_or_method"
+       },
+       "config": null,
+       "host": "sim://drone",
+       "name": "sim-1",
+       "sleep": {
+        "__repr__": "builtin_function_or_method"
+       }
+      }
+     },
+     "FakeDroneConfig": {
+      "init_defaults": {
+       "attitude_deg": {
+        "__seq__": [
+         0.0,
+         0.0,
+         0.0
+        ]
+       },
+       "battery_pct": 100.0,
+       "connect_ok": true,
+       "drop_commands": {
+        "__set__": []
+       },
+       "fail_commands": {
+        "__set__": []
+       },
+       "flight_mode": null,
+       "flight_time_s": 0.0,
+       "frame_height": 480,
+       "frame_width": 640,
+       "latency_s": 0.0,
+       "speed_mps": {
+        "__seq__": [
+         0.0,
+         0.0,
+         0.0
+        ]
+       },
+       "supports_return_to_home": true,
+       "takeoff_height_m": 1.0,
+       "temperature_c": 40.0
+      }
+     }
+    }
+   },
+   "flightrisk.drone.flight_guards": {
+    "DEFAULT_REFUSALS_PER_FLIGHT": 2,
+    "DEFAULT_REFUSAL_HOLD_S": 2.5,
+    "DEFAULT_REFUSAL_RETRIES": 2,
+    "DEFAULT_SETTLE_SAMPLES": 5,
+    "DEFAULT_SETTLE_TIMEOUT_S": 5.0,
+    "DEFAULT_SETTLE_TOLERANCE_CM": 10.0,
+    "DEFAULT_TAKEOFF_LATE_S": 10.0,
+    "DESCENT_CLEARANCE_CM": 50,
+    "ENV_HOVER_TEST": "FLIGHTRISK_HOVER_TEST",
+    "ENV_REFUSALS_PER_FLIGHT": "FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT",
+    "ENV_REFUSAL_HOLD_S": "FLIGHTRISK_TELLO_REFUSAL_HOLD_S",
+    "ENV_REFUSAL_RETRIES": "FLIGHTRISK_TELLO_REFUSAL_RETRIES",
+    "ENV_SETTLE_SAMPLES": "FLIGHTRISK_TELLO_SETTLE_SAMPLES",
+    "ENV_SETTLE_TIMEOUT_S": "FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S",
+    "ENV_SETTLE_TOLERANCE_CM": "FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM",
+    "ENV_TAKEOFF_LATE_S": "FLIGHTRISK_TELLO_TAKEOFF_LATE_S",
+    "EVENT_GUARD_SETTING_NON_DEFAULT": "edge_flight_guard_setting_non_default",
+    "HOVER_TEST_DETAIL": "hover-only test (FLIGHTRISK_HOVER_TEST=1): this drone only hovers; land it to end the test",
+    "MAX_TEXT_LEN": 200,
+    "MIN_ALT_SLOT_CM": 50,
+    "REFUSALS_PER_FLIGHT_RANGE": {
+     "__seq__": [
+      0,
+      6
+     ]
+    },
+    "REFUSAL_HOLD_RANGE_S": {
+     "__seq__": [
+      0.5,
+      5.0
+     ]
+    },
+    "REFUSAL_RETRIES_RANGE": {
+     "__seq__": [
+      0,
+      3
+     ]
+    },
+    "SETTLE_SAMPLES_RANGE": {
+     "__seq__": [
+      2,
+      50
+     ]
+    },
+    "SETTLE_TIMEOUT_RANGE_S": {
+     "__seq__": [
+      1.0,
+      10.0
+     ]
+    },
+    "SETTLE_TOLERANCE_RANGE_CM": {
+     "__seq__": [
+      2.0,
+      50.0
+     ]
+    },
+    "TAKEOFF_LATE_RANGE_S": {
+     "__seq__": [
+      2.0,
+      20.0
+     ]
+    },
+    "TRANSIENT_REFUSALS": {
+     "__seq__": [
+      "error no valid imu",
+      "error not joystick"
+     ]
+    },
+    "__classes__": {
+     "FlightGuards": {
+      "init_defaults": {
+       "hover_test": false,
+       "refusal_hold_s": 2.5,
+       "refusal_retries": 2,
+       "refusals_per_flight": 2,
+       "settle_samples": 5,
+       "settle_timeout_s": 5.0,
+       "settle_tolerance_cm": 10.0,
+       "takeoff_late_s": 10.0
+      }
+     }
+    }
+   },
+   "flightrisk.drone.lane_executor": {
+    "ALL_CONTROL_TYPES": {
+     "__set__": [
+      "assign_lanes",
+      "clock",
+      "emergency_land_all",
+      "heartbeat",
+      "hold",
+      "land",
+      "manual_hold",
+      "manual_move",
+      "manual_takeoff",
+      "nudge",
+      "ping",
+      "resume",
+      "resume_search",
+      "start_at",
+      "takeoff"
+     ]
+    },
+    "COMMAND_TYPES": {
+     "__set__": [
+      "assign_lanes",
+      "hold",
+      "nudge",
+      "resume",
+      "start_at",
+      "takeoff"
+     ]
+    },
+    "CONTROL_TYPES": {
+     "__set__": [
+      "assign_lanes",
+      "clock",
+      "emergency_land_all",
+      "heartbeat",
+      "land",
+      "ping",
+      "start_at",
+      "takeoff"
+     ]
+    },
+    "EVENT_TEMP_PREFLIGHT": "edge_temp_preflight",
+    "LAND_RETRY_S": 2.0,
+    "LEVEL_OK": "ok",
+    "MANUAL_CONTROL_TYPES": {
+     "__set__": [
+      "manual_hold",
+      "manual_move",
+      "manual_takeoff",
+      "resume_search"
+     ]
+    },
+    "MANUAL_DEADMAN_S": 1.5,
+    "MAX_START_LATE_S": 5.0,
+    "MAX_START_LEAD_S": 120.0,
+    "MAX_TEXT_LEN": 200,
+    "MONITOR_INTERVAL_S": 0.05,
+    "OBSTACLE_AVOID_BUDGET_S": 45.0,
+    "OBSTACLE_RETRY_PAUSE_S": 0.5,
+    "OBSTACLE_SENSE_TIMEOUT_S": 2.0,
+    "OBSTACLE_SENSOR_DOWN_S": 10.0,
+    "OBSTACLE_SETTLE_RANGE_S": {
+     "__seq__": [
+      0.1,
+      3.0
+     ]
+    },
+    "OBSTACLE_SETTLE_S": 0.3,
+    "OBSTACLE_STEP_CM": 50,
+    "ORPHAN_LAND_REASON": "controller_timeout",
+    "PERSON_CUE_AGE_KEY": "detection_age_s",
+    "PERSON_CUE_DOWN_KEY": "person_cue_down",
+    "ROOM_LIMITS": {
+     "default_alt_slot_cm": 100,
+     "default_ceiling_cm": 200,
+     "default_ceiling_margin_cm": 60,
+     "default_geofence_cm": 500,
+     "max_alt_slot_cm": 500,
+     "max_ceiling_cm": 1000,
+     "max_geofence_cm": {
+      "__float__": "inf"
+     },
+     "max_move_cm": 500,
+     "min_alt_slot_cm": 50,
+     "min_ceiling_cm": 150,
+     "min_ceiling_margin_cm": 30,
+     "min_move_cm": 20,
+     "name": "room"
+    },
+    "SENSING_AUTOPILOT": "autopilot",
+    "SENSING_FORWARD_ONLY": "forward_only",
+    "SENSING_OFF": "off",
+    "SENSING_STEPPED": "stepped",
+    "SENSOR_UNAVAILABLE_DETAIL": "obstacle sensor unavailable:",
+    "START_REFUSED_REASON": "obstacle_sensor",
+    "TELEMETRY_AVOID": "obstacle_avoid",
+    "TELEMETRY_CUTS": "obstacle_cuts",
+    "TELEMETRY_CUTS_TOTAL": "obstacle_cuts_total",
+    "TELEMETRY_CUT_REASONS": "obstacle_cut_reasons",
+    "TELEMETRY_INTERVAL_S": 0.5,
+    "TELEMETRY_LATENCY_MS": "obstacle_latency_ms",
+    "TELEMETRY_PERSON_CUE": "obstacle_person_cue",
+    "TELEMETRY_QUEUE_SIZE": 4,
+    "TELEMETRY_SENSING": "obstacle_sensing",
+    "TELEMETRY_SENSOR_OK": "obstacle_sensor_ok",
+    "TELEMETRY_SEQ": "obstacle_seq",
+    "TELEMETRY_STATE": "obstacle_state",
+    "TELEMETRY_TEMP": "temp_preflight",
+    "V2_CONTROL_TYPES": {
+     "__set__": [
+      "hold",
+      "nudge",
+      "resume"
+     ]
+    },
+    "_START_NACK_REASONS": {
+     "busy": "busy",
+     "drone_unreachable": "drone_unreachable",
+     "geofence": "geofence",
+     "holding": "busy",
+     "invalid_plan_id": "invalid",
+     "invalid_t_ground_s": "invalid",
+     "landing": "landing",
+     "no_clock_offset": "invalid",
+     "no_lanes": "no_valid_plan",
+     "no_valid_plan": "no_valid_plan",
+     "obstacle_sensor": "drone_unreachable",
+     "plan_mismatch": "plan_mismatch",
+     "shut_down": "busy",
+     "too_far_ahead": "invalid",
+     "too_late": "invalid"
+    },
+    "_TELEMETRY_JOIN_S": 0.5,
+    "__classes__": {
+     "LaneExecutor": {
+      "init_defaults": {
+       "authority": null,
+       "clock": {
+        "__repr__": "builtin_function_or_method"
+       },
+       "command_cache_size": null,
+       "fleet_v2": false,
+       "flight_guards": null,
+       "land_retry_s": 2.0,
+       "logger": null,
+       "manual_deadman_s": 1.5,
+       "max_start_late_s": 5.0,
+       "max_start_lead_s": 120.0,
+       "monitor_interval_s": 0.05,
+       "obstacle_avoid_budget_s": 45.0,
+       "obstacle_clear_votes": 1,
+       "obstacle_relook": 0,
+       "obstacle_retry_pause_s": 0.5,
+       "obstacle_sense_timeout_s": 2.0,
+       "obstacle_sensor": null,
+       "obstacle_sensor_error": null,
+       "obstacle_settle_s": 0.3,
+       "obstacle_sidestep_cm": 0,
+       "obstacle_sidesteps": 0,
+       "obstacle_step_cm": 50,
+       "obstacle_takeoff_probe": true,
+       "obstacle_turn": true,
+       "sleep": {
+        "__repr__": "builtin_function_or_method"
+       },
+       "telemetry_interval_s": 0.5,
+       "telemetry_queue_size": 4,
+       "temp_limits": null
+      }
+     }
+    }
+   },
+   "flightrisk.drone.lane_flight": {
+    "CUE_AUTOPILOT": "autopilot",
+    "CUT_AUTOPILOT": "autopilot",
+    "CUT_SENSOR_DOWN": "sensor_down",
+    "CUT_SENSOR_STALE": "sensor_stale",
+    "DESCENT_CLEARANCE_CM": 50,
+    "EVENT_DESCENT_REFUSED": "edge_descent_refused",
+    "EVENT_HEIGHT_SETTLED": "edge_height_settled",
+    "EVENT_HEIGHT_UNSETTLED": "edge_height_unsettled",
+    "EVENT_HOVER_TEST": "edge_hover_test",
+    "EVENT_LANES_ENDED_SENSOR_DOWN": "edge_lanes_ended_sensor_down",
+    "EVENT_LANE_CUT": "edge_lane_cut",
+    "EVENT_MOVE_REFUSED": "edge_move_refused",
+    "EVENT_OBSTACLE_GATE": "edge_obstacle_gate",
+    "EVENT_OBSTACLE_STOP": "edge_obstacle_stop",
+    "EVENT_OBSTACLE_TURN": "edge_obstacle_turn",
+    "EVENT_SENSE_STALE": "edge_obstacle_sense_stale",
+    "EVENT_SENSE_TIMEOUT": "edge_obstacle_sense_timeout",
+    "EVENT_SENSOR_ERROR": "edge_obstacle_sensor_error",
+    "EVENT_SENSOR_PROBE": "edge_obstacle_sensor_probe",
+    "EVENT_START_REFUSED": "edge_start_refused",
+    "EVENT_TAKEOFF_LATE": "edge_takeoff_late",
+    "EVENT_TAKEOFF_SENSE": "edge_obstacle_takeoff_sense",
+    "HEADING_NOT_REACHED": "heading not reached",
+    "HEADING_TOLERANCE_DEG": 10.0,
+    "MAX_TEXT_LEN": 200,
+    "OBSTACLE_RETRY_PAUSE_S": 0.5,
+    "OBSTACLE_SENSE_RETRIES": 3,
+    "OBSTACLE_SENSOR_DOWN_S": 10.0,
+    "OBSTACLE_SETTLE_S": 0.3,
+    "OBSTACLE_STATE_BLOCKED": "blocked",
+    "OBSTACLE_STATE_CLEAR": "clear",
+    "OBSTACLE_STATE_UNAVAILABLE": "unavailable",
+    "PERSON_CUE_CLEAR": "clear",
+    "REASON_ERROR": "error",
+    "REASON_STALE": "stale",
+    "REASON_TIMEOUT": "timeout",
+    "ROOM_LIMITS": {
+     "default_alt_slot_cm": 100,
+     "default_ceiling_cm": 200,
+     "default_ceiling_margin_cm": 60,
+     "default_geofence_cm": 500,
+     "max_alt_slot_cm": 500,
+     "max_ceiling_cm": 1000,
+     "max_geofence_cm": {
+      "__float__": "inf"
+     },
+     "max_move_cm": 500,
+     "min_alt_slot_cm": 50,
+     "min_ceiling_cm": 150,
+     "min_ceiling_margin_cm": 30,
+     "min_move_cm": 20,
+     "name": "room"
+    },
+    "START_REFUSED_REASON": "obstacle_sensor",
+    "STATE_BLOCKED": "blocked",
+    "STATE_CLEAR": "clear",
+    "TAKEOFF_SENSE_DETAIL": "obstacle sensor cannot see before takeoff:",
+    "_AGAIN": "again",
+    "_CUT": "cut",
+    "_FIRST_PHASE": {
+     "climb": "climbing",
+     "lanes": "lanes",
+     "manual": "manual",
+     "manual_takeoff": "pre_takeoff",
+     "nudge": "nudge",
+     "return": "returning",
+     "start_at": "pre_takeoff",
+     "takeoff": "pre_takeoff"
+    },
+    "_GO": "go",
+    "_OBSTACLE_STATES": {
+     "blocked": "blocked",
+     "clear": "clear"
+    },
+    "_RETRY": "retry",
+    "_SENSE_JOIN_GRACE_S": 0.5,
+    "_START_SPIN_S": 0.02,
+    "_STOP": "stop",
+    "_VOTE": "vote"
+   },
+   "flightrisk.drone.mavlink_fleet": {
+    "ARDUPILOT": "ardupilot",
+    "AUTOMATIC_LAND_REASONS": {
+     "__set__": [
+      "ceiling",
+      "ceiling_exceeded",
+      "control_error",
+      "executor_error",
+      "geofence",
+      "geofence_breach",
+      "height_unknown",
+      "height_unsettled",
+      "hover_timeout",
+      "link_loss",
+      "low_battery",
+      "monitor_error",
+      "on_complete",
+      "shutdown",
+      "takeoff_late",
+      "tof_clearance"
+     ]
+    },
+    "AVOIDANCE_PARAMS": {
+     "ardupilot": {
+      "__seq__": [
+       "OA_TYPE",
+       "PRX1_TYPE",
+       "OA_MARGIN_MAX",
+       "OA_BR_LOOKAHEAD"
+      ]
+     },
+     "px4": {
+      "__seq__": []
+     }
+    },
+    "DEFAULT_MIN_SATELLITES": 8,
+    "DEFAULT_SYSID": 1,
+    "DEGREE": "deg",
+    "EARTH_RADIUS_M": 6371008.8,
+    "EVENT_STEPPED_CANNOT_YAW": "edge_obstacle_stepped_cannot_yaw",
+    "FAILSAFE_ACTIONS": {
+     "__seq__": [
+      "rtl",
+      "land"
+     ]
+    },
+    "FAILSAFE_PARAMS": {
+     "ardupilot": {
+      "__seq__": [
+       "FENCE_ENABLE",
+       "FENCE_TYPE",
+       "FENCE_ACTION",
+       "FENCE_RADIUS",
+       "FENCE_ALT_MAX",
+       "FENCE_ALT_MAX_TP",
+       "BATT_FS_LOW_ACT",
+       "BATT_FS_CRT_ACT",
+       "BATT_LOW_VOLT",
+       "BATT_LOW_MAH",
+       "BATT_ARM_VOLT",
+       "FS_THR_ENABLE",
+       "RTL_ALT_M",
+       "RTL_ALT",
+       "MAV_SYSID",
+       "SYSID_THISMAV"
+      ]
+     },
+     "px4": {
+      "__seq__": [
+       "GF_ACTION",
+       "GF_MAX_HOR_DIST",
+       "GF_MAX_VER_DIST",
+       "COM_LOW_BAT_ACT",
+       "NAV_RCL_ACT",
+       "NAV_DLL_ACT",
+       "RTL_RETURN_ALT",
+       "MAV_SYS_ID"
+      ]
+     }
+    },
+    "FAILSAFE_REASONS": {
+     "__set__": [
+      "geofence_breach",
+      "link_loss",
+      "low_battery"
+     ]
+    },
+    "FIELD_LIMITS": {
+     "default_alt_slot_cm": 1500,
+     "default_ceiling_cm": 3000,
+     "default_ceiling_margin_cm": 500,
+     "default_geofence_cm": 3000,
+     "max_alt_slot_cm": 12000,
+     "max_ceiling_cm": 12000,
+     "max_geofence_cm": 50000,
+     "max_move_cm": 5000,
+     "min_alt_slot_cm": 1000,
+     "min_ceiling_cm": 1000,
+     "min_ceiling_margin_cm": 300,
+     "min_move_cm": 20,
+     "name": "field"
+    },
+    "IS_FLYING_SENSED": "sensed",
+    "METRE": "m",
+    "NO_AVOIDANCE_CANNOT_YAW_REMEDY": "configure the autopilot's avoidance (OA_TYPE plus a proximity source) or set FLIGHTRISK_OBSTACLE_SENSING=off and rely on it unchecked; a camera edge would cut every lane this ArduCopter does not already face",
+    "PERCENT": "%",
+    "SENSING_MODES": {
+     "__seq__": [
+      "stepped",
+      "forward_only",
+      "autopilot",
+      "off"
+     ]
+    },
+    "SENSING_NONE": "none",
+    "SENSING_STEPPED": "stepped",
+    "STEPPED_CANNOT_YAW_DETAIL": "stepped camera sensing cannot turn this ArduCopter in place yet (the autopilot link has no yaw command), so every lane it is not already facing will be cut (sensor_stale), never flown blind, whatever avoidance the autopilot has; to fly those lanes, set FLIGHTRISK_OBSTACLE_SENSING=off and rely on the autopilot's own avoidance (OA_TYPE plus a proximity source), which the edge does not check in that mode",
+    "_DETAIL_MAX": 600,
+    "_HEADING_TOLERANCE_DEG": 10.0,
+    "_HORIZONTAL": {
+     "back": {
+      "__seq__": [
+       0.0,
+       -1.0
+      ]
+     },
+     "forward": {
+      "__seq__": [
+       0.0,
+       1.0
+      ]
+     },
+     "left": {
+      "__seq__": [
+       -1.0,
+       0.0
+      ]
+     },
+     "right": {
+      "__seq__": [
+       1.0,
+       0.0
+      ]
+     }
+    },
+    "_LANDING_MODES": {
+     "__set__": [
+      "LAND",
+      "RETURN_TO_LAUNCH"
+     ]
+    },
+    "_NEEDS_AVOIDANCE_MODES": {
+     "__set__": [
+      "autopilot",
+      "none"
+     ]
+    },
+    "_POLL_S": 0.1,
+    "_STATIONARY_RADIUS_M": 0.5,
+    "_TAKEOFF_ALT_RANGE_M": {
+     "__seq__": [
+      2.0,
+      20.0
+     ]
+    },
+    "_TAKEOFF_RETRY_S": 2.0,
+    "_VERTICAL": {
+     "down": -1.0,
+     "up": 1.0
+    },
+    "__classes__": {
+     "MavlinkFleetDrone": {
+      "init_defaults": {
+       "clock": {
+        "__repr__": "builtin_function_or_method"
+       },
+       "event_log": null,
+       "options": null
+      }
+     },
+     "MavlinkFleetOptions": {
+      "init_defaults": {
+       "arrival_alt_m": 0.7,
+       "arrival_radius_m": 1.0,
+       "failsafe_action": "rtl",
+       "fence_breach_margin_cm": 300.0,
+       "frame_heading_deg": null,
+       "min_satellites": 8,
+       "move_timeout_margin_s": 20.0,
+       "param_refresh_s": 30.0,
+       "require_failsafes": true,
+       "rtl_accept_s": 5.0,
+       "speed_mps": 3.0,
+       "stale_after_s": 3.0,
+       "stationary_s": 3.0,
+       "sysid": 1,
+       "takeoff_alt_m": 5.0,
+       "takeoff_timeout_s": 60.0,
+       "yaw_rate_dps": 30.0
+      }
+     },
+     "_AvoidanceCheck": {
+      "init_defaults": {
+       "autopilot": null,
+       "checked_at": null,
+       "values": {}
+      }
+     },
+     "_ParamCheck": {
+      "init_defaults": {
+       "autopilot": null,
+       "checked_at": null,
+       "values": {}
+      }
+     },
+     "_Target": {
+      "init_defaults": {
+       "alt_cm": 0.0,
+       "heading_deg": 0.0,
+       "x_cm": 0.0,
+       "y_cm": 0.0
+      }
+     }
+    }
+   },
+   "flightrisk.drone.mavsdk_link": {
+    "ADDRESS_SCHEMES": {
+     "__seq__": [
+      "serial",
+      "udpin",
+      "udpout",
+      "tcpin",
+      "tcpout"
+     ]
+    },
+    "ARDUPILOT": "ardupilot",
+    "AUTOPILOTS": {
+     "__seq__": [
+      "ardupilot",
+      "px4"
+     ]
+    },
+    "DEFAULT_COMMAND_TIMEOUT_S": 10.0,
+    "DEFAULT_CONNECT_TIMEOUT_S": 30.0,
+    "PX4": "px4",
+    "_MAX_SUPPORTED_MAJOR": 3,
+    "_PROBE_PARAMS": {
+     "__seq__": [
+      {
+       "__seq__": [
+        "ardupilot",
+        "FENCE_ENABLE"
+       ]
+      },
+      {
+       "__seq__": [
+        "px4",
+        "GF_ACTION"
+       ]
+      }
+     ]
+    },
+    "_STREAMS": {
+     "__seq__": [
+      "position",
+      "in_air",
+      "landed_state",
+      "armed",
+      "flight_mode",
+      "health",
+      "home",
+      "battery",
+      "gps",
+      "heading"
+     ]
+    },
+    "_TELEMETRY_RATE_HZ": 10.0,
+    "__classes__": {
+     "MavsdkAutopilotLink": {
+      "init_defaults": {
+       "autopilot": null,
+       "command_timeout_s": 10.0,
+       "connect_timeout_s": 30.0,
+       "mavsdk_server_address": null,
+       "mavsdk_server_port": null
+      }
+     }
+    }
+   },
+   "flightrisk.drone.obstacle": {
+    "FLOOR_BAND_COL_MARGIN": 0.2,
+    "FLOOR_BAND_ROW_FRACTION": 0.2,
+    "TOP_BAND_ROW_FRACTION": 0.2,
+    "_MIN_FLOOR_DEPTH": 1e-06,
+    "__classes__": {
+     "ObstacleGuard": {
+      "constants": {
+       "ACTION_UNAVAILABLE": "unavailable",
+       "CENTER_STATS": {
+        "__seq__": [
+         "mean",
+         "p90"
+        ]
+       },
+       "DEGENERATE_NON_FINITE": "non_finite",
+       "DEGENERATE_NON_FINITE_SCORE": "non_finite_score",
+       "DEGENERATE_NO_SCALE": "no_scale",
+       "DEGENERATE_UNIFORM": "uniform"
+      },
+      "init_defaults": {
+       "center_stat": "mean",
+       "check_interval": 0.5,
+       "min_safe_depth": 0.35
+      }
+     }
+    }
+   },
+   "flightrisk.drone.obstacle_sensor": {
+    "ACTION_PERSON": "person",
+    "ACTION_PERSON_UNKNOWN": "person_unknown",
+    "ACTION_STALE": "stale",
+    "ACTION_TIMEOUT": "timeout",
+    "AVOID_COUNT_KEYS": {
+     "__seq__": [
+      "relooks",
+      "relook_clears",
+      "sidesteps",
+      "sidestep_passes"
+     ]
+    },
+    "AVOID_HELD_REASON_KEY": "held_reason",
+    "AVOID_OFFSETS_KEY": "offsets",
+    "AVOID_OFFSETS_SEEN_KEY": "offsets_seen",
+    "AVOID_PHASE_HELD": "held",
+    "AVOID_PHASE_KEY": "phase",
+    "AVOID_PHASE_RELOOK": "relook",
+    "AVOID_PHASE_RETURN": "return",
+    "AVOID_PHASE_SIDESTEP": "sidestep",
+    "AVOID_RELOOKS_KEY": "relooks",
+    "AVOID_RELOOK_CLEARS_KEY": "relook_clears",
+    "AVOID_SIDESTEPS_KEY": "sidesteps",
+    "AVOID_SIDESTEP_CM_KEY": "sidestep_cm",
+    "AVOID_SIDESTEP_PASSES_KEY": "sidestep_passes",
+    "CAUSE_BLANK_FRAME": "blank frame",
+    "CHANNEL_ORDER_BGR": "bgr",
+    "CHANNEL_ORDER_RGB": "rgb",
+    "CONFIRM_REFLIGHT_CUT_REASONS": {
+     "__set__": [
+      "person"
+     ]
+    },
+    "CUE_AUTOPILOT": "autopilot",
+    "CUE_DEPTH": "depth",
+    "CUE_FAKE": "fake",
+    "CUE_NONE": "none",
+    "CUE_PERSON": "person",
+    "CUT_AUTOPILOT": "autopilot",
+    "CUT_OBSTACLE": "obstacle",
+    "CUT_PERSON": "person",
+    "CUT_REASONS": {
+     "__seq__": [
+      "obstacle",
+      "person",
+      "sensor_stale",
+      "sensor_down",
+      "autopilot"
+     ]
+    },
+    "CUT_SENSOR_DOWN": "sensor_down",
+    "CUT_SENSOR_STALE": "sensor_stale",
+    "ENV_FAKE_OBSTACLE_Y_CM": "FLIGHTRISK_FAKE_OBSTACLE_Y_CM",
+    "ENV_MAX_DECODE_LAG_S": "FLIGHTRISK_MAX_DECODE_LAG_S",
+    "ENV_OBSTACLE_AVOID_BUDGET_S": "FLIGHTRISK_OBSTACLE_AVOID_BUDGET_S",
+    "ENV_OBSTACLE_CLEAR_VOTES": "FLIGHTRISK_OBSTACLE_CLEAR_VOTES",
+    "ENV_OBSTACLE_MIN_SAFE_DEPTH": "FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH",
+    "ENV_OBSTACLE_PERSON_FRACTION": "FLIGHTRISK_OBSTACLE_PERSON_FRACTION",
+    "ENV_OBSTACLE_RELOOK": "FLIGHTRISK_OBSTACLE_RELOOK",
+    "ENV_OBSTACLE_SENSING": "FLIGHTRISK_OBSTACLE_SENSING",
+    "ENV_OBSTACLE_SETTLE_S": "FLIGHTRISK_OBSTACLE_SETTLE_S",
+    "ENV_OBSTACLE_SIDESTEPS": "FLIGHTRISK_OBSTACLE_SIDESTEPS",
+    "ENV_OBSTACLE_SIDESTEP_CM": "FLIGHTRISK_OBSTACLE_SIDESTEP_CM",
+    "ENV_OBSTACLE_STEP_CM": "FLIGHTRISK_OBSTACLE_STEP_CM",
+    "ENV_OBSTACLE_TURN": "FLIGHTRISK_OBSTACLE_TURN",
+    "EVENT_LANES_ENDED_SENSOR_DOWN": "edge_lanes_ended_sensor_down",
+    "EVENT_LANE_CUT": "edge_lane_cut",
+    "EVENT_OBSTACLE_GATE": "edge_obstacle_gate",
+    "EVENT_OBSTACLE_RELOOK": "edge_obstacle_relook",
+    "EVENT_OBSTACLE_SIDESTEP": "edge_obstacle_sidestep",
+    "EVENT_OBSTACLE_STOP": "edge_obstacle_stop",
+    "EVENT_OBSTACLE_TURN": "edge_obstacle_turn",
+    "EVENT_PERSON_CUE_DOWN": "edge_obstacle_person_cue_down",
+    "EVENT_SENSE_STALE": "edge_obstacle_sense_stale",
+    "EVENT_SENSE_TIMEOUT": "edge_obstacle_sense_timeout",
+    "EVENT_SENSOR_ERROR": "edge_obstacle_sensor_error",
+    "EVENT_SETTING_NON_DEFAULT": "edge_obstacle_setting_non_default",
+    "EVENT_START_REFUSED": "edge_start_refused",
+    "MAX_CUTS_LISTED": 8,
+    "MAX_CUT_REASONS_CHARS": 200,
+    "MAX_DECODE_LAG_RANGE_S": {
+     "__seq__": [
+      0.1,
+      2.0
+     ]
+    },
+    "MAX_DECODE_LAG_S": 0.3,
+    "MAX_OFFSETS_LISTED": 4,
+    "OBSTACLE_AVOID_BUDGET_RANGE_S": {
+     "__seq__": [
+      10.0,
+      300.0
+     ]
+    },
+    "OBSTACLE_AVOID_BUDGET_S": 45.0,
+    "OBSTACLE_CLEAR_VOTES": 2,
+    "OBSTACLE_CLEAR_VOTES_RANGE": {
+     "__seq__": [
+      1,
+      5
+     ]
+    },
+    "OBSTACLE_DETECTION_WAIT_S": 1.0,
+    "OBSTACLE_FRAME_WAIT_S": 0.7,
+    "OBSTACLE_MIN_SAFE_DEPTH": 0.35,
+    "OBSTACLE_MIN_SAFE_DEPTH_RANGE": {
+     "__seq__": [
+      0.05,
+      0.9
+     ]
+    },
+    "OBSTACLE_PERSON_CENTRAL_FRACTION": 0.3333333333333333,
+    "OBSTACLE_PERSON_CUE_DOWN_AFTER": 5,
+    "OBSTACLE_PERSON_FRACTION": 0.55,
+    "OBSTACLE_PERSON_FRACTION_RANGE": {
+     "__seq__": [
+      0.2,
+      0.9
+     ]
+    },
+    "OBSTACLE_RELOOK": 2,
+    "OBSTACLE_RELOOKS_PER_LANE": 3,
+    "OBSTACLE_RELOOK_RANGE": {
+     "__seq__": [
+      0,
+      5
+     ]
+    },
+    "OBSTACLE_SENSE_RETRIES": 3,
+    "OBSTACLE_SENSE_TIMEOUT_S": 2.0,
+    "OBSTACLE_SENSOR_DOWN_S": 10.0,
+    "OBSTACLE_SETTLE_RANGE_S": {
+     "__seq__": [
+      0.1,
+      3.0
+     ]
+    },
+    "OBSTACLE_SETTLE_S": 0.3,
+    "OBSTACLE_SIDESTEPS": 2,
+    "OBSTACLE_SIDESTEPS_RANGE": {
+     "__seq__": [
+      0,
+      4
+     ]
+    },
+    "OBSTACLE_SIDESTEP_CM": 0,
+    "OBSTACLE_SIDESTEP_PASS_CM": 150,
+    "OBSTACLE_SIDESTEP_RANGE_CM": {
+     "__seq__": [
+      20,
+      100
+     ]
+    },
+    "OBSTACLE_STATES": {
+     "__seq__": [
+      "clear",
+      "blocked",
+      "unavailable"
+     ]
+    },
+    "OBSTACLE_STATE_BLOCKED": "blocked",
+    "OBSTACLE_STATE_CLEAR": "clear",
+    "OBSTACLE_STATE_UNAVAILABLE": "unavailable",
+    "OBSTACLE_STEP_CM": 50,
+    "OBSTACLE_STEP_FIELD_CM": 500,
+    "OBSTACLE_STEP_MAX_CM": 100,
+    "OBSTACLE_STEP_MIN_CM": 20,
+    "OVERRIDE_STALE": "stale",
+    "OVERRIDE_TIMEOUT": "timeout",
+    "PERSON_CUE_AGE_KEY": "detection_age_s",
+    "PERSON_CUE_BLOCKED": "blocked",
+    "PERSON_CUE_CLEAR": "clear",
+    "PERSON_CUE_DOWN_KEY": "person_cue_down",
+    "PERSON_CUE_UNKNOWN": "unknown",
+    "REASON_ERROR": "error",
+    "REASON_STALE": "stale",
+    "REASON_TIMEOUT": "timeout",
+    "REFLIGHT_CUT_REASONS": {
+     "__set__": [
+      "obstacle",
+      "sensor_stale"
+     ]
+    },
+    "SEGMENT_OFFSET": "offset",
+    "SEGMENT_SKIPPED": "skipped",
+    "SEGMENT_TOO_SHORT": "too_short",
+    "SENSE_STATES": {
+     "__set__": [
+      "blocked",
+      "clear",
+      "unavailable"
+     ]
+    },
+    "SENSING_AUTOPILOT": "autopilot",
+    "SENSING_ENV_OFF": "off",
+    "SENSING_ENV_REQUIRED": "required",
+    "SENSING_FORWARD_ONLY": "forward_only",
+    "SENSING_MODES": {
+     "__seq__": [
+      "stepped",
+      "forward_only",
+      "autopilot",
+      "off"
+     ]
+    },
+    "SENSING_OFF": "off",
+    "SENSING_STEPPED": "stepped",
+    "SENSOR_CHANNEL_ORDER": "bgr",
+    "SENSOR_UNAVAILABLE_DETAIL": "obstacle sensor unavailable:",
+    "STALE_CAPTURE_UNKNOWN": "capture time unknown",
+    "STALE_CORRUPT_FRAME": "corrupt frame",
+    "STALE_DATA_DROPPED": "video data dropped",
+    "STALE_DECODER_BACKLOG": "decoder backlog",
+    "STALE_DECODE_ERROR": "decode error",
+    "STALE_UNTIL_KEY_FRAME": "damaged reference, waiting for a key frame",
+    "START_REFUSED_REASON": "obstacle_sensor",
+    "STATE_BLOCKED": "blocked",
+    "STATE_CLEAR": "clear",
+    "STATE_UNAVAILABLE": "unavailable",
+    "TELEMETRY_AVOID": "obstacle_avoid",
+    "TELEMETRY_CUTS": "obstacle_cuts",
+    "TELEMETRY_CUTS_TOTAL": "obstacle_cuts_total",
+    "TELEMETRY_CUT_REASONS": "obstacle_cut_reasons",
+    "TELEMETRY_FIELDS": {
+     "__seq__": [
+      "obstacle_sensing",
+      "obstacle_sensor_ok",
+      "obstacle_state",
+      "obstacle_latency_ms",
+      "obstacle_seq",
+      "obstacle_cuts",
+      "obstacle_cuts_total",
+      "obstacle_cut_reasons",
+      "obstacle_person_cue",
+      "obstacle_avoid"
+     ]
+    },
+    "TELEMETRY_LATENCY_MS": "obstacle_latency_ms",
+    "TELEMETRY_PERSON_CUE": "obstacle_person_cue",
+    "TELEMETRY_SENSING": "obstacle_sensing",
+    "TELEMETRY_SENSOR_OK": "obstacle_sensor_ok",
+    "TELEMETRY_SEQ": "obstacle_seq",
+    "TELEMETRY_STATE": "obstacle_state",
+    "__classes__": {
+     "BlockedZone": {
+      "init_defaults": {
+       "cue": "depth",
+       "heading_deg": 0.0,
+       "heading_tol_deg": 1.0,
+       "x_max": null,
+       "x_min": null,
+       "y_max": null,
+       "y_min": null
+      }
+     },
+     "FakeObstacleSensor": {
+      "init_defaults": {
+       "blocked": {
+        "__seq__": []
+       },
+       "latency_ms": 1.0
+      }
+     },
+     "FrameStamp": {
+      "init_defaults": {
+       "captured_at": null,
+       "stale_cause": null
+      }
+     },
+     "LatestFrame": {
+      "constants": {
+       "_POLL_S": 0.05
+      },
+      "init_defaults": {
+       "clock": {
+        "__repr__": "builtin_function_or_method"
+       }
+      }
+     },
+     "SenseResult": {
+      "init_defaults": {
+       "cue": "none",
+       "depth_score": null,
+       "detail": {},
+       "latency_ms": 0.0,
+       "person_cue": "unknown",
+       "reason": ""
+      }
+     },
+     "TimedFrame": {
+      "init_defaults": {
+       "captured_at": null
+      }
+     }
+    }
+   },
+   "flightrisk.drone.safety": {
+    "CEILING_CM_ENV": "FLIGHTRISK_CEILING_CM",
+    "CEILING_MARGIN_CM_ENV": "FLIGHTRISK_CEILING_MARGIN_CM",
+    "DEFAULT_ALT_SLOTS_CM": {
+     "__seq__": [
+      100,
+      130
+     ]
+    },
+    "DEFAULT_ALT_SLOT_CM": 100,
+    "DEFAULT_CEILING_CM": 200,
+    "DEFAULT_CEILING_MARGIN_CM": 60,
+    "DEFAULT_FIELD_LINK_LOSS_HOLD_S": 10.0,
+    "DEFAULT_GEOFENCE_CM": 500,
+    "DEFAULT_LAND_BATTERY": 15,
+    "DEFAULT_LINK_LOSS_LAND_S": 3.0,
+    "DEFAULT_MIN_TAKEOFF_BATTERY": 30,
+    "FIELD_LIMITS": {
+     "default_alt_slot_cm": 1500,
+     "default_ceiling_cm": 3000,
+     "default_ceiling_margin_cm": 500,
+     "default_geofence_cm": 3000,
+     "max_alt_slot_cm": 12000,
+     "max_ceiling_cm": 12000,
+     "max_geofence_cm": 50000,
+     "max_move_cm": 5000,
+     "min_alt_slot_cm": 1000,
+     "min_ceiling_cm": 1000,
+     "min_ceiling_margin_cm": 300,
+     "min_move_cm": 20,
+     "name": "field"
+    },
+    "GEOFENCE_CM_ENV": "FLIGHTRISK_GEOFENCE_CM",
+    "HORIZONTAL_DIRECTIONS": {
+     "__seq__": [
+      "forward",
+      "back",
+      "left",
+      "right"
+     ]
+    },
+    "LINK_LOSS_LAND_S_ENV": "FLIGHTRISK_LINK_LOSS_LAND_S",
+    "MAX_ALT_SLOT_CM": 500,
+    "MAX_CEILING_CM": 1000,
+    "MAX_MOVE_CM": 500,
+    "MIN_ALT_SLOT_CM": 50,
+    "MIN_ALT_SLOT_DETAIL": "a Tello's altitude slot must be at least 50 cm: below 30 cm its downward vision positioning cannot hold it, and the other 20 cm covers its height error and overshoot",
+    "MIN_CEILING_CM": 150,
+    "MIN_CEILING_MARGIN_CM": 30,
+    "MIN_MOVE_CM": 20,
+    "MIN_TAKEOFF_BATTERY_ENV": "FLIGHTRISK_MIN_TAKEOFF_BATTERY",
+    "ROOM_LIMITS": {
+     "default_alt_slot_cm": 100,
+     "default_ceiling_cm": 200,
+     "default_ceiling_margin_cm": 60,
+     "default_geofence_cm": 500,
+     "max_alt_slot_cm": 500,
+     "max_ceiling_cm": 1000,
+     "max_geofence_cm": {
+      "__float__": "inf"
+     },
+     "max_move_cm": 500,
+     "min_alt_slot_cm": 50,
+     "min_ceiling_cm": 150,
+     "min_ceiling_margin_cm": 30,
+     "min_move_cm": 20,
+     "name": "room"
+    },
+    "_DIRECTION_VECTORS": {
+     "back": {
+      "__seq__": [
+       0.0,
+       -1.0
+      ]
+     },
+     "forward": {
+      "__seq__": [
+       0.0,
+       1.0
+      ]
+     },
+     "left": {
+      "__seq__": [
+       -1.0,
+       0.0
+      ]
+     },
+     "right": {
+      "__seq__": [
+       1.0,
+       0.0
+      ]
+     }
+    },
+    "_LIMITS_BY_SCALE": {
+     "field": {
+      "default_alt_slot_cm": 1500,
+      "default_ceiling_cm": 3000,
+      "default_ceiling_margin_cm": 500,
+      "default_geofence_cm": 3000,
+      "max_alt_slot_cm": 12000,
+      "max_ceiling_cm": 12000,
+      "max_geofence_cm": 50000,
+      "max_move_cm": 5000,
+      "min_alt_slot_cm": 1000,
+      "min_ceiling_cm": 1000,
+      "min_ceiling_margin_cm": 300,
+      "min_move_cm": 20,
+      "name": "field"
+     },
+     "room": {
+      "default_alt_slot_cm": 100,
+      "default_ceiling_cm": 200,
+      "default_ceiling_margin_cm": 60,
+      "default_geofence_cm": 500,
+      "max_alt_slot_cm": 500,
+      "max_ceiling_cm": 1000,
+      "max_geofence_cm": {
+       "__float__": "inf"
+      },
+      "max_move_cm": 500,
+      "min_alt_slot_cm": 50,
+      "min_ceiling_cm": 150,
+      "min_ceiling_margin_cm": 30,
+      "min_move_cm": 20,
+      "name": "room"
+     }
+    },
+    "__classes__": {
+     "LinkWatchdog": {
+      "init_defaults": {
+       "clock": {
+        "__repr__": "builtin_function_or_method"
+       }
+      }
+     },
+     "RelativePose": {
+      "init_defaults": {
+       "heading_deg": 0.0,
+       "x_cm": 0.0,
+       "y_cm": 0.0
+      }
+     },
+     "SafetyEnvelope": {
+      "init_defaults": {
+       "alt_slot_cm": 100,
+       "ceiling_cm": 200,
+       "ceiling_margin_cm": 60,
+       "clock": {
+        "__repr__": "builtin_function_or_method"
+       },
+       "geofence_cm": 500,
+       "land_battery": 15,
+       "limits": null,
+       "link_loss_hold_s": null,
+       "link_loss_land_s": 3.0,
+       "min_takeoff_battery": 30
+      }
+     }
+    }
+   },
+   "flightrisk.drone.tello": {
+    "BASIC_FLIGHT": {
+     "__set__": [
+      {
+       "__enum__": "Capability.HOVER"
+      },
+      {
+       "__enum__": "Capability.RC_CONTROL"
+      },
+      {
+       "__enum__": "Capability.RELATIVE_MOVE"
+      },
+      {
+       "__enum__": "Capability.ROTATE"
+      },
+      {
+       "__enum__": "Capability.TAKEOFF_LAND"
+      },
+      {
+       "__enum__": "Capability.VIDEO"
+      }
+     ]
+    },
+    "CELSIUS": "degC",
+    "CHANNEL_ORDER_RGB": "rgb",
+    "DEGREE": "deg",
+    "IS_FLYING_COMMANDED": "commanded",
+    "METRE": "m",
+    "METRE_PER_SECOND": "m/s",
+    "PERCENT": "%",
+    "SECOND": "s",
+    "_COMMAND_REPLY_TIMEOUT_S": 7.0,
+    "_CONNECT_ATTEMPTS": 3,
+    "_EXTENDED_FIELDS": {
+     "__seq__": [
+      {
+       "__seq__": [
+        "vx_mps",
+        "get_speed_x",
+        0.1,
+        "m/s",
+        "tello.vgx"
+       ]
+      },
+      {
+       "__seq__": [
+        "vy_mps",
+        "get_speed_y",
+        0.1,
+        "m/s",
+        "tello.vgy"
+       ]
+      },
+      {
+       "__seq__": [
+        "vz_mps",
+        "get_speed_z",
+        0.1,
+        "m/s",
+        "tello.vgz"
+       ]
+      },
+      {
+       "__seq__": [
+        "tof_m",
+        "get_distance_tof",
+        0.01,
+        "m",
+        "tello.tof"
+       ]
+      },
+      {
+       "__seq__": [
+        "baro_altitude_m",
+        "get_barometer",
+        0.01,
+        "m",
+        "tello.baro"
+       ]
+      },
+      {
+       "__seq__": [
+        "pitch_deg",
+        "get_pitch",
+        1.0,
+        "deg",
+        "tello.pitch"
+       ]
+      },
+      {
+       "__seq__": [
+        "roll_deg",
+        "get_roll",
+        1.0,
+        "deg",
+        "tello.roll"
+       ]
+      },
+      {
+       "__seq__": [
+        "yaw_deg",
+        "get_yaw",
+        1.0,
+        "deg",
+        "tello.yaw"
+       ]
+      }
+     ]
+    },
+    "_FAILURE_LOG_INTERVAL_S": 10.0,
+    "_GROUND_HEIGHT_CM": 10,
+    "_GROUND_READINGS": 3,
+    "_GROUND_TOF_CM": 30,
+    "_KEEPALIVE_INTERVAL_S": 10.0,
+    "_KEEPALIVE_TIMEOUT_S": 5,
+    "_KEEPALIVE_WAIT_S": 6.0,
+    "_LAND_ATTEMPTS": 3,
+    "_LAND_DEADLINE_S": 25.0,
+    "_LAND_DESCENT_CM": 5,
+    "_LAND_DESCENT_STALL_S": 2.0,
+    "_LAND_GROUND_WAIT_S": 6.0,
+    "_LAND_REPLY_TIMEOUT_S": 7.0,
+    "_LAND_STALL_PACKETS": 2,
+    "_LAND_STALL_S": 1.0,
+    "_LINK_DETAIL_MAX_LEN": 160,
+    "_LINK_STATE_MAX_AGE_S": 3.0,
+    "_MOTOR_OFF_S": 2.0,
+    "_MOTOR_RUN_GAP_S": 1.0,
+    "_MOVE_DIRECTIONS": {
+     "__seq__": [
+      "up",
+      "down",
+      "left",
+      "right",
+      "forward",
+      "back"
+     ]
+    },
+    "_POST_LAND_FLIGHT_POLLS": 2,
+    "_QUERY_REPLY_RES": {
+     "__seq__": [
+      {
+       "__repr__": "Pattern"
+      },
+      {
+       "__repr__": "Pattern"
+      },
+      {
+       "__repr__": "Pattern"
+      }
+     ]
+    },
+    "_REPLY_POLL_S": 0.01,
+    "_SETTLE_BURST_GAP_S": 0.01,
+    "_SETTLE_MIN_GAP_S": 0.05,
+    "_SETTLE_POLL_S": 0.05,
+    "_STATE_FRESH_S": 0.5,
+    "_STATE_LOST_S": 3.0,
+    "_STATE_POLL_INTERVAL_S": 2.0,
+    "_STATE_READINGS_KEPT": 128,
+    "_STREAM_CHANNEL_POLL_S": 0.05,
+    "_STREAM_CHANNEL_WAIT_S": 30.0,
+    "_STREAM_REPLY_TIMEOUT_S": 5,
+    "_STREAM_RESTART_PAUSE_S": 1.0,
+    "_TAKEOFF_CONFIRM_S": 6.0,
+    "_TAKEOFF_GROUND_AFTER_S": 3.0,
+    "_TAKEOFF_LIFT_GUARD_S": 10.0,
+    "_TAKEOFF_REPLY_LOG_LEN": 64,
+    "_TAKEOFF_REPLY_TIMEOUT_S": 20.0,
+    "_TIME_BETWEEN_COMMANDS_S": 0.1,
+    "_TOF_OUT_OF_RANGE_CM": 6553,
+    "_ZERO_HEIGHT_POLLS": 3,
+    "__classes__": {
+     "FakeTelloController": {
+      "constants": {
+       "TAKEOFF_HEIGHT_CM": 80
+      },
+      "init_defaults": {
+       "battery": 100,
+       "frame_shape": {
+        "__seq__": [
+         720,
+         960,
+         3
+        ]
+       },
+       "name": "fake-tello",
+       "speed_cm_s": null,
+       "takeoff_height_cm": 80
+      }
+     },
+     "TelloController": {
+      "init_defaults": {
+       "binding": null,
+       "host": null,
+       "ifindex": null,
+       "local_ip": null,
+       "name": "drone",
+       "socket_factory": null
+      }
+     },
+     "_StateStampedUdpObject": {
+      "init_defaults": {
+       "name": "drone"
+      }
+     }
+    }
+   },
+   "flightrisk.drone.tello_bound": {
+    "ENV_MAX_DECODE_LAG_S": "FLIGHTRISK_MAX_DECODE_LAG_S",
+    "IP_UNICAST_IF": 31,
+    "MAX_DECODE_LAG_RANGE_S": {
+     "__seq__": [
+      0.1,
+      2.0
+     ]
+    },
+    "MAX_DECODE_LAG_S": 0.3,
+    "MAX_QUEUE_AGE_S": 2.0,
+    "STALE_CORRUPT_FRAME": "corrupt frame",
+    "STALE_DATA_DROPPED": "video data dropped",
+    "STALE_DECODER_BACKLOG": "decoder backlog",
+    "STALE_DECODE_ERROR": "decode error",
+    "STALE_UNTIL_KEY_FRAME": "damaged reference, waiting for a key frame",
+    "TELLO_CMD_PORT": 8889,
+    "TELLO_STATE_PORT": 8890,
+    "TELLO_VIDEO_PORT": 11111,
+    "_LOG_INTERVAL_S": 10.0,
+    "_PACKETS_TRACKED": 64,
+    "_PICT_TYPE_I": 1,
+    "_RECV_POLL_S": 0.2,
+    "_STAMPS_KEPT": 32,
+    "_VIDEO_RCVBUF_BYTES": 1048576,
+    "_VIDEO_STOP_JOIN_S": 1.0,
+    "__classes__": {
+     "BoundFrameRead": {
+      "init_defaults": {
+       "clock": {
+        "__repr__": "builtin_function_or_method"
+       },
+       "max_lag_s": 0.3,
+       "max_queue_age_s": 2.0,
+       "name": "drone",
+       "socket_factory": {
+        "__repr__": "function"
+       }
+      }
+     },
+     "BoundTello": {
+      "init_defaults": {
+       "name": "drone",
+       "retry_count": 1,
+       "socket_factory": {
+        "__repr__": "function"
+       }
+      }
+     },
+     "TelloBinding": {
+      "init_defaults": {
+       "cmd_port": 8889,
+       "drone_cmd_port": 8889,
+       "ifindex": null,
+       "state_port": 8890,
+       "video_port": 11111
+      }
+     }
+    }
+   },
+   "flightrisk.drone.temp_preflight": {
+    "DEFAULT_TEMP_REFUSE_C": 95,
+    "DEFAULT_TEMP_WARN_C": 92,
+    "ENV_TELLO_TEMP_REFUSE_C": "FLIGHTRISK_TELLO_TEMP_REFUSE_C",
+    "ENV_TELLO_TEMP_WARN_C": "FLIGHTRISK_TELLO_TEMP_WARN_C",
+    "EVENT_TEMP_PREFLIGHT": "edge_temp_preflight",
+    "LEVELS": {
+     "__seq__": [
+      "ok",
+      "warn",
+      "refuse",
+      "unknown"
+     ]
+    },
+    "LEVEL_OK": "ok",
+    "LEVEL_REFUSE": "refuse",
+    "LEVEL_UNKNOWN": "unknown",
+    "LEVEL_WARN": "warn",
+    "MAX_DETAIL_CHARS": 120,
+    "REFUSE_OFF": "off",
+    "TELEMETRY_TEMP": "temp_preflight",
+    "TEMP_KEYS": {
+     "__seq__": [
+      "level",
+      "low_c",
+      "high_c",
+      "warn_c",
+      "refuse_c",
+      "detail",
+      "live_low_c",
+      "live_high_c"
+     ]
+    },
+    "TEMP_LIMIT_RANGE_C": {
+     "__seq__": [
+      40,
+      120
+     ]
+    },
+    "TEMP_READING_RANGE_C": {
+     "__seq__": [
+      -40,
+      150
+     ]
+    },
+    "__classes__": {
+     "TempCheck": {
+      "init_defaults": {
+       "detail": null,
+       "reading": null
+      }
+     },
+     "TempLimits": {
+      "init_defaults": {
+       "refuse_c": 95,
+       "warn_c": 92
+      }
+     }
+    }
+   },
+   "flightrisk.edge_device": {
+    "AUTH_BACKOFF_MAX_S": 10.0,
+    "CEILING_CM_ENV": "FLIGHTRISK_CEILING_CM",
+    "CEILING_MARGIN_CM_ENV": "FLIGHTRISK_CEILING_MARGIN_CM",
+    "CHANNEL_ORDER_BGR": "bgr",
+    "CHANNEL_ORDER_RGB": "rgb",
+    "CONTROL_TYPES": {
+     "__set__": [
+      "assign_lanes",
+      "clock",
+      "emergency_land_all",
+      "heartbeat",
+      "land",
+      "ping",
+      "start_at",
+      "takeoff"
+     ]
+    },
+    "DEFAULT_FIELD_LINK_LOSS_HOLD_S": 10.0,
+    "DEFAULT_LINK_LOSS_LAND_S": 3.0,
+    "DEFAULT_REFUSALS_PER_FLIGHT": 2,
+    "DEFAULT_REFUSAL_HOLD_S": 2.5,
+    "DEFAULT_REFUSAL_RETRIES": 2,
+    "DEFAULT_SETTLE_SAMPLES": 5,
+    "DEFAULT_SETTLE_TIMEOUT_S": 5.0,
+    "DEFAULT_SETTLE_TOLERANCE_CM": 10.0,
+    "DEFAULT_STRIDE_MAX_SKIP_S": 1.0,
+    "DEFAULT_TAKEOFF_LATE_S": 10.0,
+    "DEFAULT_TEMP_REFUSE_C": 95,
+    "DEFAULT_TEMP_WARN_C": 92,
+    "DEFAULT_TORCH_THREADS": 2,
+    "ENV_FAKE_OBSTACLE_Y_CM": "FLIGHTRISK_FAKE_OBSTACLE_Y_CM",
+    "ENV_FLEET_LEGACY": "FLIGHTRISK_FLEET_LEGACY",
+    "ENV_GROUND_URLS": "FLIGHTRISK_GROUND_URLS",
+    "ENV_HOVER_TEST": "FLIGHTRISK_HOVER_TEST",
+    "ENV_INFLIGHT_HANDOVER": "FLIGHTRISK_INFLIGHT_HANDOVER",
+    "ENV_MAX_DECODE_LAG_S": "FLIGHTRISK_MAX_DECODE_LAG_S",
+    "ENV_NODE_ID": "FLIGHTRISK_NODE_ID",
+    "ENV_OBSTACLE_AVOID_BUDGET_S": "FLIGHTRISK_OBSTACLE_AVOID_BUDGET_S",
+    "ENV_OBSTACLE_CLEAR_VOTES": "FLIGHTRISK_OBSTACLE_CLEAR_VOTES",
+    "ENV_OBSTACLE_MIN_SAFE_DEPTH": "FLIGHTRISK_OBSTACLE_MIN_SAFE_DEPTH",
+    "ENV_OBSTACLE_PERSON_FRACTION": "FLIGHTRISK_OBSTACLE_PERSON_FRACTION",
+    "ENV_OBSTACLE_RELOOK": "FLIGHTRISK_OBSTACLE_RELOOK",
+    "ENV_OBSTACLE_SENSING": "FLIGHTRISK_OBSTACLE_SENSING",
+    "ENV_OBSTACLE_SETTLE_S": "FLIGHTRISK_OBSTACLE_SETTLE_S",
+    "ENV_OBSTACLE_SIDESTEPS": "FLIGHTRISK_OBSTACLE_SIDESTEPS",
+    "ENV_OBSTACLE_SIDESTEP_CM": "FLIGHTRISK_OBSTACLE_SIDESTEP_CM",
+    "ENV_OBSTACLE_STEP_CM": "FLIGHTRISK_OBSTACLE_STEP_CM",
+    "ENV_OBSTACLE_TURN": "FLIGHTRISK_OBSTACLE_TURN",
+    "ENV_REFUSALS_PER_FLIGHT": "FLIGHTRISK_TELLO_REFUSALS_PER_FLIGHT",
+    "ENV_REFUSAL_HOLD_S": "FLIGHTRISK_TELLO_REFUSAL_HOLD_S",
+    "ENV_REFUSAL_RETRIES": "FLIGHTRISK_TELLO_REFUSAL_RETRIES",
+    "ENV_SETTLE_SAMPLES": "FLIGHTRISK_TELLO_SETTLE_SAMPLES",
+    "ENV_SETTLE_TIMEOUT_S": "FLIGHTRISK_TELLO_SETTLE_TIMEOUT_S",
+    "ENV_SETTLE_TOLERANCE_CM": "FLIGHTRISK_TELLO_SETTLE_TOLERANCE_CM",
+    "ENV_TAKEOFF_LATE_S": "FLIGHTRISK_TELLO_TAKEOFF_LATE_S",
+    "ENV_TELLO_TEMP_REFUSE_C": "FLIGHTRISK_TELLO_TEMP_REFUSE_C",
+    "ENV_TELLO_TEMP_WARN_C": "FLIGHTRISK_TELLO_TEMP_WARN_C",
+    "EVENT_GUARD_SETTING_NON_DEFAULT": "edge_flight_guard_setting_non_default",
+    "EVENT_NO_CAPTURE_STAMPS": "edge_obstacle_no_capture_stamps",
+    "EVENT_SETTING_NON_DEFAULT": "edge_obstacle_setting_non_default",
+    "LINK_LOSS_LAND_S_ENV": "FLIGHTRISK_LINK_LOSS_LAND_S",
+    "MANUAL_CONTROL_TYPES": {
+     "__set__": [
+      "manual_hold",
+      "manual_move",
+      "manual_takeoff",
+      "resume_search"
+     ]
+    },
+    "MAX_DECODE_LAG_RANGE_S": {
+     "__seq__": [
+      0.1,
+      2.0
+     ]
+    },
+    "MAX_DECODE_LAG_S": 0.3,
+    "MAX_FRAME_STRIDE": 30,
+    "MAX_TORCH_THREADS": 64,
+    "OBSTACLE_AVOID_BUDGET_RANGE_S": {
+     "__seq__": [
+      10.0,
+      300.0
+     ]
+    },
+    "OBSTACLE_AVOID_BUDGET_S": 45.0,
+    "OBSTACLE_CLEAR_VOTES": 2,
+    "OBSTACLE_CLEAR_VOTES_RANGE": {
+     "__seq__": [
+      1,
+      5
+     ]
+    },
+    "OBSTACLE_MIN_SAFE_DEPTH": 0.35,
+    "OBSTACLE_MIN_SAFE_DEPTH_RANGE": {
+     "__seq__": [
+      0.05,
+      0.9
+     ]
+    },
+    "OBSTACLE_PERSON_FRACTION": 0.55,
+    "OBSTACLE_PERSON_FRACTION_RANGE": {
+     "__seq__": [
+      0.2,
+      0.9
+     ]
+    },
+    "OBSTACLE_RELOOK": 2,
+    "OBSTACLE_RELOOK_RANGE": {
+     "__seq__": [
+      0,
+      5
+     ]
+    },
+    "OBSTACLE_SENSE_TIMEOUT_S": 2.0,
+    "OBSTACLE_SETTLE_RANGE_S": {
+     "__seq__": [
+      0.1,
+      3.0
+     ]
+    },
+    "OBSTACLE_SETTLE_S": 0.3,
+    "OBSTACLE_SIDESTEPS": 2,
+    "OBSTACLE_SIDESTEPS_RANGE": {
+     "__seq__": [
+      0,
+      4
+     ]
+    },
+    "OBSTACLE_SIDESTEP_CM": 0,
+    "OBSTACLE_SIDESTEP_RANGE_CM": {
+     "__seq__": [
+      20,
+      100
+     ]
+    },
+    "OBSTACLE_STEP_CM": 50,
+    "OBSTACLE_STEP_FIELD_CM": 500,
+    "OBSTACLE_STEP_MAX_CM": 100,
+    "OBSTACLE_STEP_MIN_CM": 20,
+    "REFUSALS_PER_FLIGHT_RANGE": {
+     "__seq__": [
+      0,
+      6
+     ]
+    },
+    "REFUSAL_HOLD_RANGE_S": {
+     "__seq__": [
+      0.5,
+      5.0
+     ]
+    },
+    "REFUSAL_RETRIES_RANGE": {
+     "__seq__": [
+      0,
+      3
+     ]
+    },
+    "SENSING_AUTOPILOT": "autopilot",
+    "SENSING_ENV_OFF": "off",
+    "SENSING_ENV_REQUIRED": "required",
+    "SENSING_FORWARD_ONLY": "forward_only",
+    "SENSING_OFF": "off",
+    "SENSING_STEPPED": "stepped",
+    "SENSOR_CHANNEL_ORDER": "bgr",
+    "SETTLE_SAMPLES_RANGE": {
+     "__seq__": [
+      2,
+      50
+     ]
+    },
+    "SETTLE_TIMEOUT_RANGE_S": {
+     "__seq__": [
+      1.0,
+      10.0
+     ]
+    },
+    "SETTLE_TOLERANCE_RANGE_CM": {
+     "__seq__": [
+      2.0,
+      50.0
+     ]
+    },
+    "STALE_CAPTURE_UNKNOWN": "capture time unknown",
+    "STRIDE_MAX_SKIP_RANGE_S": {
+     "__seq__": [
+      0.0,
+      5.0
+     ]
+    },
+    "TAKEOFF_LATE_RANGE_S": {
+     "__seq__": [
+      2.0,
+      20.0
+     ]
+    },
+    "_APPEARANCE_ONLY_ENV_VAR": "FLIGHTRISK_APPEARANCE_ONLY",
+    "_CAMERA_ERROR_LOG_EVERY_S": 30.0,
+    "_CAPTURE_SOURCES": {
+     "__seq__": [
+      "camera",
+      "file",
+      "url"
+     ]
+    },
+    "_CONTROL_RECV_TIMEOUT_S": 0.1,
+    "_DEFAULT_MAVLINK_ADDRESS": "udpin://127.0.0.1:14540",
+    "_DEFAULT_WS_URL": "ws://localhost:9000",
+    "_DRONES": {
+     "__seq__": [
+      "tello",
+      "fake",
+      "mavlink"
+     ]
+    },
+    "_FAILSAFE_ACTION_ENV_VAR": "FLIGHTRISK_FAILSAFE_ACTION",
+    "_FAKE_SPEED_CM_S": 100.0,
+    "_FALSE_VALUES": {
+     "__seq__": [
+      "0",
+      "false",
+      "no",
+      "off"
+     ]
+    },
+    "_FIELD_ENV": {
+     "alt_slot_m": "FLIGHTRISK_FIELD_ALT_SLOT_M",
+     "ceiling_m": "FLIGHTRISK_FIELD_CEILING_M",
+     "ceiling_margin_m": "FLIGHTRISK_FIELD_CEILING_MARGIN_M",
+     "geofence_m": "FLIGHTRISK_FIELD_GEOFENCE_M"
+    },
+    "_FLEET_RECONNECT_MAX_DELAY_S": 2.0,
+    "_FLIGHT_SOURCES": {
+     "__seq__": [
+      "tello",
+      "fake"
+     ]
+    },
+    "_FRAME_ERROR_GIVE_UP_S": 10.0,
+    "_FRAME_ERROR_LOG_EVERY": 100,
+    "_FRAME_STRIDE_ENV_VAR": "FLIGHTRISK_EDGE_FRAME_STRIDE",
+    "_LINK_LOSS_HOLD_ENV_VAR": "FLIGHTRISK_FIELD_LINK_LOSS_HOLD_S",
+    "_MAVLINK_ADDRESS_ENV_VAR": "FLIGHTRISK_MAVLINK_ADDRESS",
+    "_RECENT_FRAMES": 4,
+    "_STRIDE_MAX_SKIP_ENV_VAR": "FLIGHTRISK_EDGE_STRIDE_MAX_SKIP_S",
+    "_TELLO_IFINDEX_ENV_VAR": "FLIGHTRISK_TELLO_IFINDEX",
+    "_TELLO_LOCAL_IP_ENV_VAR": "FLIGHTRISK_TELLO_LOCAL_IP",
+    "_TOKEN_ENV_VAR": "FLIGHTRISK_EDGE_TOKEN",
+    "_TORCH_THREADS_ENV_VAR": "FLIGHTRISK_EDGE_TORCH_THREADS",
+    "_TRUE_VALUES": {
+     "__seq__": [
+      "1",
+      "true",
+      "yes",
+      "on"
+     ]
+    },
+    "_VIDEO_URL_ENV_VAR": "FLIGHTRISK_VIDEO_URL",
+    "__classes__": {
+     "DecodedFramePoller": {
+      "init_defaults": {
+       "channel_order": "rgb",
+       "frames": null,
+       "interval_s": 0.03333333333333333,
+       "log": null,
+       "name": "obstacle-frames"
+      }
+     },
+     "DroneFrameSource": {
+      "init_defaults": {
+       "clock": {
+        "__repr__": "builtin_function_or_method"
+       },
+       "frame_stride": 1,
+       "frames": null,
+       "max_skip_s": 1.0,
+       "min_interval_s": 0.03333333333333333,
+       "stop_event": null,
+       "wait": null
+      }
+     },
+     "EdgeFrames": {
+      "init_defaults": {
+       "channel_order": "bgr"
+      }
+     },
+     "ObstacleWiring": {
+      "init_defaults": {
+       "avoid": null,
+       "holder": null,
+       "sensor": null,
+       "sensor_error": null,
+       "settle_s": 0.3,
+       "step_cm": 50,
+       "turn": true
+      }
+     },
+     "ResilientCaptureSource": {
+      "init_defaults": {
+       "log": null,
+       "min_interval_s": 0.03333333333333333,
+       "on_status": null,
+       "retry_s": 1.0,
+       "stop_event": null
+      }
+     }
+    }
+   },
+   "flightrisk.edge_profiles": {
+    "BUSY_TIMEOUT_S": 60.0,
+    "DEFAULT_PROFILE": "default",
+    "IN_FLIGHT_DETAIL": "Detection profiles can only change on the ground: land the drone and wait until no lane run, takeoff or landing is in progress.",
+    "_REPLY_CACHE_SIZE": 64,
+    "_WARMUP_SHAPE": {
+     "__seq__": [
+      480,
+      640,
+      3
+     ]
+    },
+    "__classes__": {
+     "ProfileSwitcher": {
+      "init_defaults": {
+       "busy_timeout_s": 60.0,
+       "clock": {
+        "__repr__": "builtin_function_or_method"
+       },
+       "exists": null,
+       "flies": false,
+       "is_active": null,
+       "loader": {
+        "__repr__": "function"
+       },
+       "logger": null,
+       "registry": null,
+       "run_async": true,
+       "send": null
+      }
+     }
+    }
+   }
+  },
+  "obstacle_settings_fake": {
+   "avoid_budget_s": 45.0,
+   "clear_votes": 2,
+   "fake_obstacle_y_cm": null,
+   "max_decode_lag_s": 0.3,
+   "min_safe_depth": 0.35,
+   "mode": "required",
+   "non_default": {
+    "__seq__": []
+   },
+   "person_fraction": 0.55,
+   "relook": 2,
+   "settle_s": 0.3,
+   "sidestep_cm": 0,
+   "sidesteps": 2,
+   "step_cm": 50,
+   "turn": true
+  },
+  "obstacle_settings_mavlink": {
+   "avoid_budget_s": 45.0,
+   "clear_votes": 2,
+   "fake_obstacle_y_cm": null,
+   "max_decode_lag_s": 0.3,
+   "min_safe_depth": 0.35,
+   "mode": "required",
+   "non_default": {
+    "__seq__": []
+   },
+   "person_fraction": 0.55,
+   "relook": 2,
+   "settle_s": 0.3,
+   "sidestep_cm": 0,
+   "sidesteps": 2,
+   "step_cm": 500,
+   "turn": true
+  },
+  "obstacle_settings_tello": {
+   "avoid_budget_s": 45.0,
+   "clear_votes": 2,
+   "fake_obstacle_y_cm": null,
+   "max_decode_lag_s": 0.3,
+   "min_safe_depth": 0.35,
+   "mode": "required",
+   "non_default": {
+    "__seq__": []
+   },
+   "person_fraction": 0.55,
+   "relook": 2,
+   "settle_s": 0.3,
+   "sidestep_cm": 0,
+   "sidesteps": 2,
+   "step_cm": 50,
+   "turn": true
+  },
+  "parser_defaults": {
+   "speed_mps": 3.0,
+   "takeoff_alt_m": 5.0
+  },
+  "room_limits": {
+   "default_alt_slot_cm": 100,
+   "default_ceiling_cm": 200,
+   "default_ceiling_margin_cm": 60,
+   "default_geofence_cm": 500,
+   "max_alt_slot_cm": 500,
+   "max_ceiling_cm": 1000,
+   "max_geofence_cm": {
+    "__float__": "inf"
+   },
+   "max_move_cm": 500,
+   "min_alt_slot_cm": 50,
+   "min_ceiling_cm": 150,
+   "min_ceiling_margin_cm": 30,
+   "min_move_cm": 20,
+   "name": "room"
+  },
+  "safety_constants": {
+   "CEILING_CM_ENV": "FLIGHTRISK_CEILING_CM",
+   "CEILING_MARGIN_CM_ENV": "FLIGHTRISK_CEILING_MARGIN_CM",
+   "DEFAULT_ALT_SLOTS_CM": {
+    "__seq__": [
+     100,
+     130
+    ]
+   },
+   "DEFAULT_ALT_SLOT_CM": 100,
+   "DEFAULT_CEILING_CM": 200,
+   "DEFAULT_CEILING_MARGIN_CM": 60,
+   "DEFAULT_FIELD_LINK_LOSS_HOLD_S": 10.0,
+   "DEFAULT_GEOFENCE_CM": 500,
+   "DEFAULT_LAND_BATTERY": 15,
+   "DEFAULT_LINK_LOSS_LAND_S": 3.0,
+   "DEFAULT_MIN_TAKEOFF_BATTERY": 30,
+   "FIELD_LIMITS": {
+    "default_alt_slot_cm": 1500,
+    "default_ceiling_cm": 3000,
+    "default_ceiling_margin_cm": 500,
+    "default_geofence_cm": 3000,
+    "max_alt_slot_cm": 12000,
+    "max_ceiling_cm": 12000,
+    "max_geofence_cm": 50000,
+    "max_move_cm": 5000,
+    "min_alt_slot_cm": 1000,
+    "min_ceiling_cm": 1000,
+    "min_ceiling_margin_cm": 300,
+    "min_move_cm": 20,
+    "name": "field"
+   },
+   "GEOFENCE_CM_ENV": "FLIGHTRISK_GEOFENCE_CM",
+   "HORIZONTAL_DIRECTIONS": {
+    "__seq__": [
+     "forward",
+     "back",
+     "left",
+     "right"
+    ]
+   },
+   "LINK_LOSS_LAND_S_ENV": "FLIGHTRISK_LINK_LOSS_LAND_S",
+   "MAX_ALT_SLOT_CM": 500,
+   "MAX_CEILING_CM": 1000,
+   "MAX_MOVE_CM": 500,
+   "MIN_ALT_SLOT_CM": 50,
+   "MIN_ALT_SLOT_DETAIL": "a Tello's altitude slot must be at least 50 cm: below 30 cm its downward vision positioning cannot hold it, and the other 20 cm covers its height error and overshoot",
+   "MIN_CEILING_CM": 150,
+   "MIN_CEILING_MARGIN_CM": 30,
+   "MIN_MOVE_CM": 20,
+   "MIN_TAKEOFF_BATTERY_ENV": "FLIGHTRISK_MIN_TAKEOFF_BATTERY",
+   "ROOM_LIMITS": {
+    "default_alt_slot_cm": 100,
+    "default_ceiling_cm": 200,
+    "default_ceiling_margin_cm": 60,
+    "default_geofence_cm": 500,
+    "max_alt_slot_cm": 500,
+    "max_ceiling_cm": 1000,
+    "max_geofence_cm": {
+     "__float__": "inf"
+    },
+    "max_move_cm": 500,
+    "min_alt_slot_cm": 50,
+    "min_ceiling_cm": 150,
+    "min_ceiling_margin_cm": 30,
+    "min_move_cm": 20,
+    "name": "room"
+   },
+   "_DIRECTION_VECTORS": {
+    "back": {
+     "__seq__": [
+      0.0,
+      -1.0
+     ]
+    },
+    "forward": {
+     "__seq__": [
+      0.0,
+      1.0
+     ]
+    },
+    "left": {
+     "__seq__": [
+      -1.0,
+      0.0
+     ]
+    },
+    "right": {
+     "__seq__": [
+      1.0,
+      0.0
+     ]
+    }
+   },
+   "_LIMITS_BY_SCALE": {
+    "field": {
+     "default_alt_slot_cm": 1500,
+     "default_ceiling_cm": 3000,
+     "default_ceiling_margin_cm": 500,
+     "default_geofence_cm": 3000,
+     "max_alt_slot_cm": 12000,
+     "max_ceiling_cm": 12000,
+     "max_geofence_cm": 50000,
+     "max_move_cm": 5000,
+     "min_alt_slot_cm": 1000,
+     "min_ceiling_cm": 1000,
+     "min_ceiling_margin_cm": 300,
+     "min_move_cm": 20,
+     "name": "field"
+    },
+    "room": {
+     "default_alt_slot_cm": 100,
+     "default_ceiling_cm": 200,
+     "default_ceiling_margin_cm": 60,
+     "default_geofence_cm": 500,
+     "max_alt_slot_cm": 500,
+     "max_ceiling_cm": 1000,
+     "max_geofence_cm": {
+      "__float__": "inf"
+     },
+     "max_move_cm": 500,
+     "min_alt_slot_cm": 50,
+     "min_ceiling_cm": 150,
+     "min_ceiling_margin_cm": 30,
+     "min_move_cm": 20,
+     "name": "room"
+    }
+   }
+  },
+  "safety_envelope_default": {
+   "_fence_margin_cm": 0.0,
+   "alt_slot_cm": 100.0,
+   "ceiling_cm": 200.0,
+   "ceiling_margin_cm": 60.0,
+   "geofence_cm": 500.0,
+   "land_battery": 15.0,
+   "limits": {
+    "default_alt_slot_cm": 100,
+    "default_ceiling_cm": 200,
+    "default_ceiling_margin_cm": 60,
+    "default_geofence_cm": 500,
+    "max_alt_slot_cm": 500,
+    "max_ceiling_cm": 1000,
+    "max_geofence_cm": {
+     "__float__": "inf"
+    },
+    "max_move_cm": 500,
+    "min_alt_slot_cm": 50,
+    "min_ceiling_cm": 150,
+    "min_ceiling_margin_cm": 30,
+    "min_move_cm": 20,
+    "name": "room"
+   },
+   "link_loss_hold_s": null,
+   "link_watchdog": {
+    "timeout_s": 3.0
+   },
+   "min_takeoff_battery": 30.0,
+   "pose": {
+    "heading_deg": 0.0,
+    "x_cm": 0.0,
+    "y_cm": 0.0
+   }
+  },
+  "safety_envelope_for_field": {
+   "_fence_margin_cm": 0.0,
+   "alt_slot_cm": 1500.0,
+   "ceiling_cm": 3000.0,
+   "ceiling_margin_cm": 500.0,
+   "geofence_cm": 3000.0,
+   "land_battery": 15.0,
+   "limits": {
+    "default_alt_slot_cm": 1500,
+    "default_ceiling_cm": 3000,
+    "default_ceiling_margin_cm": 500,
+    "default_geofence_cm": 3000,
+    "max_alt_slot_cm": 12000,
+    "max_ceiling_cm": 12000,
+    "max_geofence_cm": 50000,
+    "max_move_cm": 5000,
+    "min_alt_slot_cm": 1000,
+    "min_ceiling_cm": 1000,
+    "min_ceiling_margin_cm": 300,
+    "min_move_cm": 20,
+    "name": "field"
+   },
+   "link_loss_hold_s": 10.0,
+   "link_watchdog": {
+    "timeout_s": 3.0
+   },
+   "min_takeoff_battery": 30.0,
+   "pose": {
+    "heading_deg": 0.0,
+    "x_cm": 0.0,
+    "y_cm": 0.0
+   }
+  },
+  "safety_envelope_from_env_empty": {
+   "_fence_margin_cm": 0.0,
+   "alt_slot_cm": 100.0,
+   "ceiling_cm": 200.0,
+   "ceiling_margin_cm": 60.0,
+   "geofence_cm": 500.0,
+   "land_battery": 15.0,
+   "limits": {
+    "default_alt_slot_cm": 100,
+    "default_ceiling_cm": 200,
+    "default_ceiling_margin_cm": 60,
+    "default_geofence_cm": 500,
+    "max_alt_slot_cm": 500,
+    "max_ceiling_cm": 1000,
+    "max_geofence_cm": {
+     "__float__": "inf"
+    },
+    "max_move_cm": 500,
+    "min_alt_slot_cm": 50,
+    "min_ceiling_cm": 150,
+    "min_ceiling_margin_cm": 30,
+    "min_move_cm": 20,
+    "name": "room"
+   },
+   "link_loss_hold_s": null,
+   "link_watchdog": {
+    "timeout_s": 3.0
+   },
+   "min_takeoff_battery": 30.0,
+   "pose": {
+    "heading_deg": 0.0,
+    "x_cm": 0.0,
+    "y_cm": 0.0
+   }
+  },
+  "temp_limits_from_env_empty": {
+   "refuse_c": 95,
+   "warn_c": 92
+  }
+ }
+}
