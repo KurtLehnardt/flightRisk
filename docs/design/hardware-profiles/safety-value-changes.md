@@ -20,4 +20,4 @@ unless every later hash is also recomputed; CODEOWNERS review of this file is th
 - SHA-256 previous: c69c2a1f30b24c0e4d06525c75ffdc744d20e6df4bf39744ec46aaacf35f650c
 - SHA-256 table: f949df64f14cee5c1c025d683cabea1d56a493941db05c214c33f7deac628378
 - SHA-256 golden: 7403c28493386027b0c383326d30d2bb2645fa54c154e289276f9246289d2504
-- SHA-256 allowlist: 501e5467604ccf3fda82616deeb45af43ba717fe5502114ba4c7ebebd313fd2d
+- SHA-256 allowlist: 49966ba5ce72cc90ec17e4890d171c9a67078dec3c69ea91c391f5569b39e750

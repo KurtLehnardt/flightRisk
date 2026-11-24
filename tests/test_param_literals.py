@@ -336,20 +336,12 @@ REGISTRY_MATCH_EXCEPTIONS = {
     ('flightrisk/dashboard/detection_profiles.py', '<module>', 'assign', 'REPLY_TIMEOUT_S', 'REPLY_TIMEOUT_S', 20.0):
         "The wait for an edge's reply to a detection-profile change, not the takeoff reply timeout of "
         "row takeoff.reply_timeout_s; the equal value is a coincidence.",
-    ('flightrisk/drone/fake.py', '<module>.FakeDrone.__init__', 'kwarg', 'DroneCapabilities', 'max_move_cm', 500):
-        "The capability a test double declares for itself, not a read of row move.max_cm; the double is not flight code.",
-    ('flightrisk/drone/fake.py', '<module>.FakeDrone.__init__', 'kwarg', 'DroneCapabilities', 'min_move_cm', 20):
-        "The capability a test double declares for itself, not a read of row move.min_cm; the double is not flight code.",
     ('flightrisk/drone/search.py', '<module>', 'default', 'generate_spiral', 'radius_cm', 50):
         "A spiral-search generator radius default, not the stationary radius of row move.stationary_radius_cm; the equal value is a coincidence.",
-    ('flightrisk/drone/tello.py', '<module>.FakeTelloController.__init__', 'kwarg', 'DroneCapabilities', 'max_move_cm', 500):
-        "The capability a test double declares for itself, not a read of row move.max_cm; the double is not flight code.",
-    ('flightrisk/drone/tello.py', '<module>.FakeTelloController.__init__', 'kwarg', 'DroneCapabilities', 'min_move_cm', 20):
-        "The capability a test double declares for itself, not a read of row move.min_cm; the double is not flight code.",
     ('flightrisk/drone/template_backend.py', '<module>.TemplateDrone.__init__', 'kwarg', 'DroneCapabilities', 'max_move_cm', 500):
-        "The capability a test double declares for itself, not a read of row move.max_cm; the double is not flight code.",
+        "A placeholder capability in the copy-me template, which the copier replaces with their drone's own limit; it mirrors no Tello row, not a read of row move.max_cm; the equal value is a coincidence of the template.",
     ('flightrisk/drone/template_backend.py', '<module>.TemplateDrone.__init__', 'kwarg', 'DroneCapabilities', 'min_move_cm', 20):
-        "The capability a test double declares for itself, not a read of row move.min_cm; the double is not flight code.",
+        "A placeholder capability in the copy-me template, which the copier replaces with their drone's own limit; it mirrors no Tello row, not a read of row move.min_cm; the equal value is a coincidence of the template.",
 }
 
 
