@@ -77,3 +77,23 @@ unless every later hash is also recomputed; CODEOWNERS review of this file is th
 - SHA-256 table: f949df64f14cee5c1c025d683cabea1d56a493941db05c214c33f7deac628378
 - SHA-256 golden: 7403c28493386027b0c383326d30d2bb2645fa54c154e289276f9246289d2504
 - SHA-256 allowlist: dd1af99c5e3615ed79b51d9efbed782d2f3abf41cd3855f08831cdde67c68621
+
+## PR-A3.4: obstacle sensing, avoidance and lane constants from the registry
+
+- Value: none changed.
+- Old and new: not applicable.
+- Reason: PR-A3.4 moves 18 + 4 deferred allowlist entries to registry lookups with no value change: 18 in
+  `flightrisk/drone/obstacle_sensor.py` and `flightrisk/drone/obstacle.py` (S13), and 4 in
+  `flightrisk/drone/lane_flight.py` and `flightrisk/drone/lane_executor.py` (S15). Each constant now reads its
+  registry row and keeps its value and type. Two entries are reclassified: `BlockedZone.heading_tol_deg` is
+  internal (the zone geometry of the fake sensor, with no registry row), and the `LaneExecutor` default
+  `obstacle_clear_votes=1` is a test double (the edge always passes its own clear votes). Three deferred
+  entries stay, with their reasons re-tagged to C1: `OBSTACLE_AVOID_BUDGET_S`, `OBSTACLE_RELOOKS_PER_LANE`
+  and `obstacle_takeoff_probe`, which have no registry row.
+- Section 27 item: 47 (A3). A production MAVLink unit leaves the nine `FLIGHTRISK_OBSTACLE_*` fact overrides
+  out of the resolution, with one log line naming each variable. The line says the edge reads it itself,
+  because the edge's obstacle settings still honour these overrides (plan risk R6 leaves that to B1).
+- SHA-256 previous: 232c2d910939388ccb34883b2e83f3605c60aedafed6a69da687e85872a5bab6
+- SHA-256 table: f949df64f14cee5c1c025d683cabea1d56a493941db05c214c33f7deac628378
+- SHA-256 golden: 7403c28493386027b0c383326d30d2bb2645fa54c154e289276f9246289d2504
+- SHA-256 allowlist: 96a43d549af5cd78f1bc877461a24306ad004dff095c59c5e79ed91a981fa6fd
