@@ -53,8 +53,22 @@ from flightrisk.drone.obstacle_sensor import CHANNEL_ORDER_RGB
 from flightrisk.drone.temp_preflight import TempSample, reading_from
 from flightrisk.drone.snapshot import reading as _reading
 from flightrisk.obs_log import Throttle, log_event, notice
+from flightrisk.params import table as _registry
 
 _log = logging.getLogger(__name__)
+
+
+def _registry_default(param_id: str) -> Any:
+    """The registry default of ``param_id`` in the Tello profile column.
+
+    The SDK timings, ground thresholds and move limits below are read-only
+    registry rows, so this adapter reads them instead of keeping a copy.
+    """
+    for spec in _registry.TABLE:
+        if spec.id == param_id:
+            return spec.defaults[_registry.T]
+    raise KeyError(f"no registry row {param_id!r}")
+
 
 #: Repeated Tello failures (frame read, keepalive, state poll) are logged at
 #: most once per this many seconds per drone and kind.
@@ -89,11 +103,11 @@ __all__ = [
 # while ``is_flying`` stays true. A flight command waits at most
 # _TAKEOFF_REPLY_TIMEOUT_S for its single reply, so 25 s still leaves time
 # for a confirming land after a takeoff that holds the channel to the end.
-_LAND_DEADLINE_S = 25.0
+_LAND_DEADLINE_S = _registry_default("tello_sdk.land_deadline_s")
 # How long a flight command waits for the Tello's reply. These match
 # djitellopy's RESPONSE_TIMEOUT and TAKEOFF_TIMEOUT.
-_COMMAND_REPLY_TIMEOUT_S = 7.0
-_TAKEOFF_REPLY_TIMEOUT_S = 20.0
+_COMMAND_REPLY_TIMEOUT_S = _registry_default("tello_sdk.command_reply_timeout_s")
+_TAKEOFF_REPLY_TIMEOUT_S = _registry_default("takeoff.reply_timeout_s")
 # A Tello answers ``takeoff`` only once it hovers, but it also sends late and
 # duplicate replies to earlier commands (a non-EDU Tello answers ``sdk?`` and
 # ``sn?`` with "unknown command" or "error"). On a real run a takeoff was
@@ -126,15 +140,15 @@ _TAKEOFF_REPLY_TIMEOUT_S = 20.0
 #   land that started before the send), and the land's own guards cover a
 #   drone that may still lift. Replies already queued when the stop was sent
 #   are still read as before.
-_TAKEOFF_CONFIRM_S = 6.0
-_TAKEOFF_GROUND_AFTER_S = 3.0
+_TAKEOFF_CONFIRM_S = _registry_default("tello_sdk.takeoff_confirm_s")
+_TAKEOFF_GROUND_AFTER_S = _registry_default("tello_sdk.takeoff_ground_after_s")
 # A takeoff reply is cut to this many characters in its log event.
 _TAKEOFF_REPLY_LOG_LEN = 64
 # djitellopy leaves at least this long between a reply and the next command,
 # because the Tello ignores commands sent too close together. A land also
 # leaves at least this long after each command it sent without reading the
 # reply (the interrupting ``stop`` and ``land``).
-_TIME_BETWEEN_COMMANDS_S = 0.1
+_TIME_BETWEEN_COMMANDS_S = _registry_default("tello_sdk.command_gap_s")
 _REPLY_POLL_S = 0.01
 # How often ``settled_height`` looks at the state packets again.
 _SETTLE_POLL_S = 0.05
@@ -149,14 +163,14 @@ _SETTLE_POLL_S = 0.05
 _SETTLE_MIN_GAP_S = 0.05
 _SETTLE_BURST_GAP_S = 0.01
 # A land is sent up to this many times. Repeating a land is always safe.
-_LAND_ATTEMPTS = 3
+_LAND_ATTEMPTS = _registry_default("tello_sdk.land_attempts")
 # How long each confirming land waits for a fresh reply before it is sent
 # again. Once the state stream is lost, only an ``ok`` that arrives after the
 # land was sent confirms it.
 _LAND_REPLY_TIMEOUT_S = _COMMAND_REPLY_TIMEOUT_S
 # The Tello sends a state packet (UDP 8890) about ten times a second. A
 # packet counts as fresh for this long after it arrives.
-_STATE_FRESH_S = 0.5
+_STATE_FRESH_S = _registry_default("tello_sdk.state_fresh_s")
 # The state stream counts as lost once no state packet carrying a height has
 # arrived for this long (or none ever has). A shorter silence is a gap: Wi-Fi
 # often drops state packets for a moment while command replies still arrive,
@@ -164,7 +178,7 @@ _STATE_FRESH_S = 0.5
 # (the interrupting ``stop``, or the move or takeoff it interrupted) while the
 # drone still hovers. So during a gap a land waits for the stream to come
 # back, and only once the stream is lost does a land's own ``ok`` confirm it.
-_STATE_LOST_S = 3.0
+_STATE_LOST_S = _registry_default("tello_sdk.state_lost_s")
 # The drone link counts as down for a takeoff (``TelloController.link_status``)
 # once no state packet has arrived for this long. It is the same threshold
 # landing uses for a lost state stream: about 30 missed packets at 10 a
@@ -179,7 +193,7 @@ _LINK_STATE_MAX_AGE_S = _STATE_LOST_S
 _LINK_DETAIL_MAX_LEN = 160
 # ``tof`` reads this when the distance is out of the sensor's range. It is no
 # distance, so it never bounds a descent (``settled_height``).
-_TOF_OUT_OF_RANGE_CM = 6553
+_TOF_OUT_OF_RANGE_CM = _registry_default("tello_sdk.tof_out_of_range_cm")
 # This many recent state packets are kept, enough to cover _MOTOR_OFF_S at
 # up to 20 packets a second.
 _STATE_READINGS_KEPT = 128
@@ -188,24 +202,24 @@ _STATE_READINGS_KEPT = 128
 # drone launched from a ledge, roof or car and hovering below that point
 # reports a negative ``h``; the absolute value keeps it from counting as
 # ground.
-_GROUND_HEIGHT_CM = 10
+_GROUND_HEIGHT_CM = _registry_default("tello.ground_height_cm")
 # The downward time-of-flight distance (state field ``tof``) of a Tello
 # resting on the ground reads about 10 cm. A reading above this, in cm,
 # (including the out-of-range value 6553) means the drone is not on the
 # ground.
-_GROUND_TOF_CM = 30
+_GROUND_TOF_CM = _registry_default("tello.ground_tof_cm")
 # This many state packets in a row, each fresh when the next arrived, the
 # newest still fresh, and all received after the confirming land was sent,
 # must show ground height (and, when ``tof`` is present, ground distance)
 # before the state stream confirms a land.
-_GROUND_READINGS = 3
+_GROUND_READINGS = _registry_default("tello.ground_readings")
 # The state field ``time`` counts, in whole seconds, how long the motors
 # have run, so it goes up at least once a second while they spin. State
 # confirms a land only when ``time`` has stayed the same across this long
 # of consecutive fresh state packets: the motors are off. A drone that
 # hovers with a ground-like ``h`` (a takeoff point above the ground, or a
 # Tello still spinning up for a takeoff) has its motors running.
-_MOTOR_OFF_S = 2.0
+_MOTOR_OFF_S = _registry_default("tello_sdk.motor_off_s")
 # Within a run of packets that shows the motors off (see ``_motors_off``),
 # each packet may arrive up to this long after the one before. The motor time
 # only goes up, and goes up at least once a second while the motors spin, so
@@ -213,7 +227,7 @@ _MOTOR_OFF_S = 2.0
 # motors off however they are spaced; a longer silence still ends the run,
 # so a stream that was mostly silent never counts as watched. A Tello's state
 # stream over Wi-Fi often pauses for half a second or so.
-_MOTOR_RUN_GAP_S = 1.0
+_MOTOR_RUN_GAP_S = _registry_default("tello_sdk.motor_run_gap_s")
 # A Tello answers ``takeoff`` only once it hovers, so a land can find a
 # takeoff still spinning up on the ground. If the Tello ignores the stop and
 # land, it lifts after them. A land that starts while a takeoff waits for its
@@ -233,12 +247,12 @@ _MOTOR_RUN_GAP_S = 1.0
 #
 # A takeoff answered ``ok`` before the land started starts neither guard:
 # that ``ok`` has been read, and the Tello sends it only once it hovers.
-_TAKEOFF_LIFT_GUARD_S = 10.0
+_TAKEOFF_LIFT_GUARD_S = _registry_default("tello_sdk.takeoff_lift_guard_s")
 # When a confirming land is answered (``ok`` or not) while fresh state still
 # shows the drone in the air (or a takeoff it interrupted may still lift),
 # the land waits up to this long, holding no lock, for fresh state to show
 # it on the ground before sending land again.
-_LAND_GROUND_WAIT_S = 6.0
+_LAND_GROUND_WAIT_S = _registry_default("tello_sdk.land_ground_wait_s")
 # While it waits, fresh state may show that the land did not take: the drone
 # is clearly in the air (see ``_clearly_airborne``) and not coming down. A
 # Tello busy with a move, or still climbing after a takeoff, answers a land
@@ -261,13 +275,13 @@ _LAND_GROUND_WAIT_S = 6.0
 # _LAND_GROUND_WAIT_S before land is sent again. Ground-like or
 # stale readings never cause a resend, so a drone already down that waits
 # for its motors-off evidence or the lift guard is not sent anything.
-_LAND_STALL_S = 1.0
+_LAND_STALL_S = _registry_default("tello_sdk.land_stall_s")
 # ... and only once this many state packets in a row (each a new one) show the
 # drone no lower than the reference, so one stale or reordered packet cannot
 # send land again.
 _LAND_STALL_PACKETS = 2
-_LAND_DESCENT_STALL_S = 2.0
-_LAND_DESCENT_CM = 5
+_LAND_DESCENT_STALL_S = _registry_default("tello_sdk.land_descent_stall_s")
+_LAND_DESCENT_CM = _registry_default("tello_sdk.land_descent_cm")
 # The state poller reads battery, height and temperature this often.
 _STATE_POLL_INTERVAL_S = 2.0
 # The poller's zero-height path acts after this many polls in a row at height 0.
@@ -278,13 +292,13 @@ _ZERO_HEIGHT_POLLS = 3
 _POST_LAND_FLIGHT_POLLS = 2
 # Connect-time commands (``command``, ``streamon``) do not move the drone, so
 # they are tried up to this many times.
-_CONNECT_ATTEMPTS = 3
+_CONNECT_ATTEMPTS = _registry_default("tello_sdk.connect_attempts")
 # The keepalive runs every _KEEPALIVE_INTERVAL_S and waits up to
 # _KEEPALIVE_TIMEOUT_S for its reply while holding the command lock. A move
 # or rotate that finds the keepalive on the channel waits up to
 # _KEEPALIVE_WAIT_S for it instead of being dropped.
-_KEEPALIVE_INTERVAL_S = 10.0
-_KEEPALIVE_TIMEOUT_S = 5
+_KEEPALIVE_INTERVAL_S = _registry_default("tello_sdk.keepalive_interval_s")
+_KEEPALIVE_TIMEOUT_S = _registry_default("tello_sdk.keepalive_timeout_s")
 _KEEPALIVE_WAIT_S = _KEEPALIVE_TIMEOUT_S + 1.0
 # Video-stream recovery sends ``streamoff``, pauses, then sends ``streamon``.
 # Each one holds the command lock only while it waits out the command gap
@@ -641,8 +655,8 @@ class TelloController:
         self.capabilities = DroneCapabilities(
             has_gps=False,
             has_rtsp=False,
-            min_move_cm=20,
-            max_move_cm=500,
+            min_move_cm=_registry_default("move.min_cm"),
+            max_move_cm=_registry_default("move.max_cm"),
             max_altitude_m=10,
             supports_missions=False,
             features=BASIC_FLIGHT | {Capability.STEPPED_SENSING},
@@ -2712,7 +2726,7 @@ class FakeTelloController:
     ``read_telemetry`` adapts its ``state`` cache.
     """
 
-    TAKEOFF_HEIGHT_CM = 80
+    TAKEOFF_HEIGHT_CM = _registry_default("takeoff.height_cm")
     #: As ``TelloController``: its frames stand in for a Tello decoder's RGB.
     frame_channel_order = CHANNEL_ORDER_RGB
 
@@ -2730,8 +2744,8 @@ class FakeTelloController:
         self.capabilities = DroneCapabilities(
             has_gps=False,
             has_rtsp=False,
-            min_move_cm=20,
-            max_move_cm=500,
+            min_move_cm=_registry_default("move.min_cm"),
+            max_move_cm=_registry_default("move.max_cm"),
             max_altitude_m=10,
             supports_missions=False,
             features=BASIC_FLIGHT | {Capability.STEPPED_SENSING},
