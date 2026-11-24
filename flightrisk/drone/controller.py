@@ -107,9 +107,12 @@ class Capability(str, Enum):
     #: estimate read from the vehicle.
     MEASURED_POSE = "measured_pose"
     #: The backend provides ``link_status()``, a report on the health of its
-    #: link. Any backend that has the method declares this, and a report that
-    #: is not ok refuses takeoff. For the MAVLink backend the report carries
-    #: the autopilot's preflight and failsafe checks.
+    #: link. A backend that has the method must declare this, and a report that
+    #: is not ok refuses takeoff. The built-in backends do not declare it yet,
+    #: so the executor still checks for the method itself. For the edge's
+    #: ``--drone mavlink`` drone (``MavlinkFleetDrone``) the report carries the
+    #: autopilot's preflight and failsafe checks; the registry's ``mavlink``
+    #: backend (``MavlinkController``) has no ``link_status()``.
     LINK_HEALTH = "link_health"
 
 

@@ -177,7 +177,9 @@ def check_capabilities_honest(subject: Subject) -> None:
             if caps.supports(capability):
                 assert callable(getattr(ctrl, method, None)), f"{subject.name}: declares {capability} without {method}"
         if caps.supports(Capability.TAKEOFF_ABORT):
-            assert "abort" in inspect.signature(ctrl.takeoff).parameters, (
+            takeoff = getattr(ctrl, "takeoff", None)
+            assert callable(takeoff), f"{subject.name}: declares {Capability.TAKEOFF_ABORT} without takeoff"
+            assert "abort" in inspect.signature(takeoff).parameters, (
                 f"{subject.name}: declares {Capability.TAKEOFF_ABORT} but takeoff takes no abort keyword")
         source = inspect.getsource(inspect.getmodule(type(ctrl)))
         for node in ast.walk(ast.parse(source)):
