@@ -1,0 +1,231 @@
+{
+  "_meta": {
+    "description": "The built-in drone models: identity, support level, adapter, cameras with their mount roles, and for each feature whether it is available for the model and why not. Model facts and fixed-mount roles only: no flight parameter row, no fact value and no Tello tuning number (tello_params.json is intentionally not produced; see docs/mobile-contract.md). Apps do not decode this file yet.",
+    "file": "catalogue.json",
+    "generated_at_commit": "ae635f155713ab3e10bc61c5c13867cce172bcfb",
+    "regenerate": "venv/bin/python scripts/export_mobile_contract_fixtures.py",
+    "sources": [
+      "flightrisk.hardware.catalogue.BUILTIN_MODELS",
+      "flightrisk.hardware.catalogue.DroneModel.support",
+      "flightrisk.hardware.features.feature_reason",
+      "flightrisk.hardware.features.mount_roles"
+    ],
+    "spec": "docs/mobile-contract.md"
+  },
+  "cases": {
+    "builtin_models": {
+      "direction": "reference",
+      "notes": "Every built-in model by id. feature reasons are shown to the operator as plain text; a null reason means available. Reasons for a camera-source unit assume no --source is given yet.",
+      "payload": {
+        "features": {
+          "appearance_match": {
+            "default_on": true,
+            "safety_switch": false
+          },
+          "birdseye_search": {
+            "default_on": false,
+            "safety_switch": false
+          },
+          "claude_second_opinion": {
+            "default_on": false,
+            "safety_switch": false
+          },
+          "forward_obstacle_sensing": {
+            "default_on": true,
+            "safety_switch": true
+          },
+          "level_search": {
+            "default_on": true,
+            "safety_switch": false
+          },
+          "onboard_avoidance": {
+            "default_on": false,
+            "safety_switch": false
+          },
+          "thermal_detection": {
+            "default_on": false,
+            "safety_switch": false
+          }
+        },
+        "models": {
+          "generic_multirotor": {
+            "adapter": "mavlink",
+            "addable_reason": null,
+            "cameras": [
+              {
+                "fps": 30,
+                "hfov_deg": 66.0,
+                "id": "main",
+                "mount": "main",
+                "mount_kind": "fixed",
+                "orientation": "forward",
+                "radiometric": false,
+                "role": "level",
+                "sensor": "rgb",
+                "stream_h_px": 1080,
+                "stream_w_px": 1920
+              }
+            ],
+            "features": {
+              "appearance_match": {
+                "available": true,
+                "reason": null
+              },
+              "birdseye_search": {
+                "available": false,
+                "reason": "no camera looks down: needs a downward mount or a gimbal with a mission pitch of -60 degrees or lower"
+              },
+              "claude_second_opinion": {
+                "available": true,
+                "reason": null
+              },
+              "forward_obstacle_sensing": {
+                "available": false,
+                "reason": "obstacle sensing from the camera needs --source camera or url"
+              },
+              "level_search": {
+                "available": true,
+                "reason": null
+              },
+              "onboard_avoidance": {
+                "available": true,
+                "reason": null
+              },
+              "thermal_detection": {
+                "available": false,
+                "reason": "no thermal camera"
+              }
+            },
+            "frame_path": "capture_source",
+            "id": "generic_multirotor",
+            "link": "radio",
+            "maker": "Various",
+            "name": "Generic multirotor",
+            "positioning": "gps",
+            "scale": "field",
+            "support": "supported"
+          },
+          "tello": {
+            "adapter": "tello_sdk_udp",
+            "addable_reason": null,
+            "cameras": [
+              {
+                "fps": 30,
+                "hfov_deg": 82.6,
+                "id": "front",
+                "mount": "front",
+                "mount_kind": "fixed",
+                "orientation": "forward",
+                "radiometric": false,
+                "role": "level",
+                "sensor": "rgb",
+                "stream_h_px": 720,
+                "stream_w_px": 960
+              }
+            ],
+            "features": {
+              "appearance_match": {
+                "available": true,
+                "reason": null
+              },
+              "birdseye_search": {
+                "available": false,
+                "reason": "the Tello has one fixed forward camera"
+              },
+              "claude_second_opinion": {
+                "available": true,
+                "reason": null
+              },
+              "forward_obstacle_sensing": {
+                "available": true,
+                "reason": null
+              },
+              "level_search": {
+                "available": true,
+                "reason": null
+              },
+              "onboard_avoidance": {
+                "available": false,
+                "reason": "the Tello has no onboard avoidance"
+              },
+              "thermal_detection": {
+                "available": false,
+                "reason": "no thermal camera"
+              }
+            },
+            "frame_path": "drone_video",
+            "id": "tello",
+            "link": "wifi_ap",
+            "maker": "Ryze Tech / DJI",
+            "name": "Ryze Tello",
+            "positioning": "vps_tof",
+            "scale": "room",
+            "support": "reference"
+          },
+          "tello_edu": {
+            "adapter": "tello_sdk_udp",
+            "addable_reason": null,
+            "cameras": [
+              {
+                "fps": 30,
+                "hfov_deg": 82.6,
+                "id": "front",
+                "mount": "front",
+                "mount_kind": "fixed",
+                "orientation": "forward",
+                "radiometric": false,
+                "role": "level",
+                "sensor": "rgb",
+                "stream_h_px": 720,
+                "stream_w_px": 960
+              }
+            ],
+            "features": {
+              "appearance_match": {
+                "available": true,
+                "reason": null
+              },
+              "birdseye_search": {
+                "available": false,
+                "reason": "the Tello has one fixed forward camera"
+              },
+              "claude_second_opinion": {
+                "available": true,
+                "reason": null
+              },
+              "forward_obstacle_sensing": {
+                "available": true,
+                "reason": null
+              },
+              "level_search": {
+                "available": true,
+                "reason": null
+              },
+              "onboard_avoidance": {
+                "available": false,
+                "reason": "the Tello has no onboard avoidance"
+              },
+              "thermal_detection": {
+                "available": false,
+                "reason": "no thermal camera"
+              }
+            },
+            "frame_path": "drone_video",
+            "id": "tello_edu",
+            "link": "wifi_ap",
+            "maker": "Ryze Tech / DJI",
+            "name": "Ryze Tello EDU",
+            "positioning": "vps_tof",
+            "scale": "room",
+            "support": "reference"
+          }
+        },
+        "support_levels": [
+          "reference",
+          "supported",
+          "slot"
+        ]
+      }
+    }
+  }
+}

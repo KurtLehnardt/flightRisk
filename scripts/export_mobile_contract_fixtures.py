@@ -2255,6 +2255,8 @@ UNKNOWN_KEY_SOURCES = {
 
 
 def build_unknown_keys(files: Mapping[str, dict]) -> dict:
+    # catalogue.json is deliberately not a source here (plan risk R6): neither app decodes it yet, so an
+    # unknown-key variant of it would test nothing. Add it when the apps gain a decoder.
     cases = {}
     for name, (file_name, case_name) in UNKNOWN_KEY_SOURCES.items():
         source = files[file_name]["cases"][case_name]
@@ -2382,6 +2384,64 @@ def build_match_score_vectors() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# catalogue: the drone models, their cameras and mounts, and the features, for the phones
+# ---------------------------------------------------------------------------
+
+
+def build_catalogue() -> dict:
+    """The built-in drone models with cameras, mount roles, support level and feature availability.
+
+    CAT-7 also asked for ``tello_params.json`` (every Tello tuning row with its default and bound). It is
+    intentionally NOT produced: its only consumer, Android's direct-Tello mode, was dropped, and the standing
+    rule is that Tello tuning thresholds are never surfaced to the user, so they never ship to the phones.
+    For the same reason this file holds no registry fact row id, no fact value, no envelope or safety fact and
+    no tuning number: model identity, cameras, mounts, support level and feature availability reasons only.
+    """
+    from flightrisk.hardware import catalogue as cat
+    from flightrisk.hardware import features as feat
+
+    def camera(spec: Any, role: Any) -> dict:
+        return {
+            "id": spec.id, "mount": spec.mount, "mount_kind": spec.mount_kind, "orientation": spec.orientation,
+            "role": role, "sensor": spec.sensor, "radiometric": spec.radiometric,
+            "stream_w_px": spec.stream_w_px, "stream_h_px": spec.stream_h_px, "hfov_deg": spec.hfov_deg,
+            "fps": spec.fps,
+        }
+
+    models = {}
+    for model_id, model in cat.BUILTIN_MODELS.items():
+        roles = feat.mount_roles(model.cameras)
+        models[model_id] = {
+            "id": model.id, "name": model.name, "maker": model.maker, "support": model.support,
+            "scale": model.scale, "adapter": model.adapter, "frame_path": model.frame_path,
+            "positioning": model.positioning, "link": model.link,
+            "addable_reason": feat.model_addable_reason(model),
+            "cameras": [camera(spec, roles.get(spec.mount)) for spec in model.cameras],
+            "features": {
+                feature_id: {"available": reason is None, "reason": reason}
+                for feature_id in feat.FEATURE_IDS
+                for reason in [feat.feature_reason(feature_id, model)]
+            },
+        }
+    features = {
+        f.id: {"default_on": f.default_on, "safety_switch": f.safety_switch} for f in feat.FEATURES.values()
+    }
+    return document(
+        "The built-in drone models: identity, support level, adapter, cameras with their mount roles, and for "
+        "each feature whether it is available for the model and why not. Model facts and fixed-mount roles only: "
+        "no flight parameter row, no fact value and no Tello tuning number (tello_params.json is intentionally "
+        "not produced; see docs/mobile-contract.md). Apps do not decode this file yet.",
+        ["flightrisk.hardware.catalogue.BUILTIN_MODELS", "flightrisk.hardware.features.feature_reason",
+         "flightrisk.hardware.features.mount_roles", "flightrisk.hardware.catalogue.DroneModel.support"],
+        {"builtin_models": case(
+            None, "reference", {"models": models, "features": features, "support_levels": list(cat.SUPPORT_LEVELS)},
+            "Every built-in model by id. feature reasons are shown to the operator as plain text; a null reason "
+            "means available. Reasons for a camera-source unit assume no --source is given yet.",
+        )},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -2401,6 +2461,7 @@ def build_all() -> dict[str, dict]:
         files.update(build_edge_link())
         files["nack_reasons.json"] = build_nack_reasons()
         files["client_emits.json"] = build_client_emits()
+        files["catalogue.json"] = build_catalogue()
         files["match_score_vectors.json"] = build_match_score_vectors()
         # Built last, so the seeded alert ids of the files above stay what they were.
         verdicts = build_alert_verdicts()
