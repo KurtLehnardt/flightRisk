@@ -98,6 +98,18 @@ ALLOWED_FILES = frozenset(
 #: The baseline section holding the findings of the permanent exemptions.
 PERMANENT_SECTION = "permanent"
 
+#: The baseline section holding the Tello facts of the hardware catalogue and the parameter registry.
+CATALOGUE_SECTION = "catalogue-data"
+
+#: The only files whose findings may sit in the catalogue-data section.
+CATALOGUE_DATA_FILES = frozenset(
+    {
+        "flightrisk/hardware/catalogue.py",
+        "flightrisk/hardware/inventory.py",
+        "flightrisk/params/constraints.py",
+    }
+)
+
 #: The only section names the baseline may use.
 ALLOWED_SECTIONS = frozenset(
     {"X-core", "X-legacy", "A3", "A4", "A5", "X-scripts", "D3", "C5", "catalogue-data", PERMANENT_SECTION}
@@ -326,18 +338,14 @@ class _Scanner(ast.NodeVisitor):
             if id(argument) not in skipped:
                 self.visit(argument)
         for keyword in node.keywords:
+            if keyword.arg is not None and TELLO_IDENTIFIER.search(keyword.arg):
+                self._add("name", keyword.arg)
             if id(keyword.value) not in skipped:
                 self._visit_value(keyword.value)
 
     def visit_Expr(self, node: ast.Expr) -> None:
         if _string(node.value) is None:
             self.visit(node.value)
-
-    def visit_Dict(self, node: ast.Dict) -> None:
-        for key, value in zip(node.keys, node.values):
-            if key is not None and _string(key) is None:
-                self.visit(key)
-            self.visit(value)
 
     def visit_Assign(self, node: ast.Assign) -> None:
         for target in node.targets:
@@ -466,6 +474,9 @@ def ratchet_problems(
             if (section == PERMANENT_SECTION) != (key[0] in PERMANENT_EXEMPTIONS):
                 where = "is not a permanent-exempt file" if section == PERMANENT_SECTION else "is a permanent-exempt file"
                 problems.append(f"key in section {section!r} {where}, permanent files belong in {PERMANENT_SECTION!r} only: {key}")
+    for key in baseline.get(CATALOGUE_SECTION, {}):
+        if key[0] not in CATALOGUE_DATA_FILES:
+            problems.append(f"key in section {CATALOGUE_SECTION!r} is not a catalogue-data file: {key}")
     for section in closed_phases:
         if baseline.get(section):
             problems.append(f"closed phase {section!r} must be empty but holds {len(baseline[section])} keys")
@@ -677,14 +688,14 @@ def test_scan_shell_kind(tmp_path):
     assert ("scripts/run.ps1", "", "shell", "FLIGHTRISK_TELLO_PORT") in powershell
 
 
-def test_scan_ignores_docstrings_and_dict_keys(tmp_path):
+def test_scan_ignores_docstrings_but_counts_dict_keys_and_values(tmp_path):
     source = (
         '"""Module for the Tello drone at 192.168.10.1."""\n'
         "def describe():\n"
         '    """Talks to a Tello."""\n'
         "    return {'tello': 1, 'note': 'tello is a model'}\n"
     )
-    assert _scan(tmp_path, "flightrisk/a.py", source) == Counter()
+    assert _scan(tmp_path, "flightrisk/a.py", source) == Counter({("flightrisk/a.py", "describe", "literal", "tello"): 1})
 
 
 def test_scan_scope_and_allowed_files(tmp_path):
@@ -797,13 +808,13 @@ def test_scan_string_kinds_and_single_finding_per_node():
     found = scan_python_source(source, "flightrisk/x.py")
     assert found == Counter(
         {
-            ("flightrisk/x.py", "f", "literal", "tello"): 2,
+            ("flightrisk/x.py", "f", "literal", "tello"): 3,
             ("flightrisk/x.py", "f", "literal", "Tello"): 1,
         }
     )
 
 
-def test_scan_skips_docstrings_and_dict_keys_but_counts_dict_values():
+def test_scan_skips_docstrings_but_counts_dict_keys_and_values():
     source = (
         "class A:\n"
         '    """tello"""\n'
@@ -812,7 +823,34 @@ def test_scan_skips_docstrings_and_dict_keys_but_counts_dict_values():
         "        return {'tello': 'x', 'y': 'tello_edu'}\n"
     )
     found = scan_python_source(source, "flightrisk/x.py")
-    assert found == Counter({("flightrisk/x.py", "A.f", "literal", "tello_edu"): 1})
+    assert found == Counter(
+        {("flightrisk/x.py", "A.f", "literal", "tello"): 1, ("flightrisk/x.py", "A.f", "literal", "tello_edu"): 1}
+    )
+
+
+def test_scan_counts_environment_dict_key_with_unpacking():
+    source = 'def f(host):\n    return {**os.environ, "FLIGHTRISK_TELLO_HOST": host}\n'
+    found = scan_python_source(source, "flightrisk/x.py")
+    assert found == Counter({("flightrisk/x.py", "f", "literal", "FLIGHTRISK_TELLO_HOST"): 1})
+
+
+def test_scan_counts_dict_literal_lookup_default():
+    source = 'def f(model):\n    return {"tello": 1000}.get(model, 12000)\n'
+    found = scan_python_source(source, "flightrisk/x.py")
+    assert found == Counter({("flightrisk/x.py", "f", "literal", "tello"): 1})
+
+
+def test_scan_counts_keyword_argument_names_once():
+    source = "def f(reg, m, h):\n    reg.build(m, tello_host=h)\n    return dict(tello=500)\n"
+    found = scan_python_source(source, "flightrisk/x.py")
+    assert found == Counter({("flightrisk/x.py", "f", "name", "tello_host"): 1, ("flightrisk/x.py", "f", "name", "tello"): 1})
+
+
+def test_ratchet_rejects_a_non_catalogue_file_in_the_catalogue_section():
+    key: Key = ("flightrisk/edge_device.py", "_build_drone", "name", "FakeTelloController")
+    problems = ratchet_problems(Counter({key: 1}), {"catalogue-data": {key: 1}})
+    assert any("is not a catalogue-data file" in p for p in problems)
+    assert ratchet_problems(Counter({key: 1}), {"A3": {key: 1}}) == []
 
 
 def test_scan_keeps_compare_and_model_default_kinds():
