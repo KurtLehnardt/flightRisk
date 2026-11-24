@@ -114,6 +114,9 @@ def test_the_process_wide_logging_listener_started_after_a_snapshot_is_not_a_lea
     """The first structured logger starts a QueueListener thread that lives on; that is not a test's leak.
 
     Runs in a fresh interpreter so the listener really starts after the snapshot, whatever ran before.
+    The module is imported before the snapshot: importing it loads extension modules and initialises
+    OpenSSL once per process, which on Windows opens handles that belong to the import, not to the
+    listener (a GitHub Windows runner counted 13 of them). Only the listener's start is measured.
     """
     import subprocess
     import sys
@@ -122,8 +125,9 @@ def test_the_process_wide_logging_listener_started_after_a_snapshot_is_not_a_lea
     code = textwrap.dedent(
         """
         from tests.support.leaks import snapshot
-        before = snapshot()
         from flightrisk import obs_log
+        assert obs_log._listener is None
+        before = snapshot()
         obs_log.setup_logging()
         assert obs_log._listener is not None and obs_log._listener._thread.is_alive()
         print(snapshot().leaked_since(before, settle_s=0.3))
