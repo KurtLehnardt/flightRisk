@@ -12,7 +12,12 @@ from __future__ import annotations
 PARAM_ADOPTERS: dict[str, frozenset[str]] = {
     "X-core": frozenset(),
     "X-legacy": frozenset(),
-    "A3": frozenset({"flightrisk/edge_resolution.py"}),
+    "A3": frozenset({
+        "flightrisk/edge_resolution.py",
+        "flightrisk/drone/safety.py",
+        "flightrisk/drone/flight_guards.py",
+        "flightrisk/drone/temp_preflight.py",
+    }),
     "A4": frozenset(),
     "A5": frozenset(),
     "B1": frozenset(),
