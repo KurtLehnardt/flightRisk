@@ -738,6 +738,15 @@ TEMP_ROWS: Mapping[str, str] = MappingProxyType({
     "refuse_c": "tello.temp_refuse_c",
 })
 
+# On a production MAVLink unit these rows are not in the resolution, so a FLIGHTRISK_TELLO_* override of
+# one gives the built-in default where today's reader honoured it. A MAVLink drone does not use any of
+# these settings, so its flight does not change. The settle and late-takeoff guards run only for a drone
+# with settled_height (lane_flight._settles_height), the refusal retries only for a CommandRefusedError,
+# which only the Tello raises (lane_flight._retry_refusal), and the temperature levels only for a drone
+# with state_temperature (lane_executor._takeoff_temp_refusal and temp_status); MavlinkFleetDrone has
+# none of them. Only the start log changes: edge_flight_guard_setting_non_default and
+# edge_temp_setting_non_default no longer name an override the drone never used.
+
 
 def fact_arguments(resolution: EdgeResolution, rows: Mapping[str, str], today: Mapping[str, Any],
                    defaults: Mapping[str, Any]) -> dict[str, Any]:
