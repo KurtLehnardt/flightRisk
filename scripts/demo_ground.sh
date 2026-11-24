@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the FlightRisk ground station for the two-drone hackathon demo (run on the Mac).
+# Start the FlightRisk ground station for the two-drone hackathon demo (run on the ground-station laptop).
 #
 #   export FLIGHTRISK_FLEET_NET=station   # or: ap  (see docs/fleet-setup.md)
 #   export FLIGHTRISK_EDGE_TOKEN="choose-a-long-random-string"

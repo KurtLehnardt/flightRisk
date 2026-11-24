@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start one FlightRisk edge process that flies one Tello (run on the Mac for drone 1).
+# Start one FlightRisk edge process that flies one Tello (run on the ground-station laptop for drone 1).
 #
 #   export FLIGHTRISK_FLEET_NET=station   # or: ap  (see docs/fleet-setup.md)
 #   export FLIGHTRISK_EDGE_TOKEN="choose-a-long-random-string"
@@ -12,7 +12,7 @@
 # when ALT_CM is above the ceiling limit, FLIGHTRISK_CEILING_CM minus
 # FLIGHTRISK_CEILING_MARGIN_CM (200 - 60 = 140 cm by default); see docs/ceiling-and-altitude.md.
 # The Tello address and ground URL come from scripts/fleet_env.sh. In ap mode, set
-# export FLIGHTRISK_GROUND_LOCAL=1 on the Mac (which runs the ground station) so edge-1 connects to
+# export FLIGHTRISK_GROUND_LOCAL=1 on the ground-station laptop (which runs the ground station) so edge-1 connects to
 # ws://127.0.0.1:9000 and keeps flying if the wired cable is pulled; without it the edge
 # dials ws://10.42.0.1:9000, which is what the Windows laptop must do.
 # With obstacle sensing required (the default) the edge needs capture stamps on its video, so set
@@ -52,7 +52,7 @@ number=$((10#$number))
 drone_id="drone-$number"
 
 if [ "${FLIGHTRISK_GROUND_LOCAL:-}" = "1" ] && [ "$number" -ne 1 ]; then
-    echo "demo_edge.sh: warning: FLIGHTRISK_GROUND_LOCAL=1 means the ground station runs on THIS machine, but $drone_id is not the Mac's edge-1; unset it on the edge-only laptop." >&2
+    echo "demo_edge.sh: warning: FLIGHTRISK_GROUND_LOCAL=1 means the ground station runs on THIS machine, but $drone_id is not the ground-station laptop's edge-1; unset it on the edge-only laptop." >&2
 fi
 
 if [ -z "${ALT_CM:-}" ]; then
