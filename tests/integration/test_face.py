@@ -17,7 +17,13 @@ pytestmark = [
 @pytest.fixture(scope="module")
 def face():
     """Shared FaceRecognizer instance."""
-    return FaceRecognizer(match_threshold=0.45)
+    try:
+        return FaceRecognizer(match_threshold=0.45)
+    except RuntimeError as exc:
+        # The model pack is a large download that is never fetched on a CI runner.
+        if "is not installed" in str(exc):
+            pytest.skip(str(exc))
+        raise
 
 
 class TestFaceRecognizerInit:

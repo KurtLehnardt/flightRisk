@@ -295,6 +295,12 @@ def _restart(client, name):
     return client.post("/api/restart", {"name": name})
 
 
+# A restart that must succeed needs an edge the launcher may restart, and Windows refuses every
+# edge restart by design (WINDOWS_EDGE_RESTART_REFUSED), whatever the sensing mode.
+EDGE_RESTART_ALLOWED = pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows refuses an edge restart by design, so a successful edge restart cannot happen there")
+
+
 def _edge_name(client):
     return next(p["name"] for p in client.get("/api/state")[1]["processes"] if p["name"].startswith("edge-"))
 
@@ -303,6 +309,7 @@ def _all_running(client):
     return _wait(lambda: all(p["status"] == "running" for p in client.get("/api/state")[1]["processes"]))
 
 
+@EDGE_RESTART_ALLOWED
 def test_restart_relaunches_a_sensing_off_edge_during_its_confirmed_run_only(launcher_with):
     """Regression (round 2 critic probe): after Stop, Restart must not relaunch an edge with sensing off unasked."""
     client, app, _ = launcher_with()
@@ -338,6 +345,7 @@ def test_restart_of_an_edge_with_an_inherited_off_is_held_back_after_stop_too(la
     assert _restart(client, edge)[0] == 409
 
 
+@EDGE_RESTART_ALLOWED
 def test_restart_after_stop_is_not_held_back_with_sensing_required(launcher_with):
     client, _, _ = launcher_with()
     status, data = client.post("/api/start", {"settings": _settings()})

@@ -10,6 +10,7 @@ import textwrap
 import threading
 import time
 from pathlib import Path
+from tests.support.posix import posix_bash
 from unittest.mock import patch
 
 import pytest
@@ -372,7 +373,7 @@ def test_a_missing_cable_address_cannot_stop_prometheus_or_grafana():
 def test_check_otlp_bind_script(value, ok):
     env = {k: v for k, v in os.environ.items() if k != "OTLP_BIND"}
     env["OTLP_BIND"] = value
-    result = subprocess.run(["bash", str(ROOT / "scripts" / "check_otlp_bind.sh")], env=env,
+    result = subprocess.run([posix_bash(), str(ROOT / "scripts" / "check_otlp_bind.sh")], env=env,
                             capture_output=True, text=True, timeout=20, check=False)
     assert (result.returncode == 0) is ok, result.stderr
     if not ok:

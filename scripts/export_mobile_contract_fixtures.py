@@ -2500,7 +2500,7 @@ def write_all(out_dir: Path, commit: str | None = None) -> list[Path]:
         doc["_meta"]["generated_at_commit"] = commit
         doc["_meta"]["file"] = name
         path = out_dir / name
-        path.write_text(render(doc), encoding="utf-8")
+        path.write_text(render(doc), encoding="utf-8", newline="\n")
         written.append(path)
     return written
 

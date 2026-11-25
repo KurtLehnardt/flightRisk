@@ -14,6 +14,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+from tests.support.posix import posix_bash
 
 import pytest
 
@@ -75,7 +76,7 @@ def test_launcher_flags():
 
 def test_launcher_syntax():
     result = subprocess.run(
-        ["bash", "-n", "scripts/demo_ground.sh", "scripts/demo_edge.sh", "scripts/fleet_env.sh"],
+        [posix_bash(), "-n", "scripts/demo_ground.sh", "scripts/demo_edge.sh", "scripts/fleet_env.sh"],
         cwd=ROOT, capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr
@@ -86,7 +87,7 @@ def _run(script: str, env_extra: dict[str, str], drop: tuple[str, ...] = ()) -> 
     for key in drop:
         env.pop(key, None)
     env.update(env_extra)
-    return subprocess.run(["bash", f"scripts/{script}"], cwd=ROOT, env=env, capture_output=True, text=True, timeout=30)
+    return subprocess.run([posix_bash(), f"scripts/{script}"], cwd=ROOT, env=env, capture_output=True, text=True, timeout=30)
 
 
 AP = {"FLIGHTRISK_FLEET_NET": "ap", "FLIGHTRISK_EDGE_TOKEN": "test-token", "DEMO_DRY_RUN": "1"}

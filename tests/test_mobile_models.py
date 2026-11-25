@@ -45,6 +45,16 @@ HEX64 = re.compile(r"^[0-9a-f]{64}$")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 
 
+def _posix(location: str) -> str:
+    """A finding's location with the platform's path separator shown as ``/``.
+
+    The guard reports files on disk by their native path, so on Windows the
+    folder part uses backslashes. Archive member names after ``!`` are already
+    ``/``-separated.
+    """
+    return location.replace(os.sep, "/")
+
+
 # ---------------------------------------------------------------------------
 # Pins
 # ---------------------------------------------------------------------------
@@ -1081,7 +1091,7 @@ class TestLicenceGuardAllowlist:
     def test_a_zip_with_another_name_is_opened(self, tmp_path):
         assets = _installed_android(tmp_path / "assets")
         (assets / "textures.bin").write_bytes(_zip_bytes({"det_10g.onnx": b"x", "notes.txt": b"y"}))
-        found = sorted((f.location.split("/")[-1], f.rule) for f in lg.scan([assets]))
+        found = sorted((_posix(f.location).split("/")[-1], f.rule) for f in lg.scan([assets]))
         assert ("textures.bin", "allowlist:unlisted") in found
         assert ("textures.bin!det_10g.onnx", "name:det_10g") in found
 
@@ -1143,7 +1153,7 @@ class TestLicenceGuardAllowlist:
     def test_an_archive_inside_a_core_ml_folder_is_caught(self, tmp_path):
         pkg = _coreml_package(tmp_path / "Models" / "YOLOXs.mlpackage")
         (pkg / "Data" / "extra.bin").write_bytes(_zip_bytes({"w600k_mbf.onnx": b"x"}))
-        found = sorted((f.location.split("/")[-1], f.rule) for f in lg.scan([tmp_path / "Models"]))
+        found = sorted((_posix(f.location).split("/")[-1], f.rule) for f in lg.scan([tmp_path / "Models"]))
         assert ("extra.bin", "allowlist:unlisted") in found and ("extra.bin!w600k_mbf.onnx", "name:w600k_mbf") in found
 
     def test_a_manifest_install_did_not_write_is_refused(self, tmp_path):
@@ -1159,7 +1169,7 @@ class TestLicenceGuardAllowlist:
         assets = _installed_android(tmp_path / "assets")
         (assets / "sub").mkdir()
         shutil.copy2(assets / "yolox_s.onnx", assets / "sub" / "yolox_s.onnx")
-        assert [f.location.endswith("sub/yolox_s.onnx") for f in lg.scan([assets])] == [True]
+        assert [_posix(f.location).endswith("sub/yolox_s.onnx") for f in lg.scan([assets])] == [True]
 
     def test_outside_an_apks_assets_a_compressed_file_is_judged_by_what_it_holds(self, tmp_path):
         model = ONNX_LIKE + b"detector"

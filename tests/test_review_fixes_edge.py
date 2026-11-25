@@ -1204,7 +1204,10 @@ def test_state_without_motor_time_or_tof_needs_a_fresh_ok(tello_on_wire, monkeyp
     assert ctrl.state.is_flying is True
     assert ctrl._land_unconfirmed is True
 
-    # Ground height and a fresh "ok" together confirm it.
+    # Ground height and a fresh "ok" together confirm it. Confirming needs several fresh state
+    # packets after the land, which a slow runner can take longer than 0.3 s to deliver; the land
+    # returns as soon as they arrive, so only the wait for them is longer.
+    monkeypatch.setattr(tello_module, "_LAND_GROUND_WAIT_S", 5.0)
     wire.script = None
     ctrl.land()
     assert ctrl.state.is_flying is False

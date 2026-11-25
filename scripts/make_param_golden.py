@@ -613,7 +613,7 @@ def main(argv):
         return 2
     data = build()
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    out.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
     print(f"wrote {out} with {len(data['rows'])} rows")
     return 0
 

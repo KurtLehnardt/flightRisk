@@ -202,6 +202,16 @@ To bundle the CoreML vision models, two scripts apply, and they produce differen
 After adding models, regenerate the project with xcodegen in `ios/`. Do not commit the regenerated `ios/FlightRisk.xcodeproj/project.pbxproj`, because it will reference the gitignored model files. Run `git checkout ios/FlightRisk.xcodeproj` before committing.
 The app builds and runs without any models; person detection, ReID, and face recognition are skipped with a log message.
 
+## Continuous integration
+
+`.github/workflows/tests.yml` runs on pull requests, pushes to main and manual dispatch:
+
+- **python-tests**: `pytest` on ubuntu, macOS and Windows (Python 3.13). macOS and Windows install the hash-locked sets in `installer/locks/`; Linux installs `requirements.txt`. The `sitl` and `slow` markers stay deselected, and tests that need models or fixtures skip themselves.
+- **android-contract**: `./gradlew :contract:test :app:testDebugUnitTest` in `mobile/` on Linux.
+- **ios-package**: `swift test` in `ios/FlightRiskGround` on macOS.
+
+The workflow has read-only permissions and uses no secrets. Checkout fetches full history because `tests/test_fleet_protocol_compat.py` reads old commits.
+
 ## Hackathon demo (Nucleus bounty)
 
 Two Tello EDU drones search one floor area together under one ground station. The ground station splits the area into zones, gives neighbouring zones different altitude slots, synchronises every edge's clock, starts both drones at the same instant, merges their detections onto one map and re-tasks a lost drone's lanes to the other. The kickoff commit is `798f21a`, tagged `hackathon/kickoff`; everything built after it is listed in [docs/built-this-week.md](docs/built-this-week.md).

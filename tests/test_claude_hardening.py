@@ -1025,7 +1025,8 @@ class _Handler(BaseHTTPRequestHandler):
             script = api.script.pop(0) if api.script else status_reply(500)
         try:
             script(self)
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            # Windows reports a write to a connection the client closed as WinError 10053.
             api.client_closed.set()
 
 

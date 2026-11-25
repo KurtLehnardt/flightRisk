@@ -1038,10 +1038,26 @@ def _wait_gone(pid: int, timeout: float = 60) -> bool:
 
 
 def _venv_processes(box: Box) -> list[int]:
+    """Processes of this install: the command line names the venv, or the cwd is the install folder.
+
+    A python.org or Homebrew Python (the GitHub macOS runner has one) re-runs itself as Python.app,
+    so its command line no longer names the venv; the launcher always runs with the install as cwd.
+    """
     out = subprocess.run(["ps", "-axww", "-o", "pid=,args="], capture_output=True, text=True, check=True).stdout
     prefix = f"{box.venv}/"
-    return [int(line.split(None, 1)[0]) for line in out.splitlines()
-            if line.strip() and line.split(None, 1)[1].startswith(prefix)]
+    found = {int(line.split(None, 1)[0]) for line in out.splitlines()
+             if line.strip() and line.split(None, 1)[1].startswith(prefix)}
+    real_app = os.path.realpath(box.app_dir)
+    lsof = subprocess.run(["/usr/sbin/lsof", "-nP", "-b", "-w", "-a", "-u", str(os.getuid()), "-d", "cwd", "-Fpn"],
+                          capture_output=True, text=True, check=False).stdout
+    current = 0
+    for line in lsof.splitlines():
+        if line.startswith("p"):
+            current = int(line[1:])
+        elif line.startswith("n") and (line[1:] == real_app or line[1:].startswith(real_app + "/")):
+            found.add(current)
+    found.discard(os.getpid())
+    return sorted(found)
 
 
 @pytest.fixture

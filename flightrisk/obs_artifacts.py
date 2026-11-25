@@ -96,9 +96,22 @@ def _write_private(path: Path, data: bytes) -> None:
         raise
 
 
-def _read_private(path: Path) -> bytes | None:
-    """Read a regular file without following a symlink; None if it is missing or not a plain file."""
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+def _read_private(path: Path, *, within: Path | None = None) -> bytes | None:
+    """Read a regular file without following a symlink; None if it is missing, a link or not a plain file.
+
+    ``O_NOFOLLOW`` does not exist on Windows, so the file is also checked with
+    ``lstat`` before it is opened: a symlink or other reparse point is refused
+    there too. When ``within`` is given, the file's resolved path must lie
+    inside that folder, which also refuses a linked parent folder.
+    """
+    try:
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            return None
+        if within is not None and not path.resolve(strict=True).is_relative_to(within.resolve(strict=True)):
+            return None
+    except (OSError, RuntimeError):
+        return None
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     try:
         fd = os.open(path, flags)
     except OSError:
@@ -152,7 +165,7 @@ class ArtifactStore:
             return self._secret
         self._ensure_dirs()
         path = self.root / "preview.key"
-        key = _read_private(path)
+        key = _read_private(path, within=self.root)
         if key is None or len(key) < MIN_KEY_BYTES:
             # Missing, or empty or truncated (an empty HMAC key would let anyone sign): make a new one.
             key = secrets.token_bytes(32)
@@ -284,7 +297,7 @@ class ArtifactStore:
     def thumbnail_bytes(self, sha: str) -> bytes | None:
         if not _SHA_RE.fullmatch(sha):
             return None
-        return _read_private(self.targets / f"{sha}.thumb.jpg")
+        return _read_private(self.targets / f"{sha}.thumb.jpg", within=self.root)
 
     # -- preview server -----------------------------------------------------
 
