@@ -86,3 +86,67 @@ def render_unconfirmed_switch_off(unit_id: str, reason: str, source: str) -> str
     which a feature switch from the launcher cannot give."
     """
     return f"{unit_id}: {reason}, which a feature switch from {source} cannot give."
+
+
+def render_shadowed_value(
+    unit_id: str, param_id: str, variable: str, value: float, layer: str, layer_value: float, flown: float,
+) -> str:
+    """Refuse a variable the edge does not read for this unit that would hide a launcher or params-file value.
+
+    Example: "drone-1: FLIGHTRISK_FIELD_ALT_SLOT_M sets `envelope.alt_slot_cm` to 120 over 130 from
+    FLIGHTRISK_LAUNCHER_PARAMS, but this edge does not read FLIGHTRISK_FIELD_ALT_SLOT_M for its drone and
+    would fly 100. Unset FLIGHTRISK_FIELD_ALT_SLOT_M."
+    """
+    return (
+        f"{unit_id}: {variable} sets `{param_id}` to {_num(value)} over {_num(layer_value)} from {layer}, "
+        f"but this edge does not read {variable} for its drone and would fly {_num(flown)}. Unset {variable}."
+    )
+
+
+def render_incomplete_acknowledgement(unit_id: str, param_id: str, problem: str) -> str:
+    """Refuse turning the altitude cap off with an acknowledgement record that is missing or malformed.
+
+    Example: "drone-1: `regulatory.altitude_cap_on` false from the launcher is refused: the
+    acknowledgement has no `text_version`. Turning the altitude cap off needs the operator's complete
+    acknowledgement from the launcher. Refusing to start."
+    """
+    return (
+        f"{unit_id}: `{param_id}` false from the launcher is refused: {problem}. Turning the altitude cap "
+        f"off needs the operator's complete acknowledgement from the launcher. Refusing to start."
+    )
+
+
+def render_cap_off_unknown_maximum(unit_id: str, model_name: str) -> str:
+    """Refuse turning the altitude cap off on a unit whose airframe maximum altitude is unknown.
+
+    Example: "drone-1 cannot turn the altitude cap off: the Generic multirotor has no known airframe
+    maximum altitude. The inventory must declare the airframe maximum. Refusing to start."
+    """
+    return (
+        f"{unit_id} cannot turn the altitude cap off: the {model_name} has no known airframe maximum "
+        f"altitude. The inventory must declare the airframe maximum. Refusing to start."
+    )
+
+
+def render_inventory_only(param_id: str, source_detail: str) -> str:
+    """Refuse a value that only the inventory may state, from any other layer.
+
+    Example: "`envelope.max_altitude_cm` from params.json is refused: the airframe maximum is a fact
+    about the airframe, and only the inventory may state it. Refusing to start."
+    """
+    return (
+        f"`{param_id}` from {source_detail} is refused: the airframe maximum is a fact about the airframe, "
+        f"and only the inventory may state it. Refusing to start."
+    )
+
+
+def render_confirm_flag_not_allowed(param_id: str) -> str:
+    """Refuse a ``--confirm-less-safe`` flag for a row only the launcher's acknowledgement can confirm.
+
+    Example: "--confirm-less-safe cannot confirm `regulatory.altitude_cap_on`: only the launcher's
+    acknowledgement can turn the altitude cap off. Refusing to start."
+    """
+    return (
+        f"--confirm-less-safe cannot confirm `{param_id}`: only the launcher's acknowledgement can turn "
+        f"the altitude cap off. Refusing to start."
+    )

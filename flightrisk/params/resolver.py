@@ -84,9 +84,14 @@ Safety (step S7):
     ``confirmations`` (the ``--confirm-less-safe id=value`` flags, see
     ``parse_confirm_flags``) names exactly that id and value. With a launcher
     layer, only the launcher's ``confirmed`` object counts; it is passed as
-    the reserved ``confirmed`` key of that layer (RES-11). Less-safe values
-    from the launcher, the environment or a flag are accepted, and those from
-    the environment or a flag are logged at warning level. A test-adapter
+    the reserved ``confirmed`` key of that layer (RES-11). A launcher value
+    of a row in ``LAUNCHER_NEEDS_CONFIRMATION`` (``sensing.mode`` off) needs
+    the same confirmation in the launcher's ``confirmed`` object. Other
+    less-safe values from the launcher, and those from the environment or a
+    flag, are accepted, and those from the environment or a flag are logged
+    at warning level. A row in ``LAUNCHER_CONFIRMED_ONLY`` (the regulatory
+    altitude cap switch) needs the launcher's ``confirmed`` object for a
+    less-safe launcher value too. A test-adapter
     fact is never less safe and never logged as less safe, from any layer or
     value (R7, R8).
 14. A safety switch stored as off in ``params.json`` or the inventory is
@@ -138,14 +143,32 @@ from __future__ import annotations
 import logging
 import math
 import re
+import dataclasses
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Optional, Union
 
 from flightrisk.hardware.catalogue import BUILTIN_MODELS, SCALES, DroneModel
 from flightrisk.params.constraints import FILE_SOURCES, check_constraints, stored_feature_off, stored_switch_off
-from flightrisk.params.messages import render_refused_input, render_unavailable_capability
+from flightrisk.params.altitude import (
+    AIRFRAME_MAX_ID,
+    CAP_BOUND_ROWS,
+    CAP_ID,
+    CAP_ON_ID,
+    acknowledgement_problem,
+    airframe_max_cm,
+    altitude_limit_cm,
+)
+from flightrisk.params.messages import (
+    render_cap_off_unknown_maximum,
+    render_confirm_flag_not_allowed,
+    render_incomplete_acknowledgement,
+    render_inventory_only,
+    render_refused_input,
+    render_unavailable_capability,
+)
 from flightrisk.params.spec import Bound, Confirm, EffectiveValue, Edit, Kind, ParamSpec, Safer, Source, Unit
 from flightrisk.params.table import (
+    LAUNCHER_CONFIRMED_ONLY,
     PARSE_AREA,
     PARSE_ASCII_FLOAT,
     PARSE_ASCII_INT,
@@ -191,11 +214,16 @@ FACT_NOT_SETTABLE = "A value in {detail} is not a setting and cannot be stored. 
 LAUNCHER_CONFIRMED = "confirmed"
 #: Operator text for a less-safe value from a file that nobody confirmed (RES-11).
 UNCONFIRMED_LESS_SAFE = (
-    "`{param_id}` {value} {unit} from {detail} is less safe than the {model} default of {base} {unit}. "
+    "`{param_id}` {value}{unit} from {detail} is less safe than the {model} default of {base}{unit}. "
     "{how} Refusing to start."
 )
 _CONFIRM_BY_FLAG = "Start with --confirm-less-safe {param_id}={value} to use it."
 _CONFIRM_IN_LAUNCHER = "Confirm it in the launcher at Start to use it."
+#: Rows whose less-safe value from the launcher layer needs the launcher's ``confirmed`` object, as a value
+#: from a file does (RES-11). From A3.4 the edge applies a launcher ``sensing.mode``, and its off value
+#: flies the lanes with no obstacle sensing. A less-safe launcher value of any other row is accepted, as
+#: before. Pinned by a test.
+LAUNCHER_NEEDS_CONFIRMATION = frozenset({"sensing.mode"})
 
 
 class ParamRefused(ValueError):
@@ -643,6 +671,136 @@ _NUMERIC_KINDS = (Kind.INT, Kind.FLOAT, Kind.INT_LIST, Kind.INT_PAIR)
 #: and the row has no bound. C7 must add the bound before any code reads it. Pinned by a test.
 IGNORED_WITHOUT_BOUND = frozenset({("tello", "FLIGHTRISK_LINK_LOSS_WAIT_S")})
 
+#: Fact rows whose variable the edge still reads itself on every unit, so a test-adapter override of one on
+#: a production unit is left out of the resolution but is not ignored. The hover-only test is a mission
+#: switch that today's reader honours (``edge_device._flight_guards``). The nine obstacle facts with a
+#: ``FLIGHTRISK_OBSTACLE_*`` variable are read by ``edge_device.ObstacleSettings`` on every flying edge's
+#: start, and a MAVLink edge with a camera senses with them (``edge_resolution.obstacle_arguments``); plan
+#: risk R6 leaves that change to B1. Pinned by a test.
+READ_BY_THE_EDGE = frozenset({
+    "mode.hover_test",
+    "sensing.turn",
+    "sensing.step_cm",
+    "sensing.settle_s",
+    "sensing.min_safe_depth",
+    "sensing.person_fraction",
+    "avoid.clear_votes",
+    "avoid.relook",
+    "avoid.sidestep_cm",
+    "avoid.sidesteps",
+})
+#: The ``READ_BY_THE_EDGE`` rows the edge uses only when the unit senses obstacles with a camera; a MAVLink
+#: unit without one (``--source file`` or none) reads them but does not use them. Pinned by a test.
+USED_ONLY_WITH_A_CAMERA = READ_BY_THE_EDGE - {"mode.hover_test"}
+
+
+#: Test-adapter fact rows that a production unit's model does not hold, but whose variable today's edge
+#: reads on every unit: the Tello flight guards (``edge_device._flight_guards``) and takeoff temperature
+#: levels (``edge_device._temp_limits``). An override of one on a production unit is ignored, as for the
+#: facts the model holds, with the same warning naming the variable (N-10, FACT-3; design section 27,
+#: item 47). Pinned by a test.
+IGNORED_WHERE_NOT_APPLICABLE = frozenset({
+    "takeoff.settle_samples",
+    "takeoff.settle_tolerance_cm",
+    "takeoff.settle_timeout_s",
+    "takeoff.late_s",
+    "takeoff.refusal_retries",
+    "takeoff.refusal_hold_s",
+    "tello.refusals_per_flight",
+    "tello.temp_warn_c",
+    "tello.temp_refuse_c",
+})
+
+
+#: Rows only the inventory may set: the airframe maximum altitude is a fact about the airframe, so a
+#: params file or the launcher is refused (design section 27 item 53). A custom model states it as its
+#: default. The row has no environment name or flag. Pinned by a test.
+INVENTORY_ONLY = frozenset({AIRFRAME_MAX_ID})
+
+#: The layers whose ceiling or slot value may pass the cap's bound when the cap is off (item 53).
+_CAP_RAISE_SOURCES = (Source.INVENTORY, Source.LAUNCHER)
+
+
+def _cap_bound(spec: ParamSpec, profile: str, scale: str, result: Mapping[str, EffectiveValue]) -> Optional[Bound]:
+    """The row's bound when its upper end is the regulatory cap at field scale, else None (item 53)."""
+    bound = spec.bounds.get(profile)
+    cap = result.get(CAP_ID)
+    if spec.id not in CAP_BOUND_ROWS or scale != "field" or bound is None or cap is None:
+        return None
+    return bound if bound.hi == cap.value else None
+
+
+def _cap_off_accepted(result: Mapping[str, EffectiveValue], record: Any) -> bool:
+    """True when the launcher turned the cap off with a complete, fresh acknowledgement (item 53)."""
+    cap_on = result.get(CAP_ON_ID)
+    return (cap_on is not None and cap_on.value is False and cap_on.source is Source.LAUNCHER
+            and acknowledgement_problem(record) is None)
+
+
+def altitude_bound_cm(result: Mapping[str, EffectiveValue], record: Any) -> Optional[int]:
+    """The upper bound of the field ceiling and slot from the unit's altitude limit, or None (item 53).
+
+    ``record`` is the launcher's ``confirmed["regulatory.altitude_cap_on"]``, or None. When the airframe
+    maximum is known, the bound is ``altitude_limit_cm``: with the cap on, the cap or the lower airframe
+    maximum; with the cap off, the airframe maximum, but only when the launcher set the switch and
+    ``record`` is an accepted acknowledgement. Otherwise it is None and the rows keep their bound.
+    """
+    cap_on = result.get(CAP_ON_ID)
+    if cap_on is None or CAP_ID not in result or AIRFRAME_MAX_ID not in result:
+        return None
+    if cap_on.value is not True and not _cap_off_accepted(result, record):
+        return None
+    try:
+        if airframe_max_cm(result) is None:
+            return None
+        return altitude_limit_cm(result)
+    except ValueError:
+        return None
+
+
+def cap_applies(model: DroneModel) -> bool:
+    """True when the regulatory cap is the upper bound of ``model``'s field ceiling or slot (item 53).
+
+    On any other unit, such as an indoor Tello, the cap bounds nothing, and turning it off changes nothing.
+    """
+    cap = _BY_ID[CAP_ID].defaults.get(model.profile)
+    if model.scale != "field" or cap is None:
+        return False
+    return any((bound := _BY_ID[row].bounds.get(model.profile)) is not None and bound.hi == cap
+               for row in CAP_BOUND_ROWS)
+
+
+def _raise_cap_bounds(result: dict[str, EffectiveValue], specs: Mapping[str, ParamSpec], drone: DroneModel,
+                      unit_id: str, scale: str, raised: Mapping[str, tuple[Any, str, Source]],
+                      record: Any) -> None:
+    """Bound the field ceiling and slot by the unit's altitude limit (item 53).
+
+    ``altitude_bound_cm`` gives the limit. With the cap on, a known airframe maximum below the cap lowers
+    the bound to it. With the cap off and an accepted acknowledgement, the bound is the airframe maximum,
+    and a value above the cap's bound stands only when it came from the inventory or the launcher. The
+    environment, flags and the params file never pass the cap's bound. A value above the bound is refused.
+    """
+    limit = altitude_bound_cm(result, record)
+    for param_id, (value, detail, source) in raised.items():
+        if result[param_id].source is not source:
+            continue  # A later layer set the row, and its value was checked against the bound.
+        spec = specs[param_id]
+        bound = spec.bounds[drone.profile]
+        hi = bound.hi if limit is None else limit
+        if value > hi:
+            raise _refusal(spec, drone, unit_id, value, detail, (bound.lo, hi), source)
+    if limit is None:
+        return
+    for param_id in CAP_BOUND_ROWS:
+        effective = result.get(param_id)
+        bound = _cap_bound(specs[param_id], drone.profile, scale, result) if effective is not None else None
+        if bound is None or limit == bound.hi:
+            continue
+        if _is_number(effective.value) and effective.value > limit:
+            raise _refusal(specs[param_id], drone, unit_id, effective.value, effective.source_detail,
+                           (bound.lo, limit), effective.source)
+        result[param_id] = dataclasses.replace(effective, hi=limit)
+
 
 def _new_name_without_bound(spec: ParamSpec, profile: str, name: str) -> bool:
     """True for a number from a name today's code does not read, on a row with no target bound."""
@@ -690,6 +848,9 @@ def parse_confirm_flags(items: Iterable[str]) -> dict[str, str]:
         param_id, sep, value = item.partition("=")
         if not sep or not param_id.strip() or not value.strip():
             raise ParamRefused(f"--confirm-less-safe {item} is not of the form id=value. Refusing to start.",
+                               source=Source.CLI)
+        if param_id.strip() in LAUNCHER_CONFIRMED_ONLY:
+            raise ParamRefused(render_confirm_flag_not_allowed(param_id.strip()), param_id=param_id.strip(),
                                source=Source.CLI)
         out[param_id.strip()] = value.strip()
     return out
@@ -762,6 +923,7 @@ def resolve(
     specs: dict[str, ParamSpec] = {}
     bases: dict[str, Any] = {}
     result: dict[str, EffectiveValue] = {}
+    raised: dict[str, tuple[Any, str, Source]] = {}
     for base_spec in TABLE:
         spec = narrowing.narrow(base_spec) if narrowing is not None else base_spec
         default = spec.defaults.get(profile)
@@ -781,7 +943,10 @@ def resolve(
             continue
         for param_id, (_, raw, detail, name) in _entries(source, layer, scale, drone, unit_id).items():
             if param_id not in result:
-                log.debug("%s from %s does not apply to %s; skipped", param_id, detail, drone.id)
+                if name is not None and not test_unit and param_id in IGNORED_WHERE_NOT_APPLICABLE:
+                    log.warning("%s is ignored on %s: it is a test-adapter override", detail, unit_id)
+                else:
+                    log.debug("%s from %s does not apply to %s; skipped", param_id, detail, drone.id)
                 continue
             spec = specs[param_id]
             edit = spec.edit.get(profile)
@@ -789,6 +954,8 @@ def resolve(
                 if edit is Edit.FACT:
                     raise ParamRefused(FACT_NOT_SETTABLE.format(detail=detail), source=source)
                 raise _refusal(spec, drone, unit_id, raw, detail, None, source)
+            if source in _ID_LAYERS and param_id in INVENTORY_ONLY and source is not Source.INVENTORY:
+                raise ParamRefused(render_inventory_only(param_id, detail), param_id=param_id, source=source)
             if edit is Edit.READ_ONLY:
                 log.warning("%s is ignored: %s is read-only for %s", detail, param_id, drone.id)
                 continue
@@ -802,7 +969,13 @@ def resolve(
                 continue
             if edit is Edit.FACT:
                 if not test_unit:
-                    log.warning("%s is ignored on %s: it is a test-adapter override", detail, unit_id)
+                    if param_id in READ_BY_THE_EDGE:
+                        log.info("%s is not resolved on %s, a production unit; the edge reads it itself%s",
+                                 detail, unit_id,
+                                 ", and uses it only when the unit senses obstacles with a camera"
+                                 if param_id in USED_ONLY_WITH_A_CAMERA else "")
+                    else:
+                        log.warning("%s is ignored on %s: it is a test-adapter override", detail, unit_id)
                     continue
                 log.info("test-adapter override %s=%r on %s", detail, raw, unit_id)
             try:
@@ -811,11 +984,17 @@ def resolve(
                 raise _refusal(spec, drone, unit_id, raw, detail, None, source) from None
             if is_off and spec.safety_switch and source in FILE_SOURCES:
                 raise ParamRefused(stored_switch_off(param_id, value, detail), param_id=param_id, source=source)
-            if not is_off:
+            cap_bound = _cap_bound(spec, profile, scale, result) if source in _CAP_RAISE_SOURCES else None
+            if not is_off and cap_bound is not None and _is_number(value) and value > cap_bound.hi:
+                raised[param_id] = (value, detail, source)  # Checked once the cap switch is resolved.
+            elif not is_off:
                 value = _check_bound(spec, drone, unit_id, value, detail, source,
                                      name.name if name else None, today_accepts, narrowing is not None)
             result[param_id] = _effective(spec, drone, value, bases[param_id], source, detail, is_off)
 
+    launcher = layers.get(Source.LAUNCHER, layers.get(Source.LAUNCHER.value)) or {}
+    record = (launcher.get(LAUNCHER_CONFIRMED) or {}).get(CAP_ON_ID)
+    _raise_cap_bounds(result, specs, drone, unit_id, scale, raised, record)
     return result
 
 
@@ -870,14 +1049,49 @@ def check_resolved(
             continue
         if not needs_confirmation(spec, effective):
             continue
-        if effective.source in FILE_SOURCES:
+        if param_id in LAUNCHER_CONFIRMED_ONLY and effective.source is Source.LAUNCHER:
+            confirmation = confirmed.get(param_id) if launcher_present else None
+            _check_acknowledged(spec, model, effective, confirmation, result, unit_id, launcher_present)
+        elif effective.source in FILE_SOURCES or (
+                effective.source is Source.LAUNCHER and param_id in LAUNCHER_NEEDS_CONFIRMATION):
             if not _confirmed(spec, confirmed.get(param_id), effective.value):
                 raise _unconfirmed(spec, model, effective, effective.base_default, launcher_present)
+            if effective.source is Source.LAUNCHER:
+                log.warning("confirmed less-safe %s=%r from %s on %s", param_id, effective.value,
+                            effective.source_detail, unit_id)
         elif effective.source in _NAME_LAYERS:
             log.warning("less-safe %s=%r from %s on %s", param_id, effective.value, effective.source_detail, unit_id)
     violation = check_constraints(result, model.name, profile=model.profile)
     if violation is not None:
         raise ParamRefused(violation.message)
+
+
+def _check_acknowledged(spec: ParamSpec, model: DroneModel, effective: EffectiveValue, record: Any,
+                        result: Mapping[str, EffectiveValue], unit_id: str, launcher_present: bool) -> None:
+    """Take the altitude cap off only with a complete acknowledgement and a known airframe maximum (item 53).
+
+    Logs the accepted acknowledgement at warning level with the unit, the cap and the airframe maximum.
+    On a unit the cap bounds nothing (``cap_applies``), such as an indoor Tello, it logs at info that the
+    cap does not apply and changes nothing.
+    """
+    if record is None:
+        raise _unconfirmed(spec, model, effective, effective.base_default, launcher_present)
+    problem = acknowledgement_problem(record)
+    if problem is not None:
+        raise ParamRefused(render_incomplete_acknowledgement(unit_id, spec.id, problem), param_id=spec.id,
+                           source=Source.LAUNCHER)
+    airframe = airframe_max_cm(result)
+    if airframe is None:
+        raise ParamRefused(render_cap_off_unknown_maximum(unit_id, model.name), param_id=spec.id,
+                           source=Source.LAUNCHER)
+    ack = record["ack"]
+    if not cap_applies(model):
+        log.info("the altitude cap does not apply to %s (%s): it bounds no ceiling or slot of this unit, so "
+                 "the acknowledgement %s changes nothing", unit_id, model.name, ack["id"])
+        return
+    log.warning("altitude cap off on %s: cap %s cm, airframe maximum %s cm, acknowledgement %s "
+                "text_version %s at %s by %s", unit_id, _whole(result[CAP_ID].value), airframe, ack["id"],
+                ack["text_version"], ack["at"], ack["by"])
 
 
 def _unconfirmed(spec: ParamSpec, model: DroneModel, effective: EffectiveValue, base: Any,
@@ -887,8 +1101,10 @@ def _unconfirmed(spec: ParamSpec, model: DroneModel, effective: EffectiveValue, 
     shown = str(value).lower() if isinstance(value, bool) else _whole(value) if _is_number(value) else value
     how = (_CONFIRM_IN_LAUNCHER if launcher_present
            else _CONFIRM_BY_FLAG.format(param_id=spec.id, value=shown))
+    # A choice or a switch has no unit to show.
+    unit = "" if spec.unit in (Unit.ENUM, Unit.BOOL) else f" {spec.unit.value}"
     text = UNCONFIRMED_LESS_SAFE.format(
-        param_id=spec.id, value=shown, unit=spec.unit.value, detail=effective.source_detail,
+        param_id=spec.id, value=shown, unit=unit, detail=effective.source_detail,
         model=model.name, base=_whole(base) if _is_number(base) else base, how=how,
     )
     return ParamRefused(text, param_id=spec.id, source=effective.source)

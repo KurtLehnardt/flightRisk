@@ -1217,8 +1217,20 @@ every "from <PR>" tag in `parameters.md` matches an item below naming that PR an
   fit the backend and a safety feature stored off in either file. A file that is absent is treated as empty,
   so a start without one is unchanged. The launcher preflight and `docs/launcher.md` row still let a Tello
   takeoff minimum of 15 to 25 % pass until A4 aligns the check (tasks.md, A4); the edge refuses it at start.
-  A production MAVLink unit also ignores the 9 overrides of the Tello obstacle-sensor facts that a MAVLink
-  edge honours today, and logs one line naming each ignored variable (FACT-3, N-10). Until B1 adds the SITL
+  A production MAVLink unit does not resolve the 9 overrides of the Tello obstacle-sensor facts
+  (`FLIGHTRISK_OBSTACLE_*`), but its edge still reads them through today's obstacle reader, so a MAVLink
+  camera edge senses with them exactly as today; they apply only when the unit senses obstacles with a
+  camera, the start log says so in one line per variable, and the change waits for B1 (R6). The edge now
+  refuses a start whose launcher layer (`FLIGHTRISK_LAUNCHER_PARAMS`) sets `sensing.mode` to off unless the
+  launcher's `confirmed` object names that value, because switching obstacle sensing off is less safe;
+  before A3 that start was accepted, the launcher value was ignored and the drone sensed as usual, while
+  `FLIGHTRISK_OBSTACLE_SENSING=off` keeps today's reader. A custom MAVLink model whose camera does not look
+  level (a gimbal or an oblique mount), flown with `--source camera` or `url`, was accepted and sensed with
+  that camera; it now gets no camera sensor (SEAM-4), so each takeoff needs the autopilot's own avoidance,
+  which is the safe direction. A production MAVLink unit ignores the 9
+  overrides of the Tello flight-guard and temperature facts (the `FLIGHTRISK_TELLO_*` settle, late-takeoff,
+  refusal and temperature variables), which its model does not hold, with the same log line naming each
+  variable; a MAVLink drone never uses these settings, so its flight does not change. The edge also refuses a start in which an environment variable or flag that today's envelope does not read for that drone would win an envelope row (an altitude slot or a battery level) over a launcher or params-file value, because the drone would otherwise fly neither value; before A3 that start was accepted and the launcher or file value was silently dropped. Until B1 adds the SITL
   board identity check (CAP-6), only the fake adapter counts as simulated, so every MAVLink unit counts as
   production. A test-adapter fact is never classified or logged as less safe, from any layer or value
   (R7, R8). Assertions: `tests/test_param_resolver.py:142` (a fact's off value is applied but no longer
@@ -1239,12 +1251,24 @@ every "from <PR>" tag in `parameters.md` matches an item below naming that PR an
   field ceiling range, the field altitude slot range and the `FENCE_ALT_MAX` check (ArduPilot) and PX4's
   `GF_MAX_VER_DIST`. `flightrisk/drone/coverage.py` `MAX_ALT_M` and the 12000 cm airspace rows stay at 120 m
   for now, and environment and flag ceiling and slot values stay at or below 12000 cm (SEAM-10's today
-  ranges). Indoor bounds and every other bound are unchanged. The autopilot fence (B3) still applies, and
+  ranges). Whenever the airframe maximum is known, the field ceiling and slot upper bound is
+  `altitude_limit_cm`: the lower of the cap and that maximum with the cap on, and that maximum with the cap
+  off. The resolver raises it only after the acknowledgement validates, and the edge's flying envelope
+  takes the same bound (`edge_resolution.envelope_limits`), so a ground ceiling or lane slot above it is
+  refused and one up to it is accepted. Indoor bounds and every other bound are unchanged; on a unit the
+  cap bounds nothing, such as the Tello, an acknowledgement is logged at info as not applying and changes
+  nothing. The autopilot fence (B3) still applies, and
   the FlightRisk geofence is horizontal and does not bound height. A unit with no known airframe maximum
   cannot turn the cap off. `regulatory.altitude_cap_on` is read-only to every generic path: the edge refuses
   an off value from a parameter file, the environment, a flag, `--confirm-less-safe` or a ground message,
   and takes it only from the launcher layer's confirmation with a complete acknowledgement. It refuses an
-  incomplete acknowledgement. Owners: A3 for the rows listed in tasks.md, the catalogue value, the stale
+  incomplete acknowledgement, and one whose `at` is not `YYYY-MM-DDTHH:MM:SS[.fraction]` with `Z` or
+  `+00:00`, is more than 5 minutes ahead or is more than 24 hours old (`ACK_MAX_FUTURE`, `ACK_MAX_AGE`),
+  so A5's launcher must ask again after 24 hours. The edge's structured start log records the
+  acknowledgement's `id`, `text_version`, `at` and `by`. The resolver's `check_resolved` validates the record
+  (`flightrisk/params/altitude.py` `acknowledgement_problem`) and refuses `--confirm-less-safe` for the
+  switch; no wire message carries a parameter value to the edge. Only the inventory may set
+  `envelope.max_altitude_cm` (the resolver's `INVENTORY_ONLY`): a params file or launcher value is refused. Owners: A3 for the rows listed in tasks.md, the catalogue value, the stale
   note at `scripts/make_param_golden.py:178`, and the edge's enforcement and refusal; A5 for the launcher
   control, the acknowledgement text and its record; A4 for the ground's display of the cap state and of an
   unknown maximum; B4 for the `FENCE_ALT_MAX` bound. The `DroneCapabilities` type change that allows an

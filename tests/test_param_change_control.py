@@ -33,6 +33,10 @@ CHECKER_PATHS = (
     "tests/test_edge_start_baseline.py",
     "tests/tools/make_edge_baseline.py",
     "docs/design/hardware-profiles/safety-value-changes.md",
+    "flightrisk/params/legacy.py",
+    "tests/test_params_legacy.py",
+    "flightrisk/params/defaults.py",
+    "tests/test_params_defaults.py",
 )
 # The A1 baseline entry. Editing it needs an edit here too, which CODEOWNERS makes owned (F6, F7).
 MIN_ENTRIES = 1
@@ -81,8 +85,23 @@ def test_codeowners_names_the_owned_paths():
     for path in OWNED + CHECKER_PATHS:
         assert owners.get(path), path
     for path in ("flightrisk/dashboard/roles.py", "flightrisk/dashboard/devices.py",
-                 "flightrisk/fleet_protocol/constants.py", "flightrisk/drone/rth/"):
+                 "flightrisk/fleet_protocol/constants.py", "flightrisk/drone/rth/",
+                 "flightrisk/params/altitude.py", "flightrisk/params/resolver.py"):
         assert owners.get(path), path
+
+
+def test_legacy_mavlink_limits_are_owner_reviewed():
+    """The legacy MAVLink move and altitude limits live in flightrisk/params/legacy.py, which CODEOWNERS gives an
+    owner. A value change there also fails tests/test_params_legacy.py, which pins the three values, and that file
+    is owned too. CODEOWNERS requests the owner's review. The repository's ruleset does not enforce code-owner
+    review or status checks, so the guard relies on that review being read."""
+    assert "flightrisk/params/legacy.py" in CHECKER_PATHS
+    owners = {}
+    for line in (ROOT / ".github" / "CODEOWNERS").read_text(encoding="utf-8").splitlines():
+        if line.strip() and not line.startswith("#"):
+            path, *who = line.split()
+            owners[path.lstrip("/")] = who
+    assert owners.get("flightrisk/params/legacy.py")
 
 
 def _entries(text: str) -> list[tuple[str, str]]:
@@ -228,6 +247,229 @@ def test_adopted_set_equals_the_a3_ownership_list():
         assert (ROOT / rel).is_file(), rel
 
 
+#: Ledger sections that a phase other than A3 owns, mapped to that phase's first-owner name in tasks.md.
+PHASE_ROW_NAMES = {"X-legacy": "XL", "A4": "A4"}
+#: Per-phase scope: the only modules a phase section of ``tests/param_adopters.py`` may name. Each set is exactly
+#: the ``flightrisk/*.py`` paths of that phase's tasks.md ownership rows, without the params and hardware modules,
+#: which never need an allowance. A set grows only with a reviewed tasks.md edit, and none may overlap A3_ADOPTED.
+PHASE_ADOPTED: dict[str, frozenset[str]] = {
+    "X-legacy": frozenset({
+        "flightrisk/drone/fleet.py",
+        "flightrisk/drone/mavlink.py",
+    }),
+    "A4": frozenset({
+        "flightrisk/drone/coordinator.py",
+        "flightrisk/config.py",
+        "flightrisk/observability.py",
+        "flightrisk/drone/fleet_plan_check.py",
+        "flightrisk/drone/fleet_plan_model.py",
+        "flightrisk/drone/fleet_patterns.py",
+        "flightrisk/drone/fleet_scale.py",
+        "flightrisk/drone/plan_edit.py",
+        "flightrisk/drone/plan_paths.py",
+        "flightrisk/drone/coverage.py",
+        "flightrisk/drone/coverage_sim.py",
+        "flightrisk/drone/geolocate.py",
+        "flightrisk/drone/search.py",
+        "flightrisk/ground_params.py",
+        "flightrisk/dashboard/unit_descriptions.py",
+        "flightrisk/dashboard/unit_cards.py",
+        "flightrisk/recorder.py",
+        "flightrisk/fleet_ground_link.py",
+    }),
+}
+#: New files a phase creates; they need not exist before the PR that adds them.
+PHASE_NEW_FILES = frozenset({
+    "flightrisk/ground_params.py",
+    "flightrisk/dashboard/unit_descriptions.py",
+    "flightrisk/dashboard/unit_cards.py",
+})
+
+
+def _phase_ownership_list(row_name: str) -> set[str]:
+    """The ``flightrisk/*.py`` paths of the tasks.md ownership rows whose first owner is ``row_name``, braces
+    expanded, without the params and hardware modules."""
+    paths = set()
+    for line in TASKS.read_text(encoding="utf-8").splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if not line.startswith("|") or len(cells) < 2 or not re.match(rf"{re.escape(row_name)}\b", cells[1]):
+            continue
+        for item in re.findall(r"`([^`]+)`", cells[0]):
+            brace = re.fullmatch(r"(.*)\{([^}]*)\}(.*)", item)
+            names = [brace.group(1) + n + brace.group(3) for n in brace.group(2).split(",")] if brace else [item]
+            paths.update(
+                n for n in names
+                if n.startswith("flightrisk/") and n.endswith(".py")
+                and not n.startswith(("flightrisk/params/", "flightrisk/hardware/"))
+            )
+    return paths
+
+
+def phase_cap_problems(
+    ledger: dict[str, frozenset[str]], caps: dict[str, frozenset[str]], a3_adopted: frozenset[str]
+) -> list[str]:
+    """One message per path that a phase section of ``ledger`` names outside that phase's cap in ``caps``, and
+    one per path that sits in a phase cap and in ``a3_adopted``."""
+    problems = []
+    for section, cap in caps.items():
+        for rel in sorted(ledger.get(section, frozenset()) - cap):
+            problems.append(f"{section}: {rel} is outside the phase allowance")
+        for rel in sorted(cap & a3_adopted):
+            problems.append(f"{section}: {rel} sits in the phase allowance and in A3_ADOPTED")
+    return problems
+
+
+def _non_phase_ledger_paths() -> frozenset[str]:
+    """Every path that ``tests/param_adopters.py`` names in a section that ``PHASE_ADOPTED`` does not cap."""
+    from tests.param_adopters import PARAM_ADOPTERS
+
+    return frozenset().union(*(paths for section, paths in PARAM_ADOPTERS.items() if section not in PHASE_ADOPTED))
+
+
+def test_phase_allowances_equal_their_tasks_md_rows():
+    """A phase allowance cannot quietly grow: it is exactly its phase's tasks.md rows, and it never overlaps A3's."""
+    from tests.param_adopters import PARAM_ADOPTERS
+
+    for section, cap in PHASE_ADOPTED.items():
+        assert section in PARAM_ADOPTERS, section
+        assert cap == _phase_ownership_list(PHASE_ROW_NAMES[section]), section
+        assert not cap & A3_ADOPTED, sorted(cap & A3_ADOPTED)
+        for rel in cap - PHASE_NEW_FILES:
+            assert (ROOT / rel).is_file(), rel
+    assert len(PHASE_ADOPTED["A4"]) == 18
+    assert len(PHASE_ADOPTED["X-legacy"]) == 2
+
+
+def test_phase_sections_stay_inside_their_allowance():
+    """Each phase section of the ledger names only modules that its own allowance holds."""
+    from tests.param_adopters import PARAM_ADOPTERS
+
+    assert phase_cap_problems(PARAM_ADOPTERS, PHASE_ADOPTED, A3_ADOPTED) == []
+
+
+def shared_path_problems(name: str, phases: dict[str, frozenset[str]]) -> list[str]:
+    """One message per path that two phases of ``phases`` both hold, for every pair of phases."""
+    problems = []
+    ordered = sorted(phases)
+    for i, first in enumerate(ordered):
+        for second in ordered[i + 1:]:
+            for rel in sorted(phases[first] & phases[second]):
+                problems.append(f"{rel} sits in the {name} of both {first} and {second}")
+    return problems
+
+
+def test_phase_allowances_share_no_path():
+    """No path sits in the allowance of two phases, so each adopter belongs to exactly one phase."""
+    assert shared_path_problems("allowance", PHASE_ADOPTED) == []
+
+
+def test_shared_path_rule_catches_a_path_in_two_phases():
+    """The reviewer's repro: the same path in two phases' caps or planned sets fails."""
+    path = "flightrisk/drone/mavlink.py"
+    caps = {**PHASE_ADOPTED, "A4": PHASE_ADOPTED["A4"] | {path}}
+    assert shared_path_problems("allowance", caps) == [f"{path} sits in the allowance of both A4 and X-legacy"]
+    planned = {**PHASE_PLANNED_ADOPTERS, "A4": PHASE_PLANNED_ADOPTERS["A4"] | {path}}
+    assert shared_path_problems("planned set", planned) == [f"{path} sits in the planned set of both A4 and X-legacy"]
+
+
+def test_phase_cap_rule_catches_each_violation():
+    """The cap rule on synthetic ledgers: a phase section outside its allowance fails, and so does a cap that
+    overlaps A3_ADOPTED. Sections the caps do not name are left to the A3_ADOPTED check."""
+    clean = {
+        "X-core": frozenset(),
+        "X-legacy": frozenset({"flightrisk/drone/fleet.py"}),
+        "A3": frozenset({"flightrisk/edge_device.py"}),
+        "A4": frozenset({"flightrisk/config.py", "flightrisk/ground_params.py"}),
+    }
+    assert phase_cap_problems(clean, PHASE_ADOPTED, A3_ADOPTED) == []
+    dashboard = {**clean, "A4": clean["A4"] | {"flightrisk/dashboard/app.py"}}
+    assert phase_cap_problems(dashboard, PHASE_ADOPTED, A3_ADOPTED) == [
+        "A4: flightrisk/dashboard/app.py is outside the phase allowance",
+    ]
+    edge = {**clean, "A4": clean["A4"] | {"flightrisk/edge_device.py"}}
+    assert phase_cap_problems(edge, PHASE_ADOPTED, A3_ADOPTED) == [
+        "A4: flightrisk/edge_device.py is outside the phase allowance",
+    ]
+    overlapping = {**PHASE_ADOPTED, "X-legacy": PHASE_ADOPTED["X-legacy"] | {"flightrisk/drone/tello.py"}}
+    assert phase_cap_problems(clean, overlapping, A3_ADOPTED) == [
+        "X-legacy: flightrisk/drone/tello.py sits in the phase allowance and in A3_ADOPTED",
+    ]
+
+
+#: The adopters each phase's plan names, tighter than its cap. X-legacy adopts only the legacy MAVLink driver,
+#: because the fleet.py move (XL-01) is cut. A4 funnels params and hardware through the ground parameter layer and
+#: the unit card modules, and every other A4 module receives plain values (PLAN-A4 addendum, section 5.1). A phase
+#: that needs another adopter widens this set in its own PR and names it in its report.
+PHASE_PLANNED_ADOPTERS: dict[str, frozenset[str]] = {
+    "X-legacy": frozenset({
+        "flightrisk/drone/mavlink.py",
+    }),
+    "A4": frozenset({
+        "flightrisk/ground_params.py",
+        "flightrisk/dashboard/unit_descriptions.py",
+        "flightrisk/dashboard/unit_cards.py",
+    }),
+}
+
+
+def phase_plan_problems(ledger: dict[str, frozenset[str]], planned: dict[str, frozenset[str]]) -> list[str]:
+    """One message per path that a phase section of ``ledger`` names outside that phase's set in ``planned``."""
+    problems = []
+    for section, adopters in planned.items():
+        for rel in sorted(ledger.get(section, frozenset()) - adopters):
+            problems.append(f"{section}: {rel} is outside the planned adopters")
+    return problems
+
+
+def test_planned_adopters_sit_inside_their_phase_cap():
+    """Each phase's planned adopters lie inside its tasks.md allowance and never overlap A3's."""
+    assert set(PHASE_PLANNED_ADOPTERS) == set(PHASE_ADOPTED)
+    for section, adopters in PHASE_PLANNED_ADOPTERS.items():
+        assert adopters <= PHASE_ADOPTED[section], sorted(adopters - PHASE_ADOPTED[section])
+        assert not adopters & A3_ADOPTED, sorted(adopters & A3_ADOPTED)
+    assert len(PHASE_PLANNED_ADOPTERS["A4"]) == 3
+    assert len(PHASE_PLANNED_ADOPTERS["X-legacy"]) == 1
+
+
+def test_planned_adopters_share_no_path():
+    """No path sits in the planned adopters of two phases."""
+    assert shared_path_problems("planned set", PHASE_PLANNED_ADOPTERS) == []
+    assert not PHASE_PLANNED_ADOPTERS["X-legacy"] & PHASE_PLANNED_ADOPTERS["A4"]
+
+
+def test_phase_sections_name_only_their_planned_adopters():
+    """Each phase section of the ledger names only the adopters its phase's plan names."""
+    from tests.param_adopters import PARAM_ADOPTERS
+
+    assert phase_plan_problems(PARAM_ADOPTERS, PHASE_PLANNED_ADOPTERS) == []
+
+
+def test_phase_plan_rule_catches_each_violation():
+    """The plan rule on synthetic ledgers: a module inside its phase's cap but outside the planned adopters fails.
+    Each of these ledgers passes the cap rule, so only the plan rule catches it."""
+    clean = {
+        "X-core": frozenset(),
+        "X-legacy": frozenset({"flightrisk/drone/mavlink.py"}),
+        "A3": frozenset({"flightrisk/edge_device.py"}),
+        "A4": frozenset({"flightrisk/ground_params.py"}),
+    }
+    assert phase_plan_problems(clean, PHASE_PLANNED_ADOPTERS) == []
+    coord_a4 = {**clean, "A4": clean["A4"] | {"flightrisk/drone/coordinator.py"}}
+    assert phase_plan_problems(coord_a4, PHASE_PLANNED_ADOPTERS) == [
+        "A4: flightrisk/drone/coordinator.py is outside the planned adopters",
+    ]
+    fleet_legacy = {**clean, "X-legacy": clean["X-legacy"] | {"flightrisk/drone/fleet.py"}}
+    assert phase_plan_problems(fleet_legacy, PHASE_PLANNED_ADOPTERS) == [
+        "X-legacy: flightrisk/drone/fleet.py is outside the planned adopters",
+    ]
+    recorder = {**clean, "A4": clean["A4"] | {"flightrisk/recorder.py"}}
+    assert phase_plan_problems(recorder, PHASE_PLANNED_ADOPTERS) == [
+        "A4: flightrisk/recorder.py is outside the planned adopters",
+    ]
+    for ledger in (clean, coord_a4, fleet_legacy, recorder):
+        assert phase_cap_problems(ledger, PHASE_ADOPTED, A3_ADOPTED) == []
+
+
 def _runtime_param_imports(tree):
     """The names a parsed module imports from params or hardware at run time.
 
@@ -296,8 +538,9 @@ def test_only_adopted_modules_import_params_or_hardware():
     The guard above lets a module import params or hardware only when the ledger names it, so keeping every
     ledger path inside ``A3_ADOPTED`` keeps every runtime importer inside it too. A path in any section of the
     ledger that ``A3_ADOPTED`` does not hold fails here, until the phase that adopts it widens the allowance.
+    The A4 and X-legacy sections are capped by ``PHASE_ADOPTED`` instead, which pins each to its tasks.md rows.
     """
-    outside = sorted(_ledger_paths() - A3_ADOPTED)
+    outside = sorted(_non_phase_ledger_paths() - A3_ADOPTED)
     assert not outside, f"named in tests/param_adopters.py but outside A3_ADOPTED: {outside}"
 
 

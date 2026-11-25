@@ -9,7 +9,7 @@ first of these that names one:
 3. the inventory unit for ``--drone-id`` (``FLIGHTRISK_INVENTORY_FILE``);
 4. the launcher layer's ``model`` (``FLIGHTRISK_LAUNCHER_PARAMS``);
 5. the backend's default: the first model its registered backend declares
-   (``BackendSpec.models``). ``fake`` runs the registry's default backend.
+   (``BackendSpec.models``). ``fake`` runs the registry's fake backend (``FAKE_DRONE_BACKEND``).
 
 The edge refuses to start when the model's scale, adapter or frame path
 differs from its backend's, so a Tello can never fly with outdoor bounds. With
@@ -33,14 +33,15 @@ CAP-6, and today's ranges from ``params/today.py``, so an environment or
 flag value of a name today's code reads keeps today's range), runs the static feature gates (``resolve_features``, FEA-7 static
 part, FEA-10) and builds the start report (``build_report``). Any refusal
 raises ``EdgeStartRefused``, whose text is the operator's exit message. The
-resolved values are kept in ``EdgeResolution``; nothing reads them yet, so a
-start that is not refused flies exactly as before.
+resolved values are kept in ``EdgeResolution``. The edge builds its start
+envelope from them (``envelope_arguments``); with no new input they are
+today's values, so a start that is not refused flies exactly as before.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
@@ -99,13 +100,13 @@ class ModelChoice:
 def _backend_spec(drone: str) -> Any:
     """The registered backend that edge drone kind ``drone`` runs.
 
-    ``fake`` runs the registry's default backend. Any other kind is the name
+    ``fake`` runs the registry's fake backend (``FAKE_DRONE_BACKEND``). Any other kind is the name
     of a registered backend that declares the catalogue models it flies.
     Raises ``ValueError`` for any other kind.
     """
     from flightrisk.drone import registry  # Lazy: the registry bootstraps every backend.
 
-    name = registry.DEFAULT_BACKEND if drone == FAKE_DRONE else drone
+    name = registry.FAKE_DRONE_BACKEND if drone == FAKE_DRONE else drone
     if not registry.is_registered(name) or not registry.get(name).models:
         raise ValueError(f"unknown edge drone {drone!r}")
     return registry.get(name)
@@ -665,6 +666,315 @@ def resolve_edge(
     )
 
 
+#: The registry row each ``SafetyEnvelope`` argument of the edge's start envelope reads (EDGE-2).
+ENVELOPE_ROWS: Mapping[str, str] = MappingProxyType({
+    "geofence_cm": "envelope.geofence_cm",
+    "alt_slot_cm": "envelope.alt_slot_cm",
+    "ceiling_cm": "envelope.ceiling_cm",
+    "ceiling_margin_cm": "envelope.ceiling_margin_cm",
+    "min_takeoff_battery": "battery.min_takeoff_pct",
+    "land_battery": "battery.critical_pct",
+    "link_loss_land_s": "link.loss_detect_s",
+    "link_loss_hold_s": "link.loss_wait_s",
+})
+
+
+def todays_envelope_arguments(envelope: Any) -> dict[str, Any]:
+    """The ``SafetyEnvelope`` arguments that rebuild ``envelope``, keyed as ``ENVELOPE_ROWS``."""
+    return {
+        "geofence_cm": envelope.geofence_cm,
+        "alt_slot_cm": envelope.alt_slot_cm,
+        "ceiling_cm": envelope.ceiling_cm,
+        "ceiling_margin_cm": envelope.ceiling_margin_cm,
+        "min_takeoff_battery": envelope.min_takeoff_battery,
+        "land_battery": envelope.land_battery,
+        "link_loss_land_s": envelope.link_watchdog.timeout_s,
+        "link_loss_hold_s": envelope.link_loss_hold_s,
+    }
+
+
+def envelope_arguments(resolution: EdgeResolution, today: Mapping[str, Any]) -> dict[str, Any]:
+    """The ``SafetyEnvelope`` arguments of the edge's start envelope, from the resolved values (EDGE-2).
+
+    ``today`` holds the arguments of the envelope today's readers built from the environment and the
+    command line (``todays_envelope_arguments``). Each argument is its row's resolved value
+    (``ENVELOPE_ROWS``), so a value from the profile, the params file or the launcher layer reaches
+    the envelope. A value the environment or the command line set keeps today's reader's value: for a
+    name today's envelope reads, the resolver gives the same value (``tests/test_param_parity.py``),
+    and a name it does not read, such as ``FLIGHTRISK_LAND_BATTERY`` or ``FLIGHTRISK_FIELD_ALT_SLOT_M``
+    on an indoor edge, must not change the envelope in phase A (plan section 1). A row missing from
+    the resolution keeps today's value too. A test-adapter fact override that the resolver ignored on
+    a production unit never reaches the envelope, since the resolved value is then the profile's.
+
+    Raises ``EdgeStartRefused`` when such a name hides a launcher or params-file value of the row
+    (``_refuse_shadowed``).
+    """
+    from flightrisk.params.spec import Source
+
+    arguments = dict(today)
+    for name, row in ENVELOPE_ROWS.items():
+        value = resolution.values.get(row)
+        if value is None:
+            continue
+        if Source(value.source) in (Source.ENV, Source.CLI):
+            _refuse_shadowed(resolution, row, value, today[name])
+            continue
+        arguments[name] = value.value
+    if not arguments["link_loss_hold_s"]:
+        # The envelope stores a 0 s hold as None: the drone lands at once.
+        arguments["link_loss_hold_s"] = None
+    return arguments
+
+
+#: The ``EnvelopeLimits`` field of each row whose upper bound the unit's altitude limit sets (item 53).
+_ALTITUDE_BOUND_FIELDS: Mapping[str, str] = MappingProxyType({
+    "max_ceiling_cm": "envelope.ceiling_cm",
+    "max_alt_slot_cm": "envelope.alt_slot_cm",
+})
+
+
+def _cap_record(resolution: EdgeResolution) -> Any:
+    """The launcher's acknowledgement record for the altitude cap switch, or None."""
+    from flightrisk.params.altitude import CAP_ON_ID
+
+    launcher = resolution.layers.launcher
+    return None if launcher is None else launcher.confirmed.get(CAP_ON_ID)
+
+
+def envelope_limits(resolution: EdgeResolution, limits: Any) -> Any:
+    """``limits`` with the ceiling and slot upper bounds the unit's altitude limit sets (item 53).
+
+    Only a field unit the cap bounds changes (``resolver.cap_applies``); any other unit, such as an
+    indoor Tello, keeps ``limits`` whatever the switch. When the airframe maximum is known, the bound is
+    ``resolver.altitude_bound_cm``: with the cap on, each upper bound becomes the lower of today's and
+    the bound (the cap, or a lower airframe maximum); with the cap off, the launcher set it and the
+    acknowledgement is accepted again here, and each upper bound becomes the lower of the airframe
+    maximum and the row's resolved upper bound. Otherwise ``limits`` is returned unchanged. A cap that
+    is off without an accepted acknowledgement and a known airframe maximum refuses the start
+    (``EdgeStartRefused``), although ``resolve_unit`` refuses it first.
+    """
+    from flightrisk.params.altitude import CAP_ON_ID
+    from flightrisk.params.resolver import altitude_bound_cm, cap_applies
+
+    cap_on = resolution.values.get(CAP_ON_ID)
+    if cap_on is None or getattr(limits, "name", None) != "field" or not cap_applies(resolution.layers.choice.model):
+        return limits
+    bound = altitude_bound_cm(resolution.values, _cap_record(resolution))
+    if bound is None:
+        if cap_on.value is not True:
+            raise EdgeStartRefused(_refusing(
+                f"{resolution.layers.unit_id}: the altitude cap is off without an accepted acknowledgement "
+                "and a known airframe maximum."))
+        return limits
+    changes = {}
+    for name, row in _ALTITUDE_BOUND_FIELDS.items():
+        current = getattr(limits, name)
+        if cap_on.value is True:
+            new = min(current, bound)
+        else:
+            row_hi = getattr(resolution.values.get(row), "hi", None)
+            new = bound if row_hi is None else min(bound, row_hi)
+        if new != current:
+            changes[name] = float(new)
+    return replace(limits, **changes) if changes else limits
+
+
+def _refuse_shadowed(resolution: EdgeResolution, row: str, value: Any, flown: Any) -> None:
+    """Refuse a start where an environment or command-line name hides a launcher or params-file value.
+
+    ``value`` is the row's resolved value, from the environment or the command line, and ``flown`` is
+    the value today's envelope reader gives. For a name today's envelope reads they are equal
+    (``tests/test_param_parity.py``). When they differ, the name is one today's envelope does not read
+    for this drone, so the drone would fly ``flown`` while the resolution and the start log report
+    ``value``, and a launcher or params-file value of the row would be lost without a word.
+
+    Only that case is refused. Without a launcher or params-file value of the row nothing is refused,
+    so such a start keeps today's envelope exactly. Launcher and params-file values never reached the
+    envelope before A3, so the refusal costs no value today's edge flew: a start it refuses is one where
+    today's edge also drops the launcher or params-file value, without a word.
+    """
+    from flightrisk.params.messages import render_shadowed_value
+    from flightrisk.params.resolver import LayerValue
+    from flightrisk.params.spec import Source
+
+    said = value.value
+    if row == ENVELOPE_ROWS["link_loss_hold_s"]:
+        # The envelope stores a 0 s hold as None.
+        said, flown = said or 0, flown or 0
+    if said == flown:
+        return
+    layers = resolution.layers.layers
+    for source, where in ((Source.LAUNCHER, LAUNCHER_PARAMS_ENV_VAR), (Source.FILE, None)):
+        raw = (layers.get(source) or {}).get(row)
+        if raw is None:
+            continue
+        if isinstance(raw, LayerValue):
+            raw, where = raw.value, raw.detail
+        raise EdgeStartRefused(_refusing(render_shadowed_value(
+            resolution.layers.unit_id, row, value.source_detail, said, where or source.value, raw, flown,
+        )))
+
+
+#: The registry row each ``FlightGuards`` setting of the edge's start reads (EDGE-2). The hover-only test
+#: (``mode.hover_test``) is a mission switch, not a drone value, and keeps today's reader.
+GUARD_ROWS: Mapping[str, str] = MappingProxyType({
+    "settle_samples": "takeoff.settle_samples",
+    "settle_tolerance_cm": "takeoff.settle_tolerance_cm",
+    "settle_timeout_s": "takeoff.settle_timeout_s",
+    "takeoff_late_s": "takeoff.late_s",
+    "refusal_retries": "takeoff.refusal_retries",
+    "refusal_hold_s": "takeoff.refusal_hold_s",
+    "refusals_per_flight": "tello.refusals_per_flight",
+})
+
+#: The registry row each ``TempLimits`` level of the edge's start reads (EDGE-2, FACT-3).
+TEMP_ROWS: Mapping[str, str] = MappingProxyType({
+    "warn_c": "tello.temp_warn_c",
+    "refuse_c": "tello.temp_refuse_c",
+})
+
+# On a production MAVLink unit these rows are not in the resolution, so a FLIGHTRISK_TELLO_* override of
+# one gives the built-in default where today's reader honoured it. A MAVLink drone does not use any of
+# these settings, so its flight does not change. The settle and late-takeoff guards run only for a drone
+# with settled_height (lane_flight._settles_height), the refusal retries only for a CommandRefusedError,
+# which only the Tello raises (lane_flight._retry_refusal), and the temperature levels only for a drone
+# with state_temperature (lane_executor._takeoff_temp_refusal and temp_status); MavlinkFleetDrone has
+# none of them. Only the start log changes: edge_flight_guard_setting_non_default and
+# edge_temp_setting_non_default no longer name an override the drone never used, and the resolver logs a
+# warning naming each such variable as ignored (resolver.IGNORED_WHERE_NOT_APPLICABLE, N-10).
+
+
+def fact_arguments(resolution: EdgeResolution, rows: Mapping[str, str], today: Mapping[str, Any],
+                   defaults: Mapping[str, Any]) -> dict[str, Any]:
+    """The start settings of ``rows`` (``GUARD_ROWS`` or ``TEMP_ROWS``) from the resolved values (EDGE-2).
+
+    ``today`` holds the settings today's reader built from the environment, and ``defaults`` the
+    built-in ones. Each setting is its row's resolved value, so a value of the drone's profile reaches
+    it. A value the environment or the command line set keeps today's reader's value, as for the
+    envelope (``envelope_arguments``). A row the resolution does not hold does not apply to the
+    drone's model, so a test-adapter override of it, such as ``FLIGHTRISK_TELLO_TAKEOFF_LATE_S`` on a
+    production MAVLink unit, is not used: the setting is the built-in default (FACT-3). A row whose
+    resolved value is its off value (the temperature refusal switched off) is None, as ``TempLimits``
+    stores it.
+    """
+    from flightrisk.params.spec import Source
+    from flightrisk.params.table import TABLE
+
+    off_values = {spec.id: spec.off_value for spec in TABLE if spec.id in rows.values()}
+    arguments = dict(today)
+    for name, row in rows.items():
+        value = resolution.values.get(row)
+        if value is None:
+            arguments[name] = defaults[name]
+            continue
+        if Source(value.source) in (Source.ENV, Source.CLI):
+            continue
+        off = off_values.get(row)
+        arguments[name] = None if off is not None and value.value == off else value.value
+    return arguments
+
+
+#: The registry row each ``edge_device.ObstacleSettings`` setting of the edge's start reads (EDGE-2).
+#: The avoidance budget has no row and keeps today's reader.
+OBSTACLE_ROWS: Mapping[str, str] = MappingProxyType({
+    "mode": "sensing.mode",
+    "turn": "sensing.turn",
+    "step_cm": "sensing.step_cm",
+    "settle_s": "sensing.settle_s",
+    "min_safe_depth": "sensing.min_safe_depth",
+    "person_fraction": "sensing.person_fraction",
+    "max_decode_lag_s": "sensing.max_decode_lag_s",
+    "clear_votes": "avoid.clear_votes",
+    "relook": "avoid.relook",
+    "sidestep_cm": "avoid.sidestep_cm",
+    "sidesteps": "avoid.sidesteps",
+})
+
+
+def obstacle_arguments(resolution: EdgeResolution, today: Mapping[str, Any],
+                       environ: Mapping[str, str]) -> dict[str, Any]:
+    """The obstacle settings of the edge's start from the resolved values (EDGE-2).
+
+    ``today`` holds the settings today's reader (``edge_device.ObstacleSettings``) built from
+    ``environ``, keyed as ``OBSTACLE_ROWS``. Each setting is its row's resolved value, so a value of the
+    drone's profile, or a launcher or params-file value the resolver accepted, reaches it. Three cases
+    keep today's reader's value, so no start that today's edge accepts flies differently:
+
+    * a value the environment or the command line set, as for the envelope (``envelope_arguments``),
+      refusing the start when such a name hides a launcher or params-file value (``_refuse_shadowed``);
+    * a row the resolution does not hold (``sensing.max_decode_lag_s`` on a MAVLink unit);
+    * a row whose environment variable is set but which the resolver did not take from it. On a
+      production MAVLink unit the resolver leaves a ``FLIGHTRISK_OBSTACLE_*`` fact override out of the
+      resolution (FACT-3) and logs that the edge reads it itself (``resolver.READ_BY_THE_EDGE``): a
+      MAVLink edge with a camera senses with these settings, so ignoring the override here would change
+      how today's edge flies. Plan risk R6 leaves that change to B1.
+
+    A launcher ``sensing.mode`` of off reaches here only when the launcher's ``confirmed`` object names
+    it. Without that confirmation the resolver refuses the start (``resolver.LAUNCHER_NEEDS_CONFIRMATION``),
+    where today's edge ignored the launcher value and sensed as usual (design item 47).
+    """
+    from flightrisk.params.table import TABLE
+
+    names = {spec.id: spec.env for spec in TABLE if spec.id in OBSTACLE_ROWS.values()}
+    arguments = dict(today)
+    for name, row in OBSTACLE_ROWS.items():
+        arguments[name] = _obstacle_value(resolution, row, today[name], names.get(row), environ)
+    return arguments
+
+
+def _obstacle_value(resolution: EdgeResolution, row: str, today: Any, variable: Optional[str],
+                    environ: Mapping[str, str]) -> Any:
+    """One setting of ``obstacle_arguments``: the resolved value of ``row``, or ``today`` in the cases it keeps."""
+    from flightrisk.params.spec import Source
+
+    value = resolution.values.get(row)
+    if value is None:
+        return today
+    if Source(value.source) in (Source.ENV, Source.CLI):
+        _refuse_shadowed(resolution, row, value, today)
+        return today
+    if variable and (environ.get(variable) or "").strip():
+        return today
+    return value.value
+
+
+def resolved_sensing_mode(resolution: EdgeResolution, today: str, environ: Mapping[str, str]) -> Any:
+    """The obstacle sensing mode the edge flies, exactly as ``obstacle_arguments`` gives it to the wiring.
+
+    ``today`` is the mode of ``FLIGHTRISK_OBSTACLE_SENSING`` (``edge_device._obstacle_sensing_mode``).
+    Raises ``EdgeStartRefused`` as ``obstacle_arguments`` does.
+    """
+    from flightrisk.params.table import TABLE
+
+    row = OBSTACLE_ROWS["mode"]
+    variable = next((spec.env for spec in TABLE if spec.id == row), None)
+    return _obstacle_value(resolution, row, today, variable, environ)
+
+
+def forward_sensing_on(resolution: Optional[EdgeResolution]) -> Optional[bool]:
+    """Whether forward obstacle sensing is available and on for the unit (SEAM-4); None without a resolution."""
+    if resolution is None:
+        return None
+    from flightrisk.hardware.features import FORWARD_OBSTACLE_SENSING
+
+    gate = resolution.gates.get(FORWARD_OBSTACLE_SENSING)
+    return bool(gate and gate.get("ok") and gate.get("on"))
+
+
+def resolved_elsewhere(resolution: EdgeResolution, row: str) -> Optional[str]:
+    """The source detail of ``row``'s resolved value when neither the environment nor the command line set it.
+
+    None when the row is not resolved, or when the environment or the command line set it, where today's
+    reader gives the value (``fact_arguments``).
+    """
+    from flightrisk.params.spec import Source
+
+    value = resolution.values.get(row)
+    if value is None or Source(value.source) in (Source.ENV, Source.CLI):
+        return None
+    return value.source_detail
+
+
 def _fact_ids(profile: Any) -> frozenset[str]:
     """Ids of the rows that are facts for *profile* (a profile id, or a custom model with an ``id``)."""
     from flightrisk.params.table import TABLE
@@ -682,6 +992,8 @@ def log_edge_start(resolution: EdgeResolution, log: Any, *, drone_id: Optional[s
     with safety or setting wording (R8). A fact override ignored on a production unit is logged by the
     resolver, one line naming the variable.
     """
+    from flightrisk.params.altitude import CAP_ON_ID
+
     facts = _fact_ids(resolution.layers.profile)
     for param_id in sorted(resolution.values):
         value = resolution.values[param_id]
@@ -691,9 +1003,34 @@ def log_edge_start(resolution: EdgeResolution, log: Any, *, drone_id: Optional[s
         if param_id in facts:
             log.info("edge_fact_override", drone_id=drone_id, param_id=param_id, value=value.value,
                      source=source, detail=value.source_detail)
+        elif param_id == CAP_ON_ID and value.value is False:
+            _log_cap_off(resolution, log, value, source, drone_id)
         elif value.less_safe:
             log.warning("edge_value_less_safe", drone_id=drone_id, param_id=param_id, value=value.value,
                         default=value.default, source=source, detail=value.source_detail)
         else:
             log.info("edge_value_non_default", drone_id=drone_id, param_id=param_id, value=value.value,
                      default=value.default, source=source, detail=value.source_detail)
+
+
+def _log_cap_off(resolution: EdgeResolution, log: Any, value: Any, source: str, drone_id: Optional[str]) -> None:
+    """Log the altitude cap switch off with its acknowledgement (item 53).
+
+    On a unit the cap bounds, a warning ``edge_value_less_safe`` carries the acknowledgement's ``id``,
+    ``text_version``, ``at`` and ``by``. On any other unit, such as an indoor Tello, the cap changes
+    nothing, and an info ``edge_altitude_cap_not_applicable`` says so.
+    """
+    from flightrisk.params.altitude import CAP_ON_ID
+    from flightrisk.params.resolver import cap_applies
+
+    record = _cap_record(resolution)
+    ack = record.get("ack") if isinstance(record, Mapping) else None
+    ack = ack if isinstance(ack, Mapping) else {}
+    fields = {f"ack_{key}": ack.get(key) for key in ("id", "text_version", "at", "by")}
+    if not cap_applies(resolution.layers.choice.model):
+        log.info("edge_altitude_cap_not_applicable", drone_id=drone_id, param_id=CAP_ON_ID, value=value.value,
+                 source=source, detail=f"the altitude cap does not apply to {resolution.layers.unit_id}: it "
+                 "bounds no ceiling or slot of this unit, so nothing changes", **fields)
+        return
+    log.warning("edge_value_less_safe", drone_id=drone_id, param_id=CAP_ON_ID, value=value.value,
+                default=value.default, source=source, detail=value.source_detail, **fields)

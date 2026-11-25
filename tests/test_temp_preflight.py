@@ -666,3 +666,31 @@ def test_the_ground_ignores_stale_telemetry():
     edges["drone-1"].telemetry(temp_preflight=temp_telemetry(None, TempLimits(), TempReading(99, 99)))
     clock.advance(TELEMETRY_STALE_S)
     assert coord.start().ok  # stale telemetry decides nothing, as for the battery and the link
+
+
+def test_a_non_default_level_from_the_resolution_is_logged_with_its_source():
+    from types import SimpleNamespace
+
+    from flightrisk.params.spec import Source
+
+    class Log:
+        def __init__(self):
+            self.events = []
+
+        def warning(self, event, **fields):
+            self.events.append((event, fields))
+
+    def resolved(value, source, detail):
+        return SimpleNamespace(value=value, source=source, source_detail=detail)
+
+    args = SimpleNamespace(edge_resolution=SimpleNamespace(values={
+        "tello.temp_warn_c": resolved(90, Source.PROFILE, "custom-quad"),
+        "tello.temp_refuse_c": resolved(94, Source.ENV, ENV_TELLO_TEMP_REFUSE_C),
+    }))
+    log = Log()
+    limits = edge_device._temp_limits(log, "drone-1", environ={ENV_TELLO_TEMP_REFUSE_C: "94"}, args=args)
+    assert (limits.warn_c, limits.refuse_c) == (90, 94)
+    assert [(f["variable"], f["detail"]) for _, f in log.events] == [
+        ("tello.temp_warn_c", "tello.temp_warn_c=90 from custom-quad is not the default (92)"),
+        (ENV_TELLO_TEMP_REFUSE_C, f"{ENV_TELLO_TEMP_REFUSE_C}=94 is not the default (95)"),
+    ]

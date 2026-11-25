@@ -7,7 +7,8 @@ and are absent. Distances are centimetres.
 
 Non-numeric default markers (risk R3) are the module constants ``UNSET``,
 ``DEFERRED``, ``PER_MISSION`` and ``DERIVED_NADIR_SWATH``. A ``None`` default
-means the row does not apply to that model.
+means the row does not apply to that model; ``UNSET`` means it applies but has no value
+until a layer sets one (the generic multirotor's airframe maximum altitude).
 
 Tello tuning facts have ``Edit.FACT`` and are read-only and never user-facing
 (risk R6).
@@ -52,6 +53,7 @@ FACT_NOTE = "Test-adapter fact, read-only, not operator-facing."
 #: The safe value of rows whose safer direction is a named value, not higher or lower.
 SAFE_VALUES: dict[str, Any] = {
     "link.require_failsafes": True,
+    "regulatory.altitude_cap_on": True,
     "tello.temp_refuse_c": "on",
     "sensing.turn": True,
     "sensing.mode": "required",
@@ -299,8 +301,11 @@ ROWS_1_86: tuple[ParamSpec, ...] = (
        (20, 20), (_B(20, 20), _B(20, 20)), Safer.NONE, Confirm.NONE, _RO, _NS),
     _p("move.max_cm", Unit.CM, Kind.INT, "Largest single move the drone accepts.", _ND,
        (500, 5000), (_B(500, 500), _B(5000, 5000)), Safer.NONE, Confirm.NONE, _RO, _NS),
-    _p("envelope.max_altitude_cm", Unit.CM, Kind.INT, "Highest altitude the model declares.", _ND,
-       (1000, 12000), (_B(1000, 1000), _B(12000, 12000)), Safer.NONE, Confirm.NONE, _RO, _NS),
+    # Item 53: the generic multirotor's 12000 was the FAA cap, not an airframe value. It is unknown unless the
+    # inventory states the airframe maximum, within 1000 to 60000 cm.
+    _p("envelope.max_altitude_cm", Unit.CM, Kind.INT, "Highest altitude the airframe allows; unknown unless stated.",
+       _ND, (1000, UNSET), (_B(1000, 1000), _B(1000, 60000)), Safer.NONE, Confirm.NONE,
+       (Edit.READ_ONLY, Edit.FILE_ENV), _NS),
     _p("envelope.fence_breach_margin_cm", Unit.CM, Kind.INT, "GPS noise allowance before a breach landing.", _ND,
        (None, 300), (None, _B(100, 1000)), Safer.LOWER, Confirm.LESS_SAFE, _FE, _NS),
     _p("envelope.autopilot_fence_margin_cm", Unit.CM, Kind.INT,
@@ -661,5 +666,21 @@ ROWS_146_162: tuple[ParamSpec, ...] = (
 
 ROWS_87_162: tuple[ParamSpec, ...] = ROWS_87_110 + ROWS_111_128 + ROWS_129_145 + ROWS_146_162
 
-#: The whole registry: rows 1 to 162 minus the removed 53 and 85, row 71 holding two ids, so 160 rows.
-TABLE: tuple[ParamSpec, ...] = ROWS_1_86 + ROWS_87_162
+# Rows 163 and 164: the regulatory altitude cap of design section 27 item 53. The cap is the FAA's 120 m
+# (14 CFR 107.51), on by default for every unit. Only the launcher may turn it off, with a confirmation.
+ROWS_163_164: tuple[ParamSpec, ...] = (
+    _p("regulatory.altitude_cap_cm", Unit.CM, Kind.INT, "Regulatory altitude cap (FAA 120 m).", _ND,
+       (12000, 12000), (_B(12000, 12000), _B(12000, 12000)), Safer.NONE, Confirm.NONE, _RO, _NS),
+    _p("regulatory.altitude_cap_on", Unit.BOOL, Kind.BOOL,
+       "Apply the regulatory altitude cap; off only at launch with the operator's acknowledgement.", _ND,
+       (True, True), (None, None), Safer.NONE, Confirm.LESS_SAFE, _UI, _NS,
+       off_value=False, safety_switch=True),
+)
+
+#: Rows whose less-safe value counts only when the launcher layer's ``confirmed`` object names it. A value
+#: from any other layer is refused: a file or the inventory by the safety switch rule, and the environment
+#: and flags because the row has no name there (design section 27 item 53).
+LAUNCHER_CONFIRMED_ONLY: frozenset[str] = frozenset({"regulatory.altitude_cap_on"})
+
+#: The whole registry: rows 1 to 164 minus the removed 53 and 85, row 71 holding two ids, so 162 rows.
+TABLE: tuple[ParamSpec, ...] = ROWS_1_86 + ROWS_87_162 + ROWS_163_164

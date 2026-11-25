@@ -27,7 +27,8 @@ sys.path.insert(0, str(ROOT))
 PARAMS_MD = ROOT / "docs" / "design" / "hardware-profiles" / "parameters.md"
 DEFAULT_OUT = ROOT / "tests" / "golden" / "flight_params.json"
 PROFILES = ("tello", "generic_multirotor")
-SAFETY_SWITCH_IDS = {"sensing.mode", "sensing.turn", "link.require_failsafes", "tello.temp_refuse_c"}
+SAFETY_SWITCH_IDS = {"sensing.mode", "sensing.turn", "link.require_failsafes", "tello.temp_refuse_c",
+                     "regulatory.altitude_cap_on"}
 
 SAF = "flightrisk.drone.safety"
 FG = "flightrisk.drone.flight_guards"
@@ -175,7 +176,7 @@ TODAY_REFS = {
 T, G = PROFILES
 DOC_ONLY_TODAY = {
     (8, T): "instance attribute: TelloController.__init__ builds DroneCapabilities(max_altitude_m=10) (drone/tello.py:646)",
-    (8, G): "contested: DroneCapabilities.max_altitude_m = 120 (drone/controller.py:108) gives 12000 cm, but the field fleet controller declares int(MAX_ALT_SLOT_CM / 100) = 5 m (drone/mavlink_fleet.py:383)",
+    (8, G): "unknown since A3 (design section 27 item 53): the 120 m that stood in for it was the FAA cap, not an airframe value; MavlinkFleetDrone declares max_altitude_m=None (drone/mavlink_fleet.py:384)",
     (17, T): "the Tello lands as soon as the link-loss watchdog fires; no constant holds the 0 s wait",
     (18, T): "behaviour: the Tello edge lands in place on link loss; no constant",
     (33, T): "FLIGHTRISK_HOVER_TEST is off unless set (drone/flight_guards.py:88); no default constant",
