@@ -117,6 +117,7 @@ import time
 from collections import deque
 from typing import Any, Callable, Iterable, Sequence, TextIO
 
+from flightrisk import edge_query
 from flightrisk import fleet_protocol as fp
 from flightrisk.drone.flight_guards import (
     DEFAULT_REFUSAL_HOLD_S,
@@ -809,8 +810,16 @@ def _handle_control(
     (``CONTROL_TYPES``) and manual-takeover commands
     (``MANUAL_CONTROL_TYPES``) go to the executor, and an unexpected exception lands
     the drone (fail safe). ``recv_t`` is the edge clock reading taken when
-    the message arrived.
+    the message arrived. A read-only query (``QUERY_TYPES``) goes to
+    ``edge_query`` before anything else: it is answered in any state, never
+    fenced, never feeds the watchdog and never lands the drone (PROTO-4).
     """
+    # The isinstance check keeps an unhashable "type" (a list, say) out of the
+    # set lookup here; inside the try below it lands the drone, as on main.
+    if isinstance(msg, dict) and isinstance(msg.get("type"), str) and msg["type"] in fp.QUERY_TYPES:
+        # Any ground may ask, so a query is no sign of a live authority.
+        edge_query.route(runner, msg, log)
+        return
     try:
         mtype = msg.get("type")
         if flight is not None and feed_watchdog:
@@ -2841,6 +2850,9 @@ def _run_flight_edge(
     if callable(bind_executor):
         bind_executor(flight)
     _bind_profile_switcher(runner, transport, log, flight)
+    runner.edge_query = edge_query.for_link(
+        args.edge_resolution, args.drone_id, transport, _make_sender(transport, log), log=log,
+    )
     if stop_event is None:
         stop_event = threading.Event()
 

@@ -28,9 +28,9 @@ Rules:
   ``QUERY_TYPES``, not in ``CONFIG_COMMAND_TYPES`` or ``COMMAND_TYPES``. It
   is protocol v2 only, carries ``drone_id`` and ``cmd_id``, and needs no
   fence, because any ground may ask. The edge checks it with
-  ``validate_describe_unit`` before its authority and fence checks, so the
-  strict ``validate_ground_to_edge`` still refuses it until the edge adopts
-  it (A3).
+  ``validate_describe_unit`` before its authority and fence checks; the
+  strict ``validate_ground_to_edge`` accepts it on a v2 link and refuses it
+  on a v1 link (A3).
 * **The reply** carries ``unit``, ``gates``, ``values`` and ``unit_rev``,
   optionally ``ap_link_loss`` (from ``AP_LINK_LOSS_ACTIONS``) and
   ``accepts``. ``unit.link`` is only the link kind (``LINK_KINDS``), never an

@@ -26,6 +26,9 @@ How it works:
   message does. Landings are executed from any ground; everything else only
   from the authority. Only the authority's messages feed the link-loss
   watchdog (``feeds_watchdog`` tells the edge device not to feed it again).
+  A ``describe_unit`` query from any ground is answered by the authority
+  with the edge's ``edge_query`` answerer (``runner.edge_query``), with
+  each connection's own cache and limit; it feeds no watchdog.
 * Outbound: telemetry, acks and nacks go to every ground that has agreed a
   version (completed for v2 by ``EdgeAuthority.outbound`` and shaped per
   link); detections (crops, embeddings, thumbnails) go to the authority
@@ -64,6 +67,7 @@ from collections.abc import Callable, Hashable, Iterable, Mapping
 from typing import Any
 from urllib.parse import urlsplit
 
+from flightrisk import edge_query
 from flightrisk import fleet_protocol as fp
 from flightrisk import obs_comm
 from flightrisk.async_bridge import AsyncBridge
@@ -229,7 +233,8 @@ class EdgeUplink:
         self._watchdog_feed: Callable[[], None] | None = None
         self._last_authority_msg_s: float | None = None
         self.authority = EdgeAuthority(
-            drone_id, node_id, legacy=legacy, inflight_handover=inflight_handover, logger=self._log, clock=clock
+            drone_id, node_id, legacy=legacy, inflight_handover=inflight_handover, logger=self._log, clock=clock,
+            query=self._edge_query,
         )
         self._runner = runner if runner is not None else EdgeRunner()
         self._send_timeout_s = float(send_timeout_s)
@@ -282,6 +287,17 @@ class EdgeUplink:
     @on_emergency_land.setter
     def on_emergency_land(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
         self._on_emergency_land = callback
+
+    def _edge_query(self) -> edge_query.EdgeQuery | None:
+        """The edge's describe_unit answerer, or None until the edge attaches one.
+
+        The edge device sets ``runner.edge_query`` (``edge_query.for_link``)
+        once it has resolved its unit. Only its ``EdgeQuery`` is used here:
+        the authority keeps the per-connection state and replies on the
+        connection the query came from.
+        """
+        queries = getattr(self._runner, "edge_query", None)
+        return queries.query if isinstance(queries, edge_query.LinkQueries) else None
 
     def bind_executor(self, flight: Any) -> None:
         """Wire the lane executor: authority hooks and the watchdog feed."""
