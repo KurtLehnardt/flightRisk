@@ -814,7 +814,9 @@ def _handle_control(
     ``edge_query`` before anything else: it is answered in any state, never
     fenced, never feeds the watchdog and never lands the drone (PROTO-4).
     """
-    if isinstance(msg, dict) and msg.get("type") in fp.QUERY_TYPES:
+    # The isinstance check keeps an unhashable "type" (a list, say) out of the
+    # set lookup here; inside the try below it lands the drone, as on main.
+    if isinstance(msg, dict) and isinstance(msg.get("type"), str) and msg["type"] in fp.QUERY_TYPES:
         # Any ground may ask, so a query is no sign of a live authority.
         edge_query.route(runner, msg, log)
         return

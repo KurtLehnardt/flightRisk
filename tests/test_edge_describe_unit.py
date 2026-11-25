@@ -160,6 +160,13 @@ def test_a_failing_handler_never_lands_the_drone(resolution):
     flight.note_ground_message.assert_not_called()
 
 
+def test_a_non_string_type_reaches_the_fail_safe_instead_of_killing_the_control_thread():
+    # An unhashable type used to raise before the try, which killed the control pump.
+    flight = MagicMock()
+    _handle_control({"type": ["x"]}, MagicMock(), StructuredLogger(component="test"), flight=flight)
+    flight.fail_safe.assert_called_once_with("control_error")
+
+
 def test_an_edge_without_a_resolution_ignores_the_query():
     assert edge_query.for_link(None, DRONE, link(), print) is None
     flight = MagicMock()
