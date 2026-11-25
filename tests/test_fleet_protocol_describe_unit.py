@@ -93,9 +93,11 @@ def test_query_is_v2_only_and_needs_a_cmd_id():
         fp.validate_describe_unit({"type": "describe_unit", "drone_id": "drone-1"}, proto=2)
 
 
-def test_strict_edge_validator_still_refuses_the_query_until_a3():
+def test_strict_edge_validator_accepts_the_query_on_v2_only():
+    # A3 (PROTO-4): the edge decodes the query on a v2 link and still refuses it on v1.
+    assert fp.validate_ground_to_edge(fp.make_describe_unit("drone-1"), proto=2) == fp.DESCRIBE_UNIT
     with pytest.raises(fp.ProtocolError):
-        fp.validate_ground_to_edge(fp.make_describe_unit("drone-1"), proto=2)
+        fp.validate_ground_to_edge(fp.make_describe_unit("drone-1"), proto=1)
 
 
 # --- the reply -------------------------------------------------------------

@@ -90,6 +90,7 @@ from flightrisk.fleet_protocol.constants import (
     PROFILE_FALLBACK_REASONS,
     PROFILE_NACK_REASONS,
     PROTOCOL_VERSION,
+    QUERY_TYPES,
     RESUME,
     RETURN_COMMAND_TYPES,
     SET_DETECTION_PROFILE,
@@ -118,6 +119,7 @@ from flightrisk.fleet_protocol.returns import (
 )
 from flightrisk.fleet_protocol.unit import (
     is_describe_unit_reply,
+    validate_describe_unit,
     validate_describe_unit_reply,
     validate_edge_hello_unit_rev,
 )
@@ -636,7 +638,11 @@ def validate_ground_to_edge(msg: Any, *, proto: int, require_fence: bool = False
     The legacy ``set_target`` and ``stream_video`` messages pass by type only.
     Configuration commands (``set_detection_profile``) are accepted on every
     link version and checked against their own schema; they are never
-    fenced, because they cannot move the drone.
+    fenced, because they cannot move the drone. Read-only queries
+    (``QUERY_TYPES``, that is ``describe_unit``) are accepted on protocol v2
+    only, refused on a v1 link like any other type v1 does not define, and
+    never fenced, whatever *require_fence* says: any ground may ask, and a
+    query cannot move the drone or change who commands it.
 
     With *require_fence*, motion and control (``FENCED_COMMAND_TYPES`` and
     ``FENCED_CONTROL_TYPES``) must carry a valid fence, and commands a
@@ -675,11 +681,19 @@ def validate_ground_to_edge(msg: Any, *, proto: int, require_fence: bool = False
                 ) from exc
         return mtype
     # The return commands (RETURN_COMMAND_TYPES) are not allowed here yet:
-    # like describe_unit, the live edge keeps refusing them at decode until it
-    # handles them (C1), so this change leaves the edge's behaviour as it was.
-    allowed = GROUND_TO_EDGE_TYPES_V2 if _is_int(proto) and proto >= 2 else GROUND_TO_EDGE_TYPES | {HELLO}
+    # the live edge keeps refusing them at decode until it handles them (C1),
+    # so this change leaves the edge's behaviour as it was.
+    allowed = (
+        GROUND_TO_EDGE_TYPES_V2 | QUERY_TYPES if _is_int(proto) and proto >= 2 else GROUND_TO_EDGE_TYPES | {HELLO}
+    )
     if mtype not in allowed:
         raise ProtocolError(f"{_short(mtype)} is not a ground-to-edge message in protocol v{_short(proto)}")
+    if mtype in QUERY_TYPES:
+        # A read-only query (PROTO-4): v2 only, which the check above has
+        # already enforced, and never fenced, so a fence it carries is not
+        # looked at and require_fence does not apply.
+        validate_describe_unit(msg, proto=proto)
+        return mtype
     validate_message(msg, proto=proto)
     if mtype == HELLO and not _is_ground_hello(msg):
         raise ProtocolError("a ground-to-edge 'hello' must have role 'leader' or 'standby'")
