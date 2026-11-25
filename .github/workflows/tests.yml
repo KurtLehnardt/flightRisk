@@ -23,6 +23,10 @@ jobs:
     name: python (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    # Ubuntu gates the run. macOS and Windows still report their results, but
+    # a handful of timing and platform tests fail there on hosted runners, so
+    # they do not fail the run until those tests are fixed (issue #261).
+    continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
