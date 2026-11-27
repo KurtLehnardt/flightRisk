@@ -17,9 +17,9 @@ struct GroundSettingsSection: View {
 
     private var keyStateText: String {
         switch viewModel.keyState {
-        case .saved: return "A key is saved in the Keychain."
+        case .saved: return "Key saved."
         case .none: return "No key saved."
-        case .unavailable: return "Keychain locked: unlock the phone."
+        case .unavailable: return "Keychain locked. Unlock the phone."
         }
     }
 
@@ -42,7 +42,7 @@ struct GroundSettingsSection: View {
                 Text(message).font(.footnote).foregroundStyle(FlightRiskTheme.alertOrange)
             }
 
-            SecureField("Dashboard API key", text: $keyInput)
+            SecureField("API key", text: $keyInput)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .textContentType(.password)
@@ -59,13 +59,13 @@ struct GroundSettingsSection: View {
                 Text(message).font(.footnote).foregroundStyle(FlightRiskTheme.alertOrange)
             }
             if viewModel.hasSavedKey {
-                Button("Remove saved key", role: .destructive) {
+                Button("Remove key", role: .destructive) {
                     viewModel.removeKey()
                     keyMessage = nil
                 }
             }
 
-            Toggle("Connect to the ground station", isOn: Binding(
+            Toggle("Connect", isOn: Binding(
                 get: { viewModel.isEnabled },
                 set: { viewModel.setEnabled($0) }
             ))
@@ -89,7 +89,7 @@ struct GroundSettingsSection: View {
                 }
             } label: {
                 HStack {
-                    Text("Test connection")
+                    Text("Test")
                     if isTesting { ProgressView().controlSize(.small) }
                 }
             }
@@ -98,9 +98,9 @@ struct GroundSettingsSection: View {
                 Text(result).font(.footnote).foregroundStyle(.secondary)
             }
         } header: {
-            Text("Ground Station")
+            Text("Ground station")
         } footer: {
-            Text("Enter ws://HOST:PORT (port 5555 if omitted) and the ground's FLIGHTRISK_API_KEY. A ws:// or http:// address must be on your local network; use wss:// or https:// for any other address.")
+            Text("Use ws://HOST:PORT on your local network, or wss:// elsewhere.")
         }
         .onAppear {
             if addressInput.isEmpty { addressInput = viewModel.savedAddress ?? "" }
@@ -114,18 +114,15 @@ struct GroundSettingsSection: View {
 enum DemoUIText {
     /// The banner shown on every tab while the demo runs.
     static let banner = "DEMO \u{2013} no real drones"
-    static let tryDemo = "Try the demo (no drones, no photo)"
-    static let tryDemoHint = "Shows the app with simulated drones. No camera, no photo, and nothing is sent to any network."
-    static let confirmTitle = "Disconnect the ground station?"
+    static let tryDemo = "Try the demo"
+    static let tryDemoHint = "Simulated drones. Nothing leaves this phone."
+    static let confirmTitle = "Disconnect ground station?"
     static let confirmMessage =
-        "The demo cannot run beside a live ground station. The link closes now and stays off until you switch it on again in Settings. "
-        + "While the demo runs, LAND ALL on this phone lands only the simulated drones: use the ground laptop for real drones."
-    static let confirmButton = "Disconnect and start the demo"
+        "The demo cannot run beside a live ground station. The link closes now and stays off until you switch it on in Settings. "
+        + "During the demo, LAND ALL lands only simulated drones. Use the ground laptop for real ones."
+    static let confirmButton = "Disconnect and start"
     static let footer =
-        "The demo plays a scenario on this phone: two simulated drones search their lanes, one stops at an obstacle, "
-        + "a match alert gets an AI verdict, and the drones land. It needs no camera, photo or ground station, and nothing is sent to any network. "
-        + "Every command is answered by the simulated ground, and LAND ALL reads \"LAND ALL (demo)\". Turning the demo off clears everything it showed. "
-        + "The demo does not start while the ground station reports drones in the air or a LAND ALL is unanswered or failed."
+        "Two simulated drones play a search on this phone. Nothing leaves it."
 }
 
 /// Asks before a demo starts beside a live link, then starts it, and says why when the demo is
@@ -183,7 +180,7 @@ struct DemoSettingsSection: View {
 
     var body: some View {
         Section {
-            Toggle("Demo mode", isOn: Binding(
+            Toggle("Demo", isOn: Binding(
                 get: { viewModel.isDemoActive },
                 set: { on in
                     if on {
@@ -193,10 +190,10 @@ struct DemoSettingsSection: View {
                     }
                 }
             ))
-            .accessibilityHint("Shows a simulated ground station with simulated drones. Nothing is sent to any network.")
+            .accessibilityHint("Simulated drones. Nothing leaves this phone.")
             .accessibilityIdentifier("settings.demoMode")
             if viewModel.isDemoActive {
-                Button("Play the demo again") { viewModel.restartDemo() }
+                Button("Replay demo") { viewModel.restartDemo() }
             }
         } header: {
             Text("Demo")

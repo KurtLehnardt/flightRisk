@@ -30,7 +30,7 @@
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>FlightRisk uses your camera to scan for people matching the target photo.</string>
+	<string>FlightRisk uses your camera to take the target photo.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>FlightRisk connects to the ground station address you enter in Settings, over your local network, to show its status and send commands.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>

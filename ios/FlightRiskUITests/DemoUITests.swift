@@ -76,8 +76,8 @@ final class DemoUITests: XCTestCase {
         let target = app.tabBars.buttons["Target"]
         if target.exists { target.tap() } else { app.buttons["Target"].firstMatch.tap() }
         XCTAssertTrue(app.staticTexts["Target (demo)"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["Select Photo"].exists)
-        XCTAssertFalse(app.buttons["Take Photo"].exists)
+        XCTAssertFalse(app.buttons["Select photo"].exists)
+        XCTAssertFalse(app.buttons["Take photo"].exists)
         XCTAssertTrue(banner.exists)
         shot(app, "target-demo-\(label)")
 

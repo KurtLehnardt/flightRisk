@@ -10,8 +10,7 @@ enum CustomDetectorText {
     static let agplURL = URL(string: "https://www.gnu.org/licenses/agpl-3.0.html")!
 
     static let sectionFooter =
-        "Off by default. FlightRisk's built-in person detector is YOLOX-S (Apache-2.0). You can import your own "
-        + "YOLO person detector instead; FlightRisk never provides, hosts or downloads one."
+        "Off by default. The built-in detector is YOLOX-S (Apache-2.0)."
 
     static let intro =
         "FlightRisk finds people with its built-in detector, YOLOX-S (Apache-2.0). If you have your own YOLO person "
@@ -24,11 +23,9 @@ enum CustomDetectorText {
         + "responsible for having the right to use the model you import."
 
     static let requirements =
-        "The model must be a Core ML model: a .mlmodel file, or a .mlpackage folder compressed into a .zip file, "
-        + "100 MB at most. Its input must be a 640 x 640 image, its output a YOLOv8 or YOLO11 detection head "
-        + "exported without NMS ([1, 84, 8400] for the 80 COCO classes) or an NMS-free head ([1, N, 6]), and its "
-        + "class 0 must be \"person\". FlightRisk compiles it on this phone and checks that it finds a person in a "
-        + "drawn test picture before using it."
+        "A Core ML model: a .mlmodel file, or a zipped .mlpackage, 100 MB at most. Input 640 x 640. "
+        + "Output a YOLOv8 or YOLO11 head without NMS ([1, 84, 8400]) or an NMS-free head ([1, N, 6]). "
+        + "Class 0 must be \"person\". FlightRisk checks it on a test picture before use."
 
     static let attestation =
         "I confirm that I have the right to use this model in FlightRisk, under the AGPL-3.0, an Ultralytics "
@@ -106,8 +103,8 @@ private struct CustomDetectorSectionContent: View {
     var body: some View {
         Section {
             if let info = model.info {
-                Toggle("Use my own detector", isOn: Binding(get: { model.isEnabled }, set: { model.setEnabled($0) }))
-                    .accessibilityHint("When off, FlightRisk uses its built-in detector, YOLOX-S")
+                Toggle("Use my detector", isOn: Binding(get: { model.isEnabled }, set: { model.setEnabled($0) }))
+                    .accessibilityHint("Off uses the built-in detector")
                 LabeledContent("Model", value: info.layout.displayName)
                 LabeledContent("Size", value: CustomModelValidator.megabytes(info.bytes))
                 VStack(alignment: .leading, spacing: 2) {
@@ -118,28 +115,28 @@ private struct CustomDetectorSectionContent: View {
                         .textSelection(.enabled)
                 }
                 .accessibilityElement(children: .combine)
-                Button("Import another model") { showingImport = true }
-                Button("Remove my model", role: .destructive) { confirmingRemove = true }
+                Button("Replace model") { showingImport = true }
+                Button("Remove model", role: .destructive) { confirmingRemove = true }
             } else {
-                Text("Using the built-in detector, YOLOX-S.")
+                Text("Built-in detector (YOLOX-S).")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Button("Import my own detector…") { showingImport = true }
+                Button("Import detector…") { showingImport = true }
                     .accessibilityIdentifier("settings.customDetector.import")
             }
         } header: {
-            Text("Person Detector")
+            Text("Detector")
         } footer: {
             Text(CustomDetectorText.sectionFooter)
         }
         .sheet(isPresented: $showingImport, onDismiss: { model.refresh() }) {
             CustomDetectorImportView(model: model)
         }
-        .alert("Remove your detector?", isPresented: $confirmingRemove) {
+        .alert("Remove detector?", isPresented: $confirmingRemove) {
             Button("Remove", role: .destructive) { model.remove() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("FlightRisk goes back to its built-in detector, YOLOX-S.")
+            Text("FlightRisk goes back to the built-in detector.")
         }
     }
 }
@@ -169,7 +166,7 @@ struct CustomDetectorImportView: View {
                     Text(CustomDetectorText.requirements)
                         .font(.footnote)
                 } header: {
-                    Text("What the model must be")
+                    Text("Requirements")
                 }
                 Section {
                     Toggle(isOn: $attested) {
@@ -177,13 +174,13 @@ struct CustomDetectorImportView: View {
                             .font(.footnote)
                     }
                     .accessibilityIdentifier("customDetector.attest")
-                    Button("Choose the model file…") { picking = true }
+                    Button("Choose file…") { picking = true }
                         .disabled(!attested || model.isImporting)
                         .accessibilityIdentifier("customDetector.choose")
                     if model.isImporting {
                         HStack(spacing: 8) {
                             ProgressView()
-                            Text("Checking the model…").font(.footnote)
+                            Text("Checking…").font(.footnote)
                         }
                         .accessibilityElement(children: .combine)
                     }
@@ -194,7 +191,7 @@ struct CustomDetectorImportView: View {
                     }
                 }
             }
-            .navigationTitle("Your own detector")
+            .navigationTitle("Own detector")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

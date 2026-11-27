@@ -1,6 +1,6 @@
 # FlightRisk iOS
 
-The iPhone app has two jobs. It is a standalone detector (the camera finds people and compares them with a reference photo, on the device), and it is a console for a FlightRisk ground station (the Ground tab). It is not an edge: it never sends detections, crops or video to a ground station, and it has no direct link to a drone.
+The iPhone app has two jobs. It searches the video of a connected drone for the person in a reference photo, on the device, and it is a console for a FlightRisk ground station (the Ground tab). A search starts only while a drone is connected: the phone's own camera is never used to search, and is used only to take the target photo. It is not an edge: it never sends detections, crops or video to a ground station.
 
 The full description, with the safety display rules, the address policy and what has not been verified, is in [`docs/ios-ground-client.md`](../docs/ios-ground-client.md). The wire contract shared with Android is [`docs/mobile-contract.md`](../docs/mobile-contract.md). Open items are in [`docs/mobile-followups.md`](../docs/mobile-followups.md).
 
@@ -18,7 +18,7 @@ ios/
 ├── FlightRisk/                  # the app
 │   ├── Assets.xcassets          # AppIcon (one 1024 px image, made by branding/make_app_icon.py)
 │   ├── PrivacyInfo.xcprivacy    # privacy manifest (see docs/app-store-compliance.md)
-│   ├── Camera, Vision, Pipeline # on-device detection and matching
+│   ├── Vision, Pipeline         # on-device detection and matching (drone video frames)
 │   ├── LLM, Config              # reasoning backends, cloud opt-in, Keychain
 │   ├── State/GroundViewModel.swift
 │   └── UI/Ground/               # the Ground tab

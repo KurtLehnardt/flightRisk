@@ -58,7 +58,7 @@ These are the strings in `ios/FlightRisk/Info.plist` and the `info.properties` b
 
 | Key | Value |
 |-----|-------|
-| `NSCameraUsageDescription` | "FlightRisk uses your camera to scan for people matching the target photo." |
+| `NSCameraUsageDescription` | "FlightRisk uses your camera to take the target photo." |
 | `NSLocationWhenInUseUsageDescription` | "FlightRisk attaches GPS coordinates to match alerts so you can navigate to the location." |
 | `NSPhotoLibraryUsageDescription` | "FlightRisk needs access to your photo library to select a target reference photo." |
 | `NSLocalNetworkUsageDescription` | "FlightRisk connects to the ground station address you enter in Settings, over your local network, to show its status and send commands." |
@@ -152,7 +152,7 @@ Include the following in the "Notes" field during submission:
 >
 > Cloud reasoning is off by default. It sends the cropped image of a detected person, the reference photo and the typed description to Anthropic only after the user turns on "Allow cloud reasoning" and confirms the consent dialog, saves a Claude API key and selects Cloud Claude. Reviewers can leave it off; all other features work without it.
 >
-> The first-launch privacy notice is shown before the camera starts.
+> The first-launch privacy notice is shown before any camera or location prompt.
 >
 > Demo mode (no drones, no photo and no ground station needed): tap "Try the demo (no drones, no photo)" at the top of any onboarding screen, or later turn on Settings > Demo > "Demo mode". A purple "DEMO – no real drones" banner then stays above every tab, never over a tab's content, until you tap "Exit demo". The Ground tab shows a simulated ground station with two simulated drones, demo-drone-1 and demo-drone-2, that replays a scenario of about 40 seconds: the drones take off and fly their search lanes, one stops at an obstacle, a person match alert appears and later receives an AI verdict ("AI check: match (high confidence)", with a short explanation under "AI check details"), the operator confirms it on the simulated laptop, and the drones land. You can tap "LAND ALL (demo)" or a drone's Land button at any time; the simulated ground answers on the phone, and every result starts with "DEMO:". VoiceOver announces when the demo starts and stops. In demo mode every command is answered on the device and nothing is sent to any network; the camera, the photo library and the photo picker are not used, and the Search and Target tabs show a drawn placeholder figure instead of a photo. Because the demo collects and sends nothing, it can start before the privacy notice is acknowledged; the notice is still shown before the camera starts. The demo never runs beside a real ground station link: if one is set up, the app asks before it disconnects and switches that link off, and after the demo the Ground tab says that the link is off. The demo does not start at all while the real ground reports drones in the air or a LAND ALL is unanswered or failed; the app says why. Exiting the demo clears everything it showed. "Play the demo again" in Settings restarts it.
 

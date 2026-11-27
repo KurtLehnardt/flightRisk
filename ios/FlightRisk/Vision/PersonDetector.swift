@@ -78,7 +78,7 @@ final class CustomYOLOBackend: PersonDetectorBackend {
     }
 }
 
-/// Finds people in camera frames and cuts their crops for the appearance embedder.
+/// Finds people in drone video frames and cuts their crops for the appearance embedder.
 ///
 /// It runs the bundled YOLOX-S, or the user's own model while one is imported and switched on
 /// (`CustomDetectorStore`); switching it off goes back to YOLOX-S. Boxes pass through the
@@ -184,16 +184,14 @@ final class PersonDetector {
 
     /// The banner text when the model is not in the app bundle.
     static func missingModelReason() -> String {
-        "Person detection model not installed. This build of FlightRisk does not include the person detection model. "
-            + "The camera can run, but no one will be found or matched. "
-            + "Install a build that includes the model."
+        "Person detection model not installed. This build does not include the person detection model, so no one will be found or matched. "
+            + "Install a build that includes it."
     }
 
     /// The banner text when the model is in the bundle but could not be loaded.
     static func loadFailedReason() -> String {
-        "Person detection model not loaded. The person detection model could not be loaded on this device. "
-            + "The camera can run, but no one will be found or matched. "
-            + "Restart the app; if this stays, reinstall it."
+        "Person detection model not loaded, so no one will be found or matched. "
+            + "Restart the app. If this stays, reinstall it."
     }
 
     // MARK: - Backend choice
@@ -281,9 +279,9 @@ final class PersonDetector {
         }
     }
 
-    /// Detect people in a camera frame and cut each one's crop from the full frame.
+    /// Detect people in a video frame and cut each one's crop from the full frame.
     ///
-    /// - Parameter frame: The camera frame.
+    /// - Parameter frame: The video frame.
     /// - Returns: One `Detection` per person, highest score first.
     func detect(frame: CGImage) -> [Detection] {
         ensureLoaded()

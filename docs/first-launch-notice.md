@@ -27,10 +27,10 @@ A mandatory privacy notice screen shown to the user on first launch, **before** 
 
 The text below is what the iOS app shows. The wording of the ground station and cloud items matches the Ground section and the cloud consent dialog in Settings (`SettingsView.cloudConsentMessage`), and a unit test checks the key phrases.
 
-> **FlightRisk uses your phone's camera to help you locate a missing child.**
+> **FlightRisk uses the video of a connected drone to help you locate a missing child.**
 >
-> - **Camera Access.** FlightRisk uses your camera to scan for people who match the target photo you provide.
-> - **On-Device Processing.** Person detection and matching run on your device. Camera frames are not uploaded or stored.
+> - **Camera Access.** The camera is used only if you choose to take the target photo. It is never used to search.
+> - **On-Device Processing.** Person detection and matching run on your device. Matching compares appearance (clothing, colours and build) with your reference photo; FlightRisk does not use face recognition. Drone video frames are not uploaded or stored.
 > - **Ground Station (Optional).** If you add a ground station address in Settings, the app connects to that address only, to show drone status and send land, resume-search and detection-profile commands. The app refuses a ws:// or http:// address unless it is on your local network, and it checks that before anything, including the key, is sent. A ws:// or http:// link is not encrypted, so use a network you trust. Away from your local network, use a wss:// or https:// address. A VPN also works if it gives the ground station an address in a private range; addresses in 100.64.0.0/10, which Tailscale uses, are refused for ws:// and http://. The app does not pin certificates. The station's key is sent to the address you enter and is kept on this phone in the iOS Keychain.
 > - **Cloud Reasoning (Off by Default).** Cloud reasoning is off. If you turn it on in Settings, save a Claude API key and select Cloud Claude, the cropped image of each detected person, the reference photo and the text description you entered are sent to Anthropic. The images can show a face. You can turn it off at any time.
 > - **Location Data.** GPS coordinates are attached to match alerts so you can navigate to the location. Location data stays on your device.
@@ -61,7 +61,7 @@ A single primary action button at the bottom of the screen:
 
 **"I Understand"**
 
-- Tapping this dismisses the notice and proceeds to the next onboarding step. On iOS the camera is started only after onboarding finishes, so the camera permission prompt comes after the notice.
+- Tapping this dismisses the notice and proceeds to the next onboarding step. On iOS the camera permission prompt appears only when you tap "Take photo" for the target photo, which is after the notice.
 - The acknowledgment is recorded (see Persistence below).
 - The button must be clearly visible and not obscured by the body text on any screen size.
 
