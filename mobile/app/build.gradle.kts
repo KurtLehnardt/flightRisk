@@ -380,9 +380,6 @@ aboutLibraries {
             "com.google.android.gms:play-services-location",
             "com.google.android.gms:play-services-tasks",
         ))
-        // camera-core's POM names libyuv's BSD licence by URL only; the text is committed as "BSD License (libyuv)".
-        allowedLicensesMap.put("BSD License", listOf("androidx.camera:camera-core"))
-        allowedLicensesMap.put("BSD License (libyuv)", listOf("androidx.camera:camera-core"))
         // MIT and BSD libraries are allowed one by one, each with its own text and copyright line.
         allowedLicensesMap.put("MIT License (ONNX Runtime)", listOf("com.microsoft.onnxruntime:onnxruntime-android"))
         allowedLicensesMap.put("MIT License (Checker Framework annotations)", listOf("org.checkerframework:checker-compat-qual"))
@@ -405,8 +402,6 @@ val urlOnlyLicences = mapOf(
         "com.google.android.gms:play-services-tasks",
     ),
     "da5e524a4235731b9b96281090f5f82d" to setOf("org.checkerframework:checker-compat-qual"),
-    // camera-core's POM pointer to libyuv; the libyuv text is attached beside it.
-    "44d1a25c593283261968a15c8cc213cd" to setOf("androidx.camera:camera-core"),
 )
 val genericLicenceIds = setOf("MIT", "BSD-3-Clause")
 val checkLicenceTexts = tasks.register("checkLicenceTexts") {
@@ -470,9 +465,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.4")
     implementation("androidx.activity:activity-compose:1.9.1")
-    // registerForActivityResult needs Fragment 1.3.0 or newer at run time. CameraX
-    // view brings in appcompat 1.1.0 and with it Fragment 1.1.0, which lint
-    // (InvalidFragmentVersionForActivityResult) rejects. 1.8.9 is the newest 1.8
+    // registerForActivityResult needs Fragment 1.3.0 or newer at run time. Lint
+    // (InvalidFragmentVersionForActivityResult) rejects an older Fragment that another library may bring in. 1.8.9 is the newest 1.8
     // release; 1.9 needs Lifecycle 2.10 and a newer Kotlin compiler.
     implementation("androidx.fragment:fragment-ktx:1.8.9")
 
@@ -489,12 +483,6 @@ dependencies {
     // Every native library must be aligned to 16 KB pages for Google Play
     // (Android 15+ devices with 16 KB pages). The versions below are the ones
     // whose arm64-v8a libraries are 16 KB aligned (checked with llvm-readelf).
-
-    // CameraX. 1.4.0 is the first release with 16 KB aligned native libraries.
-    implementation("androidx.camera:camera-core:1.4.2")
-    implementation("androidx.camera:camera-camera2:1.4.2")
-    implementation("androidx.camera:camera-lifecycle:1.4.2")
-    implementation("androidx.camera:camera-view:1.4.2")
 
     // ONNX Runtime Mobile. 1.22.0 is the first release in which both
     // libonnxruntime.so and libonnxruntime4j_jni.so are 16 KB aligned. 1.32.0 (checked

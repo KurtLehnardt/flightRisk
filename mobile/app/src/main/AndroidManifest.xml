@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.INTERNET" />
@@ -10,15 +9,14 @@
     <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- No hardware feature is required, so Google Play does not hide the app from
-         devices without it. Without a camera the app searches with a drone and picks
-         the target photo from the gallery; without Wi-Fi it cannot reach a Tello, and
-         the ground console uses whatever network the device has; without location
-         hardware, match alerts have no coordinates. The CAMERA and location
-         permissions would otherwise make the camera, autofocus and location
-         features required implicitly. -->
-    <uses-feature android:name="android.hardware.camera" android:required="false" />
+         devices without it. The app declares no CAMERA permission: a search uses a
+         drone's video, never the phone's camera, and the optional "Take Photo" button
+         for the target photo opens the phone's own camera app, which needs none. The
+         camera feature is optional so a device without a camera can still pick the
+         photo from the gallery; without Wi-Fi it cannot reach a Tello, and the ground
+         console uses whatever network the device has; without location hardware,
+         match alerts have no coordinates. -->
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
-    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
     <uses-feature android:name="android.hardware.wifi" android:required="false" />
     <uses-feature android:name="android.hardware.location" android:required="false" />
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />

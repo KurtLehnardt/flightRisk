@@ -68,7 +68,6 @@ import com.flightrisk.app.config.SignalCategory
 import com.flightrisk.app.config.SignalConfig
 import com.flightrisk.app.config.SignalMetadata
 import com.flightrisk.app.config.SignalStatus
-import com.flightrisk.app.drone.FrameSourceMode
 import com.flightrisk.app.drone.TelloConnectionState
 import com.flightrisk.app.drone.TelloState
 import com.flightrisk.app.llm.ReasoningAction
@@ -81,6 +80,7 @@ import com.flightrisk.app.ui.theme.AlertOrange
 import com.flightrisk.app.ui.theme.AlertRed
 import com.flightrisk.app.ui.theme.DetectionBlue
 import com.flightrisk.app.ui.theme.MatchGreen
+import com.flightrisk.app.ui.theme.tabular
 
 /**
  * UI state for the settings screen.
@@ -114,7 +114,6 @@ data class SettingsScreenState(
  *   Params: (name, value) where name is "reid" or "scorer".
  * @param onReasoningAction Callback for every action in the reasoning section.
  * @param droneState Current drone connection and telemetry state, or null.
- * @param frameSourceMode Current frame source (camera or drone).
  * @param modifier Modifier for the root container.
  */
 @Composable
@@ -129,7 +128,6 @@ fun SettingsScreen(
     onLocalModelDelete: () -> Unit = {},
     searchActive: Boolean = false,
     droneState: TelloState? = null,
-    frameSourceMode: FrameSourceMode = FrameSourceMode.CAMERA,
     demoActive: Boolean = false,
     onDemoToggle: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
@@ -221,7 +219,6 @@ fun SettingsScreen(
 
             // ----- Drone section -----
             DroneSection(
-                frameSourceMode = frameSourceMode,
                 connectionState = droneState?.connectionState
                     ?: TelloConnectionState.DISCONNECTED,
                 battery = droneState?.telemetry?.battery ?: 0,
@@ -269,36 +266,28 @@ private fun SensitivitySection(
             modifier = Modifier.semantics { heading() },
         )
 
-        Spacer(modifier = Modifier.height(4.dp))
-
-        Text(
-            text = "Controls how aggressively the system alerts on potential matches.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         Column(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             SensitivityPill(
-                title = "More Alerts",
-                description = "Lower thresholds. More potential matches, but higher false-positive rate.",
+                title = "More alerts",
+                description = "More matches, more false alarms.",
                 isActive = activePreset == SensitivityPreset.MORE_ALERTS,
                 onClick = { onPresetSelected(SensitivityPreset.MORE_ALERTS) },
             )
 
             SensitivityPill(
-                title = "Balanced (Recommended)",
-                description = "Default thresholds. Good balance between recall and precision.",
+                title = "Balanced",
+                description = "Recommended.",
                 isActive = activePreset == SensitivityPreset.BALANCED,
                 onClick = { onPresetSelected(SensitivityPreset.BALANCED) },
             )
 
             SensitivityPill(
-                title = "Fewer Alerts",
-                description = "Higher thresholds. Fewer alerts, but stronger confidence per match.",
+                title = "Fewer alerts",
+                description = "Fewer, surer matches.",
                 isActive = activePreset == SensitivityPreset.FEWER_ALERTS,
                 onClick = { onPresetSelected(SensitivityPreset.FEWER_ALERTS) },
             )
@@ -395,7 +384,7 @@ private fun LlmBackendSection(
 
     Column(modifier = modifier) {
         Text(
-            text = "AI Reasoning",
+            text = "Reasoning",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.semantics { heading() },
@@ -404,7 +393,7 @@ private fun LlmBackendSection(
         Spacer(modifier = Modifier.height(4.dp))
 
         Text(
-            text = "Cloud reasoning is off by default. Local and None keep every image on this phone.",
+            text = "Cloud is off by default. Other choices keep images on this phone.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -538,7 +527,7 @@ private fun LlmBackendSection(
         } else if (selected == ReasoningProvider.OFF) {
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Reasoning is off. Matches are scored without a language model.",
+                text = "No language model.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -638,8 +627,7 @@ private fun LocalModelCard(
             Spacer(modifier = Modifier.height(4.dp))
 
             Text(
-                text = "Slower than cloud but works offline. " +
-                    "Algorithm-based signals carry more weight when using local models.",
+                text = "Works offline.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -653,7 +641,7 @@ private fun LocalModelCard(
                         onClick = onDownload,
                         modifier = Modifier.sizeIn(minHeight = 48.dp),
                     ) {
-                        Text("Download Model")
+                        Text("Download")
                     }
                 }
 
@@ -664,7 +652,7 @@ private fun LocalModelCard(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Downloading... ${(modelState.progress * 100).toInt()}%",
+                                text = "Downloading ${(modelState.progress * 100).toInt()}%",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = AlertOrange,
                             )
@@ -682,7 +670,7 @@ private fun LocalModelCard(
                         StatusDot(color = DetectionBlue)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Downloaded — will load on first use",
+                            text = "Downloaded",
                             style = MaterialTheme.typography.bodySmall,
                             color = DetectionBlue,
                         )
@@ -691,7 +679,7 @@ private fun LocalModelCard(
                         onClick = onDelete,
                         modifier = Modifier.sizeIn(minHeight = 48.dp),
                     ) {
-                        Text("Delete Model", color = AlertRed)
+                        Text("Delete", color = AlertRed)
                     }
                 }
 
@@ -700,7 +688,7 @@ private fun LocalModelCard(
                         StatusDot(color = AlertOrange)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Loading model...",
+                            text = "Loading...",
                             style = MaterialTheme.typography.bodySmall,
                             color = AlertOrange,
                         )
@@ -721,7 +709,7 @@ private fun LocalModelCard(
                         onClick = onDelete,
                         modifier = Modifier.sizeIn(minHeight = 48.dp),
                     ) {
-                        Text("Delete Model", color = AlertRed)
+                        Text("Delete", color = AlertRed)
                     }
                 }
 
@@ -739,7 +727,7 @@ private fun LocalModelCard(
                         onClick = onDownload,
                         modifier = Modifier.sizeIn(minHeight = 48.dp),
                     ) {
-                        Text("Retry Download")
+                        Text("Retry")
                     }
                 }
             }
@@ -795,12 +783,11 @@ private fun LlmBackendOption(
 // -----------------------------------------------------------------------
 
 /**
- * Read-only drone connection status display. Frame source is toggled
- * via the drone button on the Search screen, not here.
+ * Read-only drone connection status display. The drone is connected and
+ * disconnected on the Search screen, not here.
  */
 @Composable
 private fun DroneSection(
-    frameSourceMode: FrameSourceMode,
     connectionState: TelloConnectionState,
     battery: Int,
     modifier: Modifier = Modifier,
@@ -813,26 +800,7 @@ private fun DroneSection(
             modifier = Modifier.semantics { heading() },
         )
 
-        Spacer(modifier = Modifier.height(4.dp))
-
-        Text(
-            text = "Tello drone connection status. Use the drone button on the Search screen to connect or disconnect.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Current source indicator
-        Text(
-            text = "Video source: ${if (frameSourceMode == FrameSourceMode.DRONE) "Tello Drone" else "Phone Camera"}",
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.semantics {
-                contentDescription = "Video source: ${if (frameSourceMode == FrameSourceMode.DRONE) "Tello Drone" else "Phone Camera"}"
-            },
-        )
-
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         // Store builds carry no depth model, so pattern flights do not avoid obstacles: say so.
         val appContext = LocalContext.current.applicationContext
@@ -900,7 +868,7 @@ private fun DroneSection(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = "Battery: $battery%",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodySmall.tabular(),
                     color = batteryColor,
                     modifier = Modifier.semantics {
                         contentDescription = "Drone battery: $battery percent"
@@ -941,14 +909,14 @@ private fun MatchingAlgorithmsSection(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Matching Algorithms",
+                    text = "Matching",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.semantics { heading() },
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "Configure which signals contribute to match scoring.",
+                    text = "Choose what scores a match.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -977,7 +945,7 @@ private fun MatchingAlgorithmsSection(
         val activeCount = signalConfigs.count { it.value.enabled }
         val totalCount = MatchingAlgorithmConfig.SIGNALS.size
         Text(
-            text = "$activeCount of $totalCount signals active",
+            text = "$activeCount of $totalCount on",
             style = MaterialTheme.typography.bodySmall,
             color = if (activeCount > 0) MatchGreen else MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -1255,7 +1223,7 @@ private fun AdvancedSection(
         AnimatedVisibility(visible = expanded) {
             Column {
                 Text(
-                    text = "Manual threshold overrides. Changing these deselects the active preset.",
+                    text = "Overrides the preset.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1263,7 +1231,7 @@ private fun AdvancedSection(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 ThresholdSlider(
-                    label = "ReID Threshold",
+                    label = "Appearance threshold",
                     value = reidThreshold,
                     onValueChange = { onThresholdChanged("reid", it) },
                 )
@@ -1271,27 +1239,13 @@ private fun AdvancedSection(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 ThresholdSlider(
-                    label = "Scorer Threshold",
+                    label = "Score threshold",
                     value = scorerThreshold,
                     onValueChange = { onThresholdChanged("scorer", it) },
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Developer info
-                Text(
-                    text = "Debug Info",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.semantics { heading() },
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "ReID: ${"%.2f".format(reidThreshold)} | " +
-                        "Scorer: ${"%.2f".format(scorerThreshold)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = "Version: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",

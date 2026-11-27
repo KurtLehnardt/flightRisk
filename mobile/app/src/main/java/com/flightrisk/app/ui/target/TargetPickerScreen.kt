@@ -99,7 +99,7 @@ fun TargetPickerScreen(
     savedQualityReport: QualityReport? = null,
 ) {
     val context = LocalContext.current
-    // The camera is optional in the manifest; without one only "Select Photo" is offered.
+    // The camera is optional in the manifest; without one only "Choose photo" is offered.
     val hasCamera = remember {
         context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
     }
@@ -142,7 +142,7 @@ fun TargetPickerScreen(
             )
         } catch (e: ActivityNotFoundException) {
             Log.w(TAG, "No app can pick a photo", e)
-            Toast.makeText(context, "This device has no app that can pick a photo", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "No photo picker found.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -181,7 +181,7 @@ fun TargetPickerScreen(
         ) {
             // Header
             Text(
-                text = "Select Target Photo",
+                text = "Target photo",
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.semantics { heading() },
@@ -190,7 +190,7 @@ fun TargetPickerScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Choose a clear, recent photo of the child you are searching for.",
+                text = "Choose a clear, recent photo.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -214,7 +214,7 @@ fun TargetPickerScreen(
                         modifier = Modifier.size(20.dp),
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Select Photo")
+                    Text("Choose photo")
                 }
 
                 if (hasCamera) {
@@ -233,20 +233,12 @@ fun TargetPickerScreen(
                                 TempCameraPhotos.delete(file)
                                 photoFile = null
                                 photoUri = null
-                                Toast.makeText(context, "No camera app is installed. Use Select Photo instead.", Toast.LENGTH_LONG).show()
-                            } catch (e: SecurityException) {
-                                // ACTION_IMAGE_CAPTURE is refused while the app declares the
-                                // CAMERA permission but the person has not granted it.
-                                Log.w(TAG, "Camera capture not allowed without the camera permission", e)
-                                TempCameraPhotos.delete(file)
-                                photoFile = null
-                                photoUri = null
-                                Toast.makeText(context, "Allow camera access to take a photo", Toast.LENGTH_LONG).show()
+                                Toast.makeText(context, "No camera app. Choose a photo instead.", Toast.LENGTH_LONG).show()
                             }
                         },
                         modifier = Modifier.sizeIn(minHeight = 48.dp),
                     ) {
-                        Text("Take Photo")
+                        Text("Take photo")
                     }
                 }
             }
@@ -325,7 +317,7 @@ fun TargetPickerScreen(
                     if (qualityReport?.isAcceptable == false) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "Photo quality is too low. Please select a better photo.",
+                            text = "Quality too low. Choose another photo.",
                             style = MaterialTheme.typography.bodySmall,
                             color = AlertRed,
                             textAlign = TextAlign.Center,

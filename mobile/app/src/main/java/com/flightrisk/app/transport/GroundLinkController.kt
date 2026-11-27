@@ -83,7 +83,7 @@ object GroundLinkText {
     const val DISCLOSURE_TITLE = "Send detections to a ground station?"
 
     const val DISCLOSURE =
-        "While a search is running, this phone will send what its camera detects to the ground station address you entered: " +
+        "While a search is running, this phone will send what it detects in the drone's video to the ground station address you entered: " +
             "where each person appears in the picture (box positions) and how sure the phone is (scores). No pictures of people " +
             "and no face data are sent. If the ground station asks for video, the phone also sends a small picture of the whole " +
             "camera view, which can show people. The ground station cannot yet match these detections to a search target, so use " +

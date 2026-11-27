@@ -25,13 +25,15 @@ object PrivacyNoticeText {
 
     val items: List<Item> = listOf(
         Item(
-            "Camera Access",
-            "FlightRisk uses your camera to scan for people who match the target photo you provide.",
+            "Drone Video",
+            "FlightRisk uses the video of a connected drone to scan for people who match the target photo you provide. " +
+                "A search cannot run without a drone, and the phone's own camera is never used to search. " +
+                "The phone's camera app is used only if you tap Take Photo to take the target photo.",
         ),
         Item(
             "On-Device Processing",
             "Person detection and matching run on your device. Matching compares how people look (clothing, colours, build); " +
-                "the app uses no face recognition. Camera frames are not uploaded, except in the optional cases described below. " +
+                "the app uses no face recognition. Video frames are not uploaded, except in the optional cases described below. " +
                 "Search video is not recorded unless you turn on Record search video in Settings. " +
                 "Cloud reasoning, a ground station and a Tello drone are described below.",
         ),
@@ -44,7 +46,7 @@ object PrivacyNoticeText {
         Item(
             "Phone as an Edge (Off by Default)",
             "If you turn on the ground station link in Settings, then while a search is running " +
-                "this phone sends what its camera detects to the address you entered: box positions " +
+                "this phone sends what it detects in the drone's video to the address you entered: box positions " +
                 "and scores, not pictures of people and not face data. If the ground station asks for " +
                 "video, the phone also sends a small picture of the whole camera view, which can show people. " +
                 "The edge token is sent to the address you entered. You can turn it off at any time.",
@@ -53,7 +55,7 @@ object PrivacyNoticeText {
             "Tello Drone (Optional)",
             "If you use a Tello drone, you connect the phone to the Tello's own Wi-Fi network (the app does " +
                 "not join it) and the app receives its video and telemetry on your device. That link is not encrypted. Frames from the drone " +
-                "are processed on your device in the same way as camera frames.",
+                "are processed on your device in the same way as any other frames.",
         ),
         Item(
             "Cloud Reasoning (Off by Default)",

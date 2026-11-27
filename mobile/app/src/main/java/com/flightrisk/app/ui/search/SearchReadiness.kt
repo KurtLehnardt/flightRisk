@@ -1,16 +1,15 @@
 package com.flightrisk.app.ui.search
 
-import com.flightrisk.app.drone.FrameSourceMode
-
 /**
  * Whether a search can start, and what the Search screen should say before it
- * does. Only [NO_CAMERA] stops a search from starting.
+ * does. Only [NO_DRONE] stops a search from starting: the phone's own camera is
+ * never a frame source, so every search needs a connected drone.
  */
 enum class SearchReadiness(
     /** Whether Start may begin a search in this state. */
     val canStart: Boolean,
 ) {
-    /** A target photo is set and there is a camera to search with. */
+    /** A drone is connected and a target photo is set. */
     READY(canStart = true),
 
     /**
@@ -21,24 +20,22 @@ enum class SearchReadiness(
      */
     NO_TARGET(canStart = true),
 
-    /** The phone camera is the frame source but the device has no camera. A drone can still be used. */
-    NO_CAMERA(canStart = false),
+    /** No drone is connected, so there are no frames to search. Start does nothing until one connects. */
+    NO_DRONE(canStart = false),
 }
 
 /**
- * Decides [SearchReadiness]. A missing camera comes first, because it is the
+ * Decides [SearchReadiness]. A missing drone comes first, because it is the
  * one state in which nothing can be searched.
  *
  * @param hasTarget Whether a target photo has been chosen.
- * @param hasCamera Whether the device has a back or front camera the preview can use (not only an external one).
- * @param frameSourceMode Where frames come from: the phone camera or a connected drone.
+ * @param droneConnected Whether a drone is connected and streaming video.
  */
 fun searchReadiness(
     hasTarget: Boolean,
-    hasCamera: Boolean,
-    frameSourceMode: FrameSourceMode,
+    droneConnected: Boolean,
 ): SearchReadiness = when {
-    frameSourceMode == FrameSourceMode.CAMERA && !hasCamera -> SearchReadiness.NO_CAMERA
+    !droneConnected -> SearchReadiness.NO_DRONE
     !hasTarget -> SearchReadiness.NO_TARGET
     else -> SearchReadiness.READY
 }

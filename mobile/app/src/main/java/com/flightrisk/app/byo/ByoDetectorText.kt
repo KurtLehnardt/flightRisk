@@ -5,12 +5,12 @@ package com.flightrisk.app.byo
  * screen so a unit test can check them.
  */
 object ByoDetectorText {
-    const val TITLE = "Bring your own detector"
+    const val TITLE = "Custom detector"
 
     const val OFF_SUMMARY =
-        "Off. FlightRisk finds people with its built-in YOLOX-S detector (Apache-2.0)."
+        "Off. Using the built-in YOLOX-S detector."
 
-    const val ON_SUMMARY = "On. Searches use the detector you imported. Turning this off deletes it and goes back to YOLOX-S."
+    const val ON_SUMMARY = "On. Using your imported detector. Turning off deletes it."
 
     const val GATE_TITLE = "Use your own YOLO model?"
 
@@ -34,15 +34,15 @@ object ByoDetectorText {
 
     const val CHOOSE_FILE = "Choose .onnx file"
     const val CANCEL = "Cancel"
-    const val CHECKING = "Checking the model..."
-    const val APPLIES_NEXT_SEARCH = "A change applies from the next search."
+    const val CHECKING = "Checking model..."
+    const val APPLIES_NEXT_SEARCH = "Applies from the next search."
 
     /** On the Search screen when the imported detector could not be opened. */
-    const val SEARCH_FALLBACK = "Your imported detector could not be opened: searching with YOLOX-S."
+    const val SEARCH_FALLBACK = "Custom detector failed to open. Using YOLOX-S."
 
     /** In Settings after a search could not open the imported detector. */
     const val SETTINGS_FALLBACK =
-        "The last search could not open the imported detector and used YOLOX-S instead. Turn this off and import it again."
+        "Custom detector failed to open. Turn off, then import it again."
 
     fun imported(sizeBytes: Long, layout: String, sha256: String): String =
         "Imported (%.1f MB, %s output).\nSHA-256: %s".format(

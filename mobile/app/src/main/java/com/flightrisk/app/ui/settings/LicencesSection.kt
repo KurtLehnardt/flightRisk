@@ -56,7 +56,7 @@ object LicencesText {
         "This build has no on-device models, so there are no model notices to show. Release builds " +
             "install the models and their notices with scripts/mobile_models/make_models.py."
     const val BYO_NOTE =
-        "A detector you import yourself (Settings, \"Bring your own detector\") is not covered here: " +
+        "A detector you import yourself (Settings, \"Custom detector\") is not covered here: " +
             "FlightRisk does not supply or license it."
 
     /** The asset `make_models.py install` writes next to the models (a copy of scripts/mobile_models/NOTICES.md). */

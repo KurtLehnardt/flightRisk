@@ -45,9 +45,6 @@
     native <methods>;
 }
 
-# CameraX
--keep class androidx.camera.** { *; }
-
 # Coroutines
 -keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}
 -keepnames class kotlinx.coroutines.CoroutineExceptionHandler {}
