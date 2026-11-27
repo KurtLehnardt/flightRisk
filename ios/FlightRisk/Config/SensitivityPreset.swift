@@ -33,11 +33,11 @@ enum SensitivityPreset: String, CaseIterable, Identifiable {
     var description: String {
         switch self {
         case .moreAlerts:
-            return "Lower thresholds for higher recall. More alerts, including potential false positives."
+            return "More alerts, more false alarms."
         case .balanced:
-            return "Default thresholds balancing recall and precision."
+            return "Recommended."
         case .fewerAlerts:
-            return "Higher thresholds for fewer, higher-confidence alerts."
+            return "Fewer alerts, higher confidence."
         }
     }
 }

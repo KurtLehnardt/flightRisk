@@ -1,4 +1,3 @@
-import AVFoundation
 import GroundProtocol
 import SwiftUI
 
@@ -10,7 +9,6 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     let viewModel: SearchViewModel
-    let cameraSession: AVCaptureSession
     let config: FlightRiskConfig
     let gemmaModelManager: (any GemmaModelManaging)?
     let pipeline: SearchPipeline?
@@ -75,9 +73,14 @@ struct ContentView: View {
             .modifier(DemoBannerAbove(isActive: demo.isActive) { groundViewModel.stopDemo() })
             .onChange(of: demo.isActive) { _, active in
                 guard active else { return }
-                // The demo replaces the camera search; a running search stops.
+                // The demo replaces the drone search; a running search stops.
                 if viewModel.isSearching { viewModel.stopSearch(reason: "demo_started") }
                 selectedTab = 3
+            }
+            .onChange(of: viewModel.hasDrone) { _, connected in
+                // Here, not only in the Search tab, so a disconnect stops the search even when
+                // that tab is not on screen.
+                if !connected { viewModel.droneDidDisconnect() }
             }
             .onChange(of: scenePhase) { _, phase in
                 // Reconnect the ground link at once instead of after the rest of a
@@ -112,19 +115,29 @@ struct ContentView: View {
         if groundViewModel.isDemoActive { selectedTab = 3 }
     }
 
-    /// The camera search, or during the demo a screen with a drawn placeholder and no camera.
+    /// Gives the Search tab its drone link and the pipeline its drone video, once. The link is
+    /// the only video source: the phone's own camera is never used for searching.
+    private func connectDroneLink() async {
+        guard viewModel.droneLink == nil else { return }
+        let link = GroundDroneLink(groundViewModel)
+        // The source goes in first, so a start tapped in between never runs without one.
+        await pipeline?.setFrameSource(DroneFrameSource(link: link))
+        viewModel.droneLink = link
+    }
+
+    /// The drone search, or during the demo a screen with a drawn placeholder and no camera.
     @ViewBuilder
     private var searchTab: some View {
         if demo.isActive {
             DemoTabPlaceholder(title: DemoTabPlaceholder.searchTitle, explanation: DemoTabPlaceholder.searchText,
                                identifier: "demo.search") { selectedTab = 3 }
         } else {
-            SearchView(viewModel: viewModel, cameraSession: cameraSession)
+            SearchView(viewModel: viewModel)
+                .task { await connectDroneLink() }
         }
     }
 
-    /// The target photo picker, or during the demo the same drawn placeholder: no photo picker
-    /// and no camera.
+    /// The target photo picker, or during the demo the same drawn placeholder: no photo picker.
     @ViewBuilder
     private var targetTab: some View {
         if demo.isActive {
@@ -207,14 +220,14 @@ struct DemoBanner: View {
     }
 }
 
-/// The Search and Target tabs during the demo: no camera, no photo and no photo picker. The
+/// The Search and Target tabs during the demo: no photo and no photo picker. The
 /// reference is a drawn placeholder generated on the phone (`DemoPlaceholder`), never a photo of
 /// a real person.
 struct DemoTabPlaceholder: View {
     static let searchTitle = "Search (demo)"
-    static let searchText = "Outside the demo, this tab uses the camera to look for the person in your reference photo, on this phone. The demo uses no camera and no photo. Open the Ground tab to watch the simulated drones, the obstacle cut, the match alert and its AI verdict."
+    static let searchText = "Search needs a real drone. Open Ground to watch the simulated drones."
     static let targetTitle = "Target (demo)"
-    static let targetText = "Outside the demo, this tab is where you choose the reference photo of the person you are looking for, from your photos or the camera. The demo needs no photo: its reference is this drawn placeholder, and it never opens the camera or your photos."
+    static let targetText = "The demo needs no photo. Its reference is a drawn placeholder."
 
     let title: String
     let explanation: String
@@ -236,15 +249,16 @@ struct DemoTabPlaceholder: View {
                         .frame(width: 160, height: 160)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
-                Text("Demo reference: a drawn placeholder, not a photo of a real person.")
+                Text("Drawn placeholder, not a real person.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                 Text(explanation)
                     .font(.body)
                     .multilineTextAlignment(.center)
-                Button("Open the Ground tab", action: onOpenGround)
+                Button("Open Ground", action: onOpenGround)
                     .buttonStyle(.borderedProminent)
+                    .frame(minHeight: 44)
             }
             .padding(24)
             .frame(maxWidth: .infinity)

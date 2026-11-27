@@ -8,7 +8,7 @@
 
 ## 1. Overview
 
-FlightRisk is an AI-powered tool designed to help parents and guardians locate a missing child in crowded environments. It uses on-device appearance matching on the video of a connected drone. The Android app never uses the phone's own camera to search; a search cannot start without a drone. Neither the iPhone app nor the Android app does face detection or face recognition: both match people by how they look (clothing, colours, build) only, and the reference photo is checked only for a visible whole person, using the on-device person detector. This privacy policy explains what data the app processes, how it is handled, and your rights.
+FlightRisk is an AI-powered tool designed to help parents and guardians locate a missing child in crowded environments. It uses on-device appearance matching on the video of a connected drone. Neither the iPhone app nor the Android app uses the phone's own camera to search; a search cannot start without a drone. Neither the iPhone app nor the Android app does face detection or face recognition: both match people by how they look (clothing, colours, build) only, and the reference photo is checked only for a visible whole person, using the on-device person detector. This privacy policy explains what data the app processes, how it is handled, and your rights.
 
 ---
 
@@ -127,8 +127,8 @@ This section applies to the Android app. Everything in Section 5 about cloud rea
 
 ## 7. Camera and Video Usage
 
-- Video is used solely for real-time person detection and matching to help locate a missing child: by appearance only, on both iPhone and Android, with no face detection or face recognition. On Android that video is always a connected drone's; the Android app declares no camera permission and never opens the phone's own camera to search. The only use of the phone's camera is the optional "Take photo" button for the target photo, which opens your camera app.
-- On iPhone, camera frames are processed on-device in real time and are not recorded or stored. On Android, a search is recorded as a video of the drone's view in the app's private storage, and match images are saved as files, only if you turn on "Record search video" in Settings (off by default; Section 4). Video frames are not transmitted, except for the crops, reference photo and description sent when the optional cloud reasoning feature is enabled (Section 5) and, on Android with phone-as-edge on, a small picture of the whole drone camera view sent to your ground station when it asks for video (Section 5B).
+- Video is used solely for real-time person detection and matching to help locate a missing child: by appearance only, on both iPhone and Android, with no face detection or face recognition. On both iPhone and Android that video is always a connected drone's, and neither app ever uses the phone's own camera to search. The only use of the phone's camera is the optional "Take photo" button for the target photo (on Android it opens your camera app and the app declares no camera permission).
+- On iPhone, drone video frames are processed on-device in real time and are not recorded or stored. On Android, a search is recorded as a video of the drone's view in the app's private storage, and match images are saved as files, only if you turn on "Record search video" in Settings (off by default; Section 4). Video frames are not transmitted, except for the crops, reference photo and description sent when the optional cloud reasoning feature is enabled (Section 5) and, on Android with phone-as-edge on, a small picture of the whole drone camera view sent to your ground station when it asks for video (Section 5B).
 
 ---
 

@@ -1,14 +1,13 @@
-import AVFoundation
 import MapKit
 import SwiftUI
 
-/// Main search screen with camera preview, detection overlay, HUD,
-/// and match alerts.
+/// Main search screen with the drone video, detection overlay, HUD,
+/// and match alerts. A search runs only while a drone is connected; there is no phone camera
+/// mode.
 ///
-/// Mirrors the Android `SearchScreen` composable. Layer order (back to
-/// front):
+/// Layer order (back to front):
 ///
-///  1. Camera preview (full screen background)
+///  1. Drone video (full screen background)
 ///  2. Detection overlay (bounding boxes)
 ///  3. HUD overlay (FPS, Persons, Match score pills)
 ///  4. Confidence progress bar (below HUD when building confidence)
@@ -25,16 +24,13 @@ struct SearchView: View {
     /// The view model driving all search screen state.
     @Bindable var viewModel: SearchViewModel
 
-    /// The camera capture session for the live preview layer.
-    var cameraSession: AVCaptureSession
-
     /// Whether the "models not loaded" banner should be shown.
     /// Delayed by 2 seconds after search starts to avoid flash.
     @State private var showModelsNotLoadedBanner = false
 
     var body: some View {
         ZStack {
-            // ----- Layer 1: Camera preview (full screen) -----
+            // ----- Layer 1: Drone video (full screen) -----
             videoPreview
                 .ignoresSafeArea()
 
@@ -78,14 +74,14 @@ struct SearchView: View {
                         .allowsHitTesting(false)
                 }
                 if viewModel.isUsingCustomDetector {
-                    Text("Detector: imported")
+                    Text("Own detector")
                         .font(.caption2)
                         .fontWeight(.semibold)
                         .foregroundStyle(FlightRiskTheme.hudWhite)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
                         .background(Color.black.opacity(0.7), in: Capsule())
-                        .accessibilityLabel("Using your imported detector")
+                        .accessibilityLabel("Using your own detector")
                         .allowsHitTesting(false)
                 }
                 ReasoningStatusBanner()
@@ -107,6 +103,9 @@ struct SearchView: View {
                     .animation(.spring(response: 0.4, dampingFraction: 0.7), value: viewModel.activeAlert?.id)
             }
         }
+        .onChange(of: viewModel.hasDrone) { _, connected in
+            if !connected { viewModel.droneDidDisconnect() }
+        }
         .task(id: viewModel.isSearching) {
             // Delay the "models not loaded" banner by 2 seconds
             showModelsNotLoadedBanner = false
@@ -119,31 +118,22 @@ struct SearchView: View {
 
     // MARK: - Video Preview (Layer 1)
 
-    @ViewBuilder
+    /// The latest annotated drone frame, or a dark background that says what is missing.
     private var videoPreview: some View {
-        if viewModel.isSearching {
-            CameraPreviewView(session: cameraSession)
-        } else {
-            cameraPreviewPlaceholder
-        }
-    }
-
-    /// Placeholder when the camera is not active, showing the latest
-    /// frame or a dark background.
-    private var cameraPreviewPlaceholder: some View {
         Group {
-            if let frame = viewModel.cameraFrame {
+            if let frame = viewModel.videoFrame {
                 Image(decorative: frame, scale: 1.0)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-                    .accessibilityLabel("Camera preview")
+                    .accessibilityLabel("Drone video")
             } else {
                 Color(white: 0.07)
                     .overlay {
-                        Text("Camera Preview")
+                        Label(viewModel.hasDrone ? "Waiting for video" : "No drone connected",
+                              systemImage: "dot.radiowaves.left.and.right")
                             .foregroundStyle(.gray)
                     }
-                    .accessibilityLabel("Camera preview inactive")
+                    .accessibilityLabel(viewModel.hasDrone ? "Waiting for drone video" : "No drone connected")
             }
         }
     }
@@ -178,23 +168,33 @@ struct SearchView: View {
     // MARK: - Models Not Loaded Banner (Layer 10)
 
     private var modelsNotLoadedBanner: some View {
-        Text("Camera active but AI models not loaded")
+        Text("AI models not loaded.")
             .font(.caption)
             .fontWeight(.medium)
             .foregroundStyle(Color(white: 0.8))
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
             .background(
-                RoundedRectangle(cornerRadius: 16)
+                Capsule()
                     .fill(Color.black.opacity(0.8))
             )
-            .accessibilityLabel("Camera active but AI models not loaded")
+            .accessibilityLabel("AI models not loaded")
     }
 
     // MARK: - Bottom Section (Layers 8-9)
 
     private var bottomSection: some View {
         VStack(spacing: 12) {
+            if let message = viewModel.statusMessage {
+                Text(message)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(FlightRiskTheme.hudWhite)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Color.black.opacity(0.8), in: Capsule())
+                    .accessibilityIdentifier("search.status")
+            }
+
             // Layer 8: Start/Stop Search button
             startStopSearchButton
 
@@ -209,17 +209,17 @@ struct SearchView: View {
     private var startStopSearchButton: some View {
         Button(action: { viewModel.isSearching ? viewModel.stopSearch() : viewModel.startSearch() }) {
             HStack(spacing: 8) {
-                Image(systemName: viewModel.isSearching ? "xmark" : "play.fill")
-                    .font(.title3)
+                Image(systemName: viewModel.isSearching ? "stop.fill" : "play.fill")
+                    .font(.title3.weight(.semibold))
 
-                Text(viewModel.isSearching ? "Stop Search" : "Start Search")
+                Text(viewModel.isSearching ? "Stop" : "Start search")
                     .font(.headline)
                     .fontWeight(.bold)
             }
             .foregroundStyle(FlightRiskTheme.hudWhite)
             .frame(minWidth: 200, minHeight: 56)
             .background(
-                RoundedRectangle(cornerRadius: 28)
+                Capsule()
                     .fill(viewModel.isSearching
                           ? FlightRiskTheme.alertRed
                           : Color.accentColor)
@@ -227,12 +227,13 @@ struct SearchView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(viewModel.isSearching ? "Stop search" : "Start search")
+        .accessibilityIdentifier("search.startStop")
     }
 
     // MARK: - Disclaimer Footer (Layer 9)
 
     private var disclaimerFooter: some View {
-        Text("FlightRisk is an assistive search tool. Always verify matches visually before approaching anyone.")
+        Text("Assistive tool. Check every match yourself.")
             .font(.caption2)
             .foregroundStyle(Color(white: 0.67))
             .multilineTextAlignment(.center)
@@ -240,7 +241,7 @@ struct SearchView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 6)
             .background(
-                RoundedRectangle(cornerRadius: 4)
+                RoundedRectangle(cornerRadius: 8)
                     .fill(Color.black.opacity(0.6))
             )
             .padding(.horizontal, 16)

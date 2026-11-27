@@ -65,7 +65,7 @@ struct SettingsView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This will free ~1.5 GB. You'll need WiFi to re-download.")
+            Text("Frees about 1.5 GB. Re-downloading needs Wi-Fi.")
         }
         // Cloud consent dialog for the reasoning section, attached to the
         // Form so it is presented once from either the toggle or the picker.
@@ -103,13 +103,6 @@ struct SettingsView: View {
 
     private var sensitivitySection: some View {
         Section {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Controls how aggressively the system alerts on potential matches.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            .listRowSeparator(.hidden)
-
             ForEach(SensitivityPreset.allCases) { preset in
                 SensitivityPillButton(
                     preset: preset,
@@ -123,7 +116,7 @@ struct SettingsView: View {
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
             }
         } header: {
-            Text("Detection Sensitivity")
+            Text("Alerts")
         }
     }
 
@@ -162,10 +155,10 @@ struct SettingsView: View {
             }
 
             Toggle("Allow cloud reasoning", isOn: cloudOptInBinding)
-                .accessibilityHint("Asks for confirmation before any image can be sent to Anthropic")
+                .accessibilityHint("Asks before any image is sent to Anthropic")
 
             if let reason = reasoningStatus.unavailable[.cloudClaude] {
-                Text("Cloud Claude unavailable: \(reason)")
+                Text("Cloud unavailable: \(reason)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -176,31 +169,31 @@ struct SettingsView: View {
 
             // Removing a saved key is always possible, opted in or not.
             if hasSavedClaudeKey {
-                Button("Remove Saved Key", role: .destructive) {
+                Button("Remove key", role: .destructive) {
                     removeApiKey()
                 }
             }
 
             if reasoningProvider == .localGemma {
-                Text("Runs on-device. No image leaves the phone.")
+                Text("Runs on this phone.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                    .accessibilityLabel("Local Gemma model runs on-device. No image leaves the phone.")
+                    .accessibilityLabel("The local model runs on this phone. No image leaves it.")
 
                 // State-driven UI
                 switch gemmaState {
                 case .idle:
-                    Button("Download Model (~1.5 GB)") {
+                    Button("Download (1.5 GB)") {
                         Task { try? await modelManager?.download() }
                     }
                     .accessibilityHint("Downloads the Gemma AI model for on-device reasoning")
-                    Text("Requires WiFi. Model stored locally on device.")
+                    Text("Wi-Fi recommended.")
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
 
                 case .downloading(let progress):
                     ProgressView(value: progress) {
-                        Text("Downloading... \(Int(progress * 100))%")
+                        Text("Downloading \(Int(progress * 100))%")
                             .font(.footnote)
                     }
                     .accessibilityLabel("Downloading model, \(Int(progress * 100)) percent complete")
@@ -217,7 +210,7 @@ struct SettingsView: View {
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("Model status: Downloaded")
-                    Button("Delete Model", role: .destructive) {
+                    Button("Delete model", role: .destructive) {
                         showDeleteConfirmation = true
                     }
                     .font(.footnote)
@@ -226,7 +219,7 @@ struct SettingsView: View {
                 case .loading:
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
-                        Text("Loading model...").font(.footnote).foregroundStyle(.secondary)
+                        Text("Loading").font(.footnote).foregroundStyle(.secondary)
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("Loading AI model")
@@ -238,12 +231,12 @@ struct SettingsView: View {
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("AI model status: Ready")
-                    Button("Unload Model") {
+                    Button("Unload") {
                         Task { await modelManager?.unloadModel() }
                     }
                     .font(.footnote)
                     .accessibilityLabel("Unload AI model from memory")
-                    Button("Delete Model", role: .destructive) {
+                    Button("Delete model", role: .destructive) {
                         showDeleteConfirmation = true
                     }
                     .font(.footnote)
@@ -262,19 +255,15 @@ struct SettingsView: View {
                     .font(.footnote)
                     .accessibilityLabel("Retry model download")
                 }
-
-                Text("Local analysis uses text descriptions. Match confidence is automatically adjusted.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
             } else if reasoningProvider == .off {
-                Text("Reasoning is off. Matches are scored without a language model.")
+                Text("Matches use appearance only.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
         } header: {
-            Text("AI Reasoning")
+            Text("AI reasoning")
         } footer: {
-            Text("Cloud reasoning is off by default. Local Gemma and Off keep every image on this phone.")
+            Text("Local and Off keep images on this phone.")
         }
     }
 
@@ -410,13 +399,6 @@ struct SettingsView: View {
     private var matchingAlgorithmsSection: some View {
         Section {
             DisclosureGroup(isExpanded: $algorithmsExpanded) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Configure which matching signals are active and their relative weights.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                .listRowSeparator(.hidden)
-
                 ForEach(FlightRiskConfig.SignalConfig.categories, id: \.name) { category in
                     VStack(alignment: .leading, spacing: 8) {
                         Text(category.name)
@@ -444,7 +426,7 @@ struct SettingsView: View {
                     }
                 }
             } label: {
-                Text("Matching Algorithms")
+                Text("Matching signals")
                     .font(.headline)
             }
         }
@@ -470,15 +452,8 @@ struct SettingsView: View {
     private var advancedSection: some View {
         Section {
             DisclosureGroup(isExpanded: $advancedExpanded) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Manual threshold overrides. Changing these clears the active preset.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                .listRowSeparator(.hidden)
-
                 ThresholdSliderRow(
-                    label: "ReID Threshold",
+                    label: "Appearance",
                     value: config.vision.reidThreshold,
                     onChanged: { newValue in
                         clearPreset()
@@ -487,7 +462,7 @@ struct SettingsView: View {
                 )
 
                 ThresholdSliderRow(
-                    label: "Scorer Threshold",
+                    label: "Match",
                     value: config.vision.scorerMatchThreshold,
                     onChanged: { newValue in
                         clearPreset()
@@ -497,24 +472,13 @@ struct SettingsView: View {
 
                 // Debug info
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Debug Info")
-                        .font(.caption.bold())
-                    Text(String(
-                        format: "ReID: %.2f | Scorer: %.2f",
-                        config.vision.reidThreshold,
-                        config.vision.scorerMatchThreshold
-                    ))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .monospaced()
-
-                    Text("Version: \(appVersion)")
-                        .font(.caption2)
+                    Text("Version \(appVersion)")
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
                 .padding(.top, 8)
             } label: {
-                Text("Advanced Settings")
+                Text("Advanced")
                     .font(.headline)
             }
         }
@@ -525,17 +489,14 @@ struct SettingsView: View {
     private var aboutSection: some View {
         Section {
             VStack(alignment: .leading, spacing: 4) {
-                Text("FlightRisk - AI-Powered Search Assistant")
+                Text("Version \(appVersion)")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Text("Version \(appVersion)")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
             }
             // The only link to the policy once onboarding is over.
             Link("Privacy Policy", destination: PrivacyNotice.policyURL)
             // The licences of the on-device models, in full (model-notices.md).
-            Button("Model licences") { showingModelNotices = true }
+            Button("Licences") { showingModelNotices = true }
                 .accessibilityIdentifier("settings.modelLicences")
         } header: {
             Text("About")
@@ -628,7 +589,7 @@ struct SettingsView: View {
 /// Other views can show it by checking `ReasoningActivity.shared.isCloudActive`.
 struct CloudActiveIndicator: View {
     var body: some View {
-        Label("Cloud active: images are sent to Anthropic", systemImage: "icloud.and.arrow.up")
+        Label("Cloud on: images go to Anthropic", systemImage: "icloud.and.arrow.up")
             .font(.footnote.weight(.semibold))
             .foregroundStyle(FlightRiskTheme.alertOrange)
             .accessibilityLabel("Cloud reasoning active. Person crops and the reference photo are sent to Anthropic.")
