@@ -93,12 +93,13 @@ fun FlightControlsOverlay(
                     shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
                 )
                 .clickable(onClick = onToggleExpanded)
+                .sizeIn(minHeight = 48.dp)
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
-                text = if (isFlying) "Flight Controls" else "Drone Controls",
+                text = if (isFlying) "Flight" else "Drone",
                 color = HudWhite,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
@@ -116,7 +117,7 @@ fun FlightControlsOverlay(
             visible = isExpanded,
             enter = expandVertically(
                 animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    dampingRatio = Spring.DampingRatioNoBouncy,
                     stiffness = Spring.StiffnessMedium,
                 ),
             ),
@@ -172,7 +173,7 @@ fun FlightControlsOverlay(
                         shape = RoundedCornerShape(24.dp),
                     ) {
                         Text(
-                            text = "Start Search",
+                            text = "Start search",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                         )
@@ -288,7 +289,7 @@ private fun SearchPatternSelector(
 
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
-            text = "Search Pattern",
+            text = "Pattern",
             color = HudWhite,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Bold,

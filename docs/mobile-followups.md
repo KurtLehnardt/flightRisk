@@ -58,3 +58,4 @@ None of these has been done:
 
 - `ios/FlightRisk/Config/KeychainHelper.swift` still mentions `cloud_gemini` and `cloud_openai` in a doc comment (the providers were removed).
 - The Android app still carries the direct Tello flight stack; the iOS app does not. Decide whether that is intended.
+- Android no longer has a phone-camera search mode. A search starts only with a connected drone, and the app declares no `CAMERA` permission (the "Take photo" button opens the camera app). The iOS app is unchanged by this and still describes the phone camera; decide whether it should follow.

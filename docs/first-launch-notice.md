@@ -11,7 +11,7 @@ A mandatory privacy notice screen shown to the user on first launch, **before** 
 ## Trigger Conditions
 
 - Shown on the very first app launch (or after app data is cleared).
-- Intended to be shown **before** any camera or location permission dialog. This holds on iOS and on Android: the Android app shows the notice first and calls `requestPermissionsIfNeeded()` (camera, fine and coarse location) only after "I Understand".
+- Intended to be shown **before** any camera or location permission dialog. This holds on iOS and on Android: the Android app shows the notice first and calls `requestPermissionsIfNeeded()` (fine and coarse location; the Android app declares no camera permission) only after "I Understand".
 - Not shown again after the user has acknowledged it (controlled by a persisted flag). On Android the flag is written but never read; see "Persistence" below.
 - **Restored phones.** On Android the completion flag `flightrisk_onboarding_complete` is in `flightrisk_prefs`, which the backup rules do not exclude. A phone restored from backup or set up by device transfer can therefore inherit the flag and never show the notice. Planned fix: see `docs/mobile-followups.md`.
 
@@ -40,7 +40,7 @@ The text below is what the iOS app shows. The wording of the ground station and 
 
 This is the text in `mobile/app/src/main/java/com/flightrisk/app/ui/onboarding/OnboardingScreen.kt` (`PrivacyNoticeStep`). The cloud item uses the same words as the iOS cloud item. The Android notice is worse than incomplete: its sentence "Images leave the phone only with cloud reasoning on" (line 175) is **false** when phone-as-edge is on and the ground asks for video, because a picture of the whole camera view is then sent to the ground station, and it says nothing about the video that every Android search records in the app's private storage. It also has **no ground station item** and **no privacy policy link**: the ground station link, the phone-as-edge mode and the direct Tello link have their own screens and, for phone-as-edge, a disclosure and consent step in Settings, but the first-launch notice does not mention them. This is listed for the owner to decide (`docs/mobile-followups.md`).
 
-> - **Camera Access.** FlightRisk uses your camera to scan for people who match the target photo you provide.
+> - **Drone Video.** FlightRisk uses the video of a connected drone to scan for people who match the target photo you provide. A search cannot run without a drone, and the phone's own camera is never used to search.
 > - **On-Device Processing.** Person detection and matching run on your device. Matching compares how people look (clothing, colours, build); the app uses no face recognition. Camera frames are not uploaded. Images leave the phone only with cloud reasoning on, as described below.
 > - **Cloud Reasoning (Off by Default).** Cloud reasoning is off. If you turn it on in Settings, save a Claude API key and select Cloud Claude, the cropped image of each detected person, the reference photo and the text description you entered are sent to Anthropic. The images can show a face. You can turn it off at any time.
 > - **Location Data.** GPS coordinates are attached to match alerts so you can navigate to the location. Location data stays on your device.

@@ -9,14 +9,12 @@ object DemoText {
     const val BANNER_DETAIL = "A recorded mission on this phone. Nothing is sent to any drone or ground station."
 
     const val TRY_DEMO = "Try demo"
-    const val TRY_DEMO_DETAIL = "Explore the app with a recorded mission. No photo, drone or ground station needed."
+    const val TRY_DEMO_DETAIL = "A recorded mission. No photo or drone needed."
 
     const val SETTINGS_TITLE = "Demo mode"
-    const val SETTINGS_SWITCH = "Show a recorded demo mission"
+    const val SETTINGS_SWITCH = "Demo mission"
     const val SETTINGS_DETAIL =
-        "Replays a recorded search on the Ground tab and uses a drawn placeholder target. Commands are answered on " +
-            "this phone and never sent. Starting it switches the ground link off. Leaving demo mode clears " +
-            "everything the demo showed."
+"Replays a recorded search. Nothing is sent. Turns the ground link off."
 
     /**
      * Every result, banner and message the Ground screen shows in demo mode starts with this, so a demo
@@ -126,9 +124,9 @@ object DemoText {
     // Target tab
     const val TARGET_PLACEHOLDER = "Leave demo mode to choose a photo."
     const val TARGET_PLACEHOLDER_DETAIL =
-        "Demo mode uses this drawn placeholder as the search target. The photo picker and the camera are not used."
+        "Drawn placeholder target. No photo needed."
 
     // Search tab
-    const val SEARCH_NOTE = "Demo search: a drawn scene, not the camera. Nothing is analysed or sent."
+    const val SEARCH_NOTE = "Demo search: a drawn scene. Nothing is sent."
     const val DRONE_NOT_SENT = "Demo mode: no real drone. The command was acknowledged on this phone and nothing was sent."
 }

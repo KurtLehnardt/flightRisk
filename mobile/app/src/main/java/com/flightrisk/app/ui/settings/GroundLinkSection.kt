@@ -96,14 +96,14 @@ private fun GroundLinkSectionContent(
 
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
-            text = "Ground station link",
+            text = "Ground link",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.semantics { heading() },
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "Optional. Lets this phone act as a camera for a FlightRisk ground station on your network. It is off until you turn it on.",
+            text = "Optional. Off by default.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -115,7 +115,7 @@ private fun GroundLinkSectionContent(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
-                text = "Send detections to the ground station",
+                text = "Send detections",
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier.weight(1f),
             )
@@ -151,7 +151,7 @@ private fun GroundLinkSectionContent(
                 Text(
                     state.addressProblem
                         ?: if (addressInput.trim().endsWith(":5555")) GroundLinkText.PORT_HINT
-                        else "Plain address on your local network. The port defaults to 9000.",
+                        else "Port defaults to 9000.",
                 )
             },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
@@ -161,7 +161,7 @@ private fun GroundLinkSectionContent(
             onClick = { controller.changeAddress(addressInput) },
             enabled = addressInput.isNotBlank(),
             modifier = Modifier.sizeIn(minHeight = 48.dp),
-        ) { Text("Save address") }
+        ) { Text("Save") }
 
         Spacer(modifier = Modifier.height(8.dp))
         OutlinedTextField(
@@ -188,10 +188,10 @@ private fun GroundLinkSectionContent(
             TextButton(
                 onClick = { controller.removeToken() },
                 modifier = Modifier.sizeIn(minHeight = 48.dp),
-            ) { Text("Remove saved token") }
+            ) { Text("Remove token") }
         }
         Text(
-            text = if (state.hasToken) "A token is saved. It is never shown again." else "No token saved.",
+            text = if (state.hasToken) "Token saved." else "No token saved.",
             style = MaterialTheme.typography.bodySmall,
             color = if (state.hasToken) MatchGreen else MaterialTheme.colorScheme.onSurfaceVariant,
         )

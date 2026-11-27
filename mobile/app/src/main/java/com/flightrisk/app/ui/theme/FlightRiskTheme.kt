@@ -9,6 +9,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
@@ -33,6 +34,12 @@ val MatchGreen = Color(0xFF16A34A)
 
 /** High-visibility white for HUD text over camera preview. */
 val HudWhite = Color(0xFFFFFFFF)
+
+/**
+ * This style with tabular (equal-width) digits. Use it for numbers that change while
+ * the person is looking at them, such as telemetry and scores, so the text does not jitter.
+ */
+fun TextStyle.tabular(): TextStyle = copy(fontFeatureSettings = "tnum")
 
 /** High-visibility black for HUD text in light mode. */
 val HudBlack = Color(0xFF000000)

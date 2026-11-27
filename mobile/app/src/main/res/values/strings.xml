@@ -1,26 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">FlightRisk</string>
-    <string name="camera_active_models_not_loaded">Camera active — AI models not loaded</string>
-    <string name="camera_permission_required">Camera permission required</string>
-    <string name="camera_preview">Camera preview</string>
-    <string name="camera_preview_inactive">Camera preview inactive</string>
-    <string name="drone_connecting">Connecting to drone…</string>
+    <string name="models_not_loaded">Models not loaded</string>
+    <string name="video_preview">Video preview</string>
+    <string name="video_preview_inactive">No video</string>
+    <string name="drone_connecting">Connecting…</string>
     <string name="drone_connected">Connected</string>
     <string name="drone_streaming">Streaming</string>
     <string name="drone_disconnected">Disconnected</string>
     <string name="drone_error">Error</string>
-    <string name="drone_no_video">Waiting for video feed…</string>
+    <string name="drone_no_video">Waiting for video…</string>
     <string name="drone_reconnecting">Reconnecting video…</string>
     <string name="drone_battery">Battery: %d%%</string>
     <string name="drone_height">Height: %d cm</string>
     <string name="drone_takeoff">Takeoff</string>
     <string name="drone_land">Land</string>
     <string name="drone_emergency_land">Emergency Land</string>
-    <string name="drone_connect">Connect Drone</string>
+    <string name="drone_connect">Connect</string>
     <string name="drone_disconnect">Disconnect</string>
-    <string name="drone_battery_warning">Battery Low: %d%%</string>
-    <string name="drone_battery_critical">Battery Critical: %d%%</string>
+    <string name="drone_battery_warning">Battery low: %d%%</string>
+    <string name="drone_battery_critical">Battery critical: %d%%</string>
     <string name="drone_move_forward">Forward</string>
     <string name="drone_move_back">Back</string>
     <string name="drone_move_left">Left</string>
@@ -30,11 +29,9 @@
     <string name="drone_rotate_cw">Rotate CW</string>
     <string name="drone_rotate_ccw">Rotate CCW</string>
     <string name="drone_stop_search">Stop Search</string>
-    <string name="search_no_target_title">No search target yet</string>
-    <string name="search_no_target_body">Choose a clear, recent photo of the person you are looking for. Without one, a search only detects people and cannot find a match.</string>
-    <string name="search_no_target_action">Choose a target photo</string>
-    <string name="search_no_camera_title">No camera on this device</string>
-    <string name="search_no_camera_body">Connect a Tello drone to search with its camera.</string>
-    <string name="camera_unavailable">Camera unavailable</string>
+    <string name="search_no_target_title">No target photo</string>
+    <string name="search_no_target_body">Without a photo, a search only detects people.</string>
+    <string name="search_no_target_action">Choose photo</string>
+    <string name="search_no_drone_title">Connect a drone first.</string>
     <string name="drone_search_disclaimer">FlightRisk is an assistive search tool. Always verify matches visually before approaching anyone.</string>
 </resources>

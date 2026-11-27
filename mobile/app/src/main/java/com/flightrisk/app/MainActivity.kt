@@ -30,13 +30,11 @@ import androidx.core.content.ContextCompat
 import com.flightrisk.app.config.FlightRiskConfig
 import com.flightrisk.app.config.SensitivityPreset
 import com.flightrisk.app.drone.DroneManager
-import com.flightrisk.app.drone.FrameSourceMode
 import com.flightrisk.app.drone.PatternType
 import com.flightrisk.app.drone.TelloState
 import com.flightrisk.app.drone.TelloWifiChecker
 
 import com.flightrisk.app.alert.AlertManager
-import com.flightrisk.app.camera.CameraXFrameSource
 import com.flightrisk.app.config.AppSecrets
 import com.flightrisk.app.llm.CloudClaudeLlmBackend
 import com.flightrisk.app.llm.CloudReasoningGate
@@ -124,18 +122,6 @@ class MainActivity : ComponentActivity() {
     private var realTargetBitmap: Bitmap? = null
     private var realTargetQualityReport: QualityReport? = null
 
-    /**
-     * Whether the device has a camera the search preview can use. The preview binds the
-     * back or the front camera only, so a device whose only camera is an external one
-     * (FEATURE_CAMERA_EXTERNAL, which FEATURE_CAMERA_ANY also reports) counts as having
-     * none. The manifest does not require a camera, so the app also installs on devices
-     * without one, which can search with a drone.
-     */
-    private val deviceHasCamera: Boolean by lazy {
-        packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA) ||
-            packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_FRONT)
-    }
-
     // Ground console (U3). One block: the ViewModel is owned by the activity, so it outlives tab
     // switches, and it follows the activity between foreground and background. It connects only
     // when the user saved an address and a key and switched the link on.
@@ -158,7 +144,8 @@ class MainActivity : ComponentActivity() {
     // Drone state
     private var droneManager: DroneManager? = null
     private var currentDroneState by mutableStateOf<TelloState?>(null)
-    private var frameSourceMode by mutableStateOf(FrameSourceMode.CAMERA)
+    /** True while a drone is connected and streaming. A search needs it: the phone's own camera is never used. */
+    private var droneStreaming by mutableStateOf(false)
     private var latestDroneFrame by mutableStateOf<Bitmap?>(null)
     private var droneStateJob: Job? = null
     private var droneAlertJob: Job? = null
@@ -179,8 +166,6 @@ class MainActivity : ComponentActivity() {
     @Volatile
     private var detectorNotice: String? = null
 
-    /** The phone camera's frames for the search pipeline; bound with the preview while a camera search runs. */
-    private val cameraFrameSource = CameraXFrameSource()
     private var sessionRepository: SessionRepository? = null
     private var sessionRecorder: SessionRecorder? = null
 
@@ -202,14 +187,8 @@ class MainActivity : ComponentActivity() {
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        val cameraGranted = permissions[Manifest.permission.CAMERA] == true
         val locationGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true
-
-        Log.i(TAG, "Permissions: camera=$cameraGranted, location=$locationGranted")
-
-        if (!cameraGranted) {
-            Log.w(TAG, "Camera permission denied -- search will not work")
-        }
+        Log.i(TAG, "Permissions: location=$locationGranted")
     }
 
     // ------------------------------------------------------------------
@@ -223,7 +202,6 @@ class MainActivity : ComponentActivity() {
         privacyPrefs = SharedPrefsPrivacyPrefs(applicationContext)
         noticeAcknowledged = !PrivacyNoticeGate.shouldShowNotice(privacyPrefs)
         onboardingComplete = isOnboardingComplete(this)
-        searchState = searchState.copy(hasCamera = deviceHasCamera)
 
         // Load initial settings from config. No secret is read here.
         val config = FlightRiskConfig.getInstance(this)
@@ -350,7 +328,7 @@ class MainActivity : ComponentActivity() {
                             onLocalModelDownload = ::handleLocalModelDownload,
                             onLocalModelDelete = ::handleLocalModelDelete,
                             droneState = currentDroneState,
-                            frameSourceMode = frameSourceMode,
+                            droneConnected = droneStreaming,
                             latestDroneFrame = latestDroneFrame,
                             onDismissDroneAlert = ::handleDismissDroneAlert,
                             onDroneConnect = ::handleDroneConnect,
@@ -364,7 +342,6 @@ class MainActivity : ComponentActivity() {
                             onSearchPatternChanged = { selectedSearchPattern = it },
                             demoActive = groundUi.demo,
                             onDemoToggle = { on -> if (on) requestDemo() else groundConsoleViewModel.exitDemo() },
-                            cameraFrameSource = cameraFrameSource,
                         )
                     }
                 }
@@ -469,14 +446,6 @@ class MainActivity : ComponentActivity() {
     private fun requestPermissionsIfNeeded() {
         val permissionsToRequest = mutableListOf<String>()
 
-        // A device without a camera is not asked for the camera permission.
-        if (deviceHasCamera &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
-            permissionsToRequest.add(Manifest.permission.CAMERA)
-        }
-
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
             != PackageManager.PERMISSION_GRANTED
         ) {
@@ -501,50 +470,27 @@ class MainActivity : ComponentActivity() {
     private fun handleStartSearch() {
         if (searchState.isSearching) return
         if (demoActive) return startDemoSearch()
-        // Without a camera (and no drone) there is nothing to search with. The Search
-        // screen disables Start and says why; this also covers the drone flight
-        // controls, which have their own Start button. A search without a target
-        // photo may start: it detects people (and sends them to the ground station
-        // when that link is on) but cannot match anyone, which the screen says.
-        val readiness = searchReadiness(
-            hasTarget = targetBitmap != null,
-            hasCamera = deviceHasCamera,
-            frameSourceMode = frameSourceMode,
-        )
+        // A search runs only with a connected drone: the phone's own camera is never opened.
+        // The Search screen disables Start and says why; this also covers the drone flight
+        // controls, which have their own Start button. A search without a target photo may
+        // start: it detects people (and sends them to the ground station when that link is
+        // on) but cannot match anyone, which the screen says.
+        val readiness = searchReadiness(hasTarget = targetBitmap != null, droneConnected = droneStreaming)
         if (!readiness.canStart) {
             Log.i(TAG, "Search not started: $readiness")
             return
         }
 
-        // Camera frames are kept from now on; the camera is bound below, with its frame
-        // analysis and preview, to the Activity while the search runs.
-        if (frameSourceMode == FrameSourceMode.CAMERA && !demoActive) {
-            cameraFrameSource.start()
-            // Bound to the Activity for the whole search, so detection goes on on other tabs.
-            @Suppress("DEPRECATION")
-            val rotation = windowManager.defaultDisplay.rotation
-            cameraFrameSource.bind(this, this, rotation)
-        }
-
         // Update UI immediately so button toggles without waiting for model load
-        if (frameSourceMode == FrameSourceMode.DRONE) {
-            searchState = searchState.copy(
-                isSearching = true,
-                frameWidth = 640,
-                frameHeight = 480,
-            )
-        } else {
-            searchState = searchState.copy(
-                isSearching = true,
-                frameWidth = 1920,
-                frameHeight = 1080,
-            )
-        }
+        searchState = searchState.copy(
+            isSearching = true,
+            frameWidth = 640,
+            frameHeight = 480,
+        )
 
         val config = FlightRiskConfig.getInstance(this)
         val ctx = applicationContext
         val target = targetBitmap
-        val currentFrameSourceMode = frameSourceMode
 
         // Load models and start pipeline off the main thread
         pipelineSetupJob = lifecycleScope.launch(Dispatchers.Default) {
@@ -623,14 +569,9 @@ class MainActivity : ComponentActivity() {
             val reasoning = ls.awaitKeyChecked()
             pipeline.adaptWeightsForBackend(reasoning.active == ReasoningProvider.LOCAL)
 
-            // Wire frame source: pull from drone or camera based on active mode. Each camera
-            // frame is handed out once, so a frame is never detected (or corroborated) twice.
+            // Wire frame source: the connected drone's latest frame.
             pipeline.frameSource = SearchPipeline.FrameSource {
-                if (frameSourceMode == FrameSourceMode.DRONE) {
-                    droneManager?.frameSource?.getLatestFrame()
-                } else {
-                    cameraFrameSource.takeNewFrame()
-                }
+                droneManager?.frameSource?.getLatestFrame()
             }
 
             // Wire detection callback (delegates to PersonDetector)
@@ -689,9 +630,7 @@ class MainActivity : ComponentActivity() {
                                 activeAlert = event.matchEntry,
                             )
                             // Pause drone search and hover when match detected
-                            if (frameSourceMode == FrameSourceMode.DRONE) {
-                                droneManager?.pauseSearchForMatch()
-                            }
+                            droneManager?.pauseSearchForMatch()
                         }
                         is SearchPipeline.PipelineEvent.ConfidenceProgress -> {
                             searchState = searchState.copy(
@@ -719,7 +658,7 @@ class MainActivity : ComponentActivity() {
             pipeline.start()
 
             // Auto-takeoff and start search pattern if drone is connected
-            if (currentFrameSourceMode == FrameSourceMode.DRONE) {
+            run {
                 val manager = droneManager
                 if (manager != null) {
                     try {
@@ -747,12 +686,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            Log.i(TAG, "Search started, frameSource=$frameSourceMode")
+            Log.i(TAG, "Search started")
         }
     }
 
     private fun handleStopSearch() {
-        // A real search is stopped whatever the demo state, so Stop always turns the camera off.
+        // A real search is stopped whatever the demo state, so Stop always ends it.
         if (!demoActive || realSearchRunning()) stopRealSearch()
         if (demoActive) {
             searchState = searchState.copy(isSearching = false, boxes = emptyList(), cameraFrame = null, fps = 0f, personsDetected = 0, highestMatchScore = 0f, activeAlert = null)
@@ -762,15 +701,13 @@ class MainActivity : ComponentActivity() {
         Log.i(TAG, "Search stopped")
     }
 
-    /** A camera or drone search is set up, running, or holds the camera. */
+    /** A drone search is set up or running. */
     private fun realSearchRunning(): Boolean =
-        pipelineSetupJob != null || searchPipeline != null ||
-            cameraFrameSource.status != CameraXFrameSource.Status.IDLE
+        pipelineSetupJob != null || searchPipeline != null
 
     /**
-     * The stop path of a real search: the model setup and the pipeline stop, the camera
-     * stops keeping frames and is unbound, a drone stops its pattern (and lands in drone
-     * mode), and alerts are dismissed. It changes no search state; callers do.
+     * The stop path of a real search: the model setup and the pipeline stop, the drone
+     * stops its pattern and lands, and alerts are dismissed. It changes no search state; callers do.
      */
     private fun stopRealSearch() {
         pipelineSetupJob?.cancel()
@@ -779,10 +716,8 @@ class MainActivity : ComponentActivity() {
         pipelineEventJob = null
         searchPipeline?.stop("user_stopped")
         searchPipeline = null
-        cameraFrameSource.stop()
-        cameraFrameSource.unbind()
         droneManager?.stopSearchPattern()
-        if (frameSourceMode == FrameSourceMode.DRONE) {
+        if (droneStreaming) {
             lifecycleScope.launch { droneManager?.land() }
         }
         alertManager?.dismissAll()
@@ -955,7 +890,7 @@ class MainActivity : ComponentActivity() {
                 return@launch
             }
 
-            frameSourceMode = FrameSourceMode.DRONE
+            droneStreaming = true
             searchState = searchState.copy(droneConnectionMessage = null)
 
             // Wire frame callback for Compose state updates
@@ -1024,7 +959,7 @@ class MainActivity : ComponentActivity() {
         droneManager = null
         currentDroneState = null
         latestDroneFrame = null
-        frameSourceMode = FrameSourceMode.CAMERA
+        droneStreaming = false
         searchState = searchState.copy(droneConnectionMessage = null)
 
         lifecycleScope.launch {
@@ -1043,7 +978,7 @@ class MainActivity : ComponentActivity() {
         droneManager = null
         currentDroneState = null
         latestDroneFrame = null
-        frameSourceMode = FrameSourceMode.CAMERA
+        droneStreaming = false
 
         lifecycleScope.launch {
             manager?.disconnect()
@@ -1127,7 +1062,6 @@ class MainActivity : ComponentActivity() {
         alertManager = null
         locationProvider?.stopUpdates()
         locationProvider = null
-        cameraFrameSource.release()
 
         // Clean up drone
         droneManager?.onActivityDestroy()

@@ -2,7 +2,6 @@ package com.flightrisk.app.ui.search
 
 import com.flightrisk.app.demo.DemoText
 import android.graphics.Bitmap
-import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -44,7 +43,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -64,11 +62,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.viewinterop.AndroidView
 import com.flightrisk.app.R
 import com.flightrisk.app.alert.AlertManager
-import com.flightrisk.app.camera.CameraXFrameSource
-import com.flightrisk.app.drone.FrameSourceMode
 import com.flightrisk.app.drone.PatternType
 import com.flightrisk.app.drone.TelloConnectionState
 import com.flightrisk.app.drone.TelloState
@@ -80,6 +75,7 @@ import com.flightrisk.app.ui.theme.AlertRed
 import com.flightrisk.app.ui.theme.AlertRedDark
 import com.flightrisk.app.ui.theme.DetectionBlue
 import com.flightrisk.app.ui.theme.HudWhite
+import com.flightrisk.app.ui.theme.tabular
 import com.flightrisk.app.ui.theme.MatchGreen
 import kotlinx.coroutines.delay
 
@@ -102,7 +98,7 @@ import kotlinx.coroutines.delay
  * @property frameWidth Source frame width for overlay scaling.
  * @property frameHeight Source frame height for overlay scaling.
  * @property droneState Current drone connection/telemetry state, or null if drone not active.
- * @property frameSourceMode Whether frames come from the device camera or drone.
+ * @property droneConnected Whether a drone is connected and streaming. A search needs it.
  * @property latestDroneFrame The most recent video frame from the drone, or null.
  * @property droneConnectionMessage User-facing status/error message for the drone connection
  *   attempt (e.g. troubleshooting guidance after a failed connect), or null when there is
@@ -112,9 +108,6 @@ import kotlinx.coroutines.delay
  * @property reasoningNotice The reasoning fallback notice, or null.
  * @property hasTarget Whether a target photo has been chosen. It is false after
  *   onboarding was finished with "Set up a search later".
- * @property hasCamera Whether the device has a camera. The app installs on
- *   devices without one (the camera feature is not required); they can search
- *   with a drone.
  * @property detectorNotice Said while a search runs when it does not use the
  *   detector the person chose (an imported detector that could not be opened),
  *   or null.
@@ -135,25 +128,24 @@ data class SearchScreenState(
     val frameWidth: Int = 1920,
     val frameHeight: Int = 1080,
     val droneState: TelloState? = null,
-    val frameSourceMode: FrameSourceMode = FrameSourceMode.CAMERA,
+    val droneConnected: Boolean = false,
     val latestDroneFrame: Bitmap? = null,
     val droneConnectionMessage: String? = null,
     val selectedPattern: PatternType = PatternType.EXPANDING_SQUARE,
     val cloudReasoningActive: Boolean = false,
     val reasoningNotice: String? = null,
     val hasTarget: Boolean = true,
-    val hasCamera: Boolean = true,
-    /** Demo mode: the preview shows a drawn scene and the camera is never opened. */
+    /** Demo mode: the preview shows a drawn scene and no drone is used. */
     val demoMode: Boolean = false,
     val detectorNotice: String? = null,
     val obstacleAvoidance: String? = null,
 ) {
     /**
      * Whether a search can start from this state. The demo search draws its own scene and
-     * uses the drawn placeholder target, so it needs neither a camera nor a photo.
+     * uses the drawn placeholder target, so it needs neither a drone nor a photo.
      */
     val readiness: SearchReadiness
-        get() = if (demoMode) SearchReadiness.READY else searchReadiness(hasTarget, hasCamera, frameSourceMode)
+        get() = if (demoMode) SearchReadiness.READY else searchReadiness(hasTarget, droneConnected)
 }
 
 // -----------------------------------------------------------------------
@@ -188,8 +180,6 @@ data class SearchScreenState(
  * @param onDroneMove Callback for drone directional movement (direction, distanceCm).
  * @param onDroneRotate Callback for drone rotation (degrees).
  * @param onSetUpTarget Opens the Target tab, from the "No search target yet" card.
- * @param cameraFrameSource Receives the camera frames the search pipeline detects people in,
- *   bound together with the preview while a camera search runs.
  * @param modifier Modifier for the root container.
  */
 @Composable
@@ -210,7 +200,6 @@ fun SearchScreen(
     onEmergencyStop: () -> Unit = {},
     onSearchPatternChanged: (PatternType) -> Unit = {},
     onSetUpTarget: () -> Unit = {},
-    cameraFrameSource: CameraXFrameSource? = null,
     modifier: Modifier = Modifier,
 ) {
     val readiness = state.readiness
@@ -238,25 +227,18 @@ fun SearchScreen(
         modifier = modifier.fillMaxSize(),
     ) {
         // ----- Camera / drone preview (full screen) -----
-        when (state.frameSourceMode) {
-            FrameSourceMode.DRONE -> {
-                DroneVideoPreview(
-                    droneState = state.droneState,
-                    latestFrame = state.latestDroneFrame,
-                    cameraFrame = state.cameraFrame,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-            FrameSourceMode.CAMERA -> {
-                if (state.isSearching && state.hasCamera && !state.demoMode) {
-                    LiveCameraPreview(frameSource = cameraFrameSource, modifier = Modifier.fillMaxSize())
-                } else {
-                    CameraPreviewPlaceholder(
-                        frame = state.cameraFrame,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
-            }
+        if (state.droneConnected) {
+            DroneVideoPreview(
+                droneState = state.droneState,
+                latestFrame = state.latestDroneFrame,
+                cameraFrame = state.cameraFrame,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            VideoPlaceholder(
+                frame = state.cameraFrame,
+                modifier = Modifier.fillMaxSize(),
+            )
         }
 
         // ----- Models-not-loaded banner -----
@@ -328,7 +310,7 @@ fun SearchScreen(
             // The full "no target" card is hidden while a search runs, so keep a compact reminder.
             if (state.isSearching && readiness == SearchReadiness.NO_TARGET) {
                 Text(
-                    text = "No target photo: detecting people only",
+                    text = "No target: detecting people only",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.White,
                     modifier = Modifier
@@ -403,7 +385,7 @@ fun SearchScreen(
         }
 
         // ----- Reconnecting video overlay -----
-        if (state.frameSourceMode == FrameSourceMode.DRONE &&
+        if (state.droneConnected &&
             state.droneState?.connectionState == TelloConnectionState.CONNECTED &&
             state.latestDroneFrame == null
         ) {
@@ -449,7 +431,7 @@ fun SearchScreen(
 
                 BottomActionBar(
                     isSearching = state.isSearching,
-                    // A running search can always be stopped; a new one needs a camera or a drone.
+                    // A running search can always be stopped; a new one needs a connected drone.
                     startEnabled = readiness.canStart,
                     onStartSearch = onStartSearch,
                     onStopSearch = onStopSearch,
@@ -461,7 +443,7 @@ fun SearchScreen(
             }
         }
 
-        // ----- What is missing before a search (no target photo, or no camera) -----
+        // ----- What is missing before a search (no drone, or no target photo) -----
         if (!state.isSearching && readiness != SearchReadiness.READY) {
             SearchNotReadyCard(
                 readiness = readiness,
@@ -507,19 +489,16 @@ fun SearchScreen(
 // -----------------------------------------------------------------------
 
 /**
- * Full-screen camera preview. Displays the latest frame bitmap when
- * available, or a dark placeholder when the camera is not active.
- *
- * The actual CameraX binding is handled by [CameraXFrameSource]; this
- * composable just renders the frame it receives.
+ * Full-screen video area shown while no drone is connected. Displays the
+ * last frame (the demo's drawn scene) when there is one, or a dark placeholder.
  */
 @Composable
-private fun CameraPreviewPlaceholder(
+private fun VideoPlaceholder(
     frame: Bitmap?,
     modifier: Modifier = Modifier,
 ) {
-    val previewDesc = stringResource(R.string.camera_preview)
-    val inactiveDesc = stringResource(R.string.camera_preview_inactive)
+    val previewDesc = stringResource(R.string.video_preview)
+    val inactiveDesc = stringResource(R.string.video_preview_inactive)
     if (frame != null) {
         Image(
             bitmap = frame.asImageBitmap(),
@@ -544,71 +523,13 @@ private fun CameraPreviewPlaceholder(
 }
 
 // -----------------------------------------------------------------------
-// Live camera preview (CameraX)
-// -----------------------------------------------------------------------
-
-/**
- * Live camera preview using CameraX [PreviewView] wrapped in [AndroidView].
- *
- * The camera is bound by [CameraXFrameSource.bind] for the whole search, to the
- * Activity, together with the frame analysis that feeds the detector; this only
- * shows its preview while the Search screen is visible, so leaving the tab does
- * not stop detection. The preview is fitted, not cropped, so it shows the whole
- * frame that is searched.
- */
-@Composable
-private fun LiveCameraPreview(frameSource: CameraXFrameSource?, modifier: Modifier = Modifier) {
-    val status = frameSource?.status
-    val preview = frameSource?.preview
-    val message = when (status) {
-        CameraXFrameSource.Status.NO_PERMISSION -> stringResource(R.string.camera_permission_required)
-        CameraXFrameSource.Status.UNAVAILABLE -> stringResource(R.string.camera_unavailable)
-        else -> null
-    }
-    if (message != null) {
-        Box(
-            modifier = modifier.background(Color(0xFF121212)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = message,
-                color = Color.Gray,
-                style = MaterialTheme.typography.bodyLarge,
-            )
-        }
-        return
-    }
-
-    // Finding 10: PreviewView created in AndroidView factory, not in remember
-    var previewView by remember { mutableStateOf<PreviewView?>(null) }
-    DisposableEffect(preview, previewView) {
-        val pv = previewView
-        if (preview != null && pv != null) preview.setSurfaceProvider(pv.surfaceProvider)
-        onDispose {
-            // The camera and the analysis keep running; only this screen's surface goes.
-            preview?.setSurfaceProvider(null)
-        }
-    }
-
-    AndroidView(
-        factory = { ctx ->
-            PreviewView(ctx).also { pv ->
-                pv.scaleType = PreviewView.ScaleType.FIT_CENTER
-                previewView = pv
-            }
-        },
-        modifier = modifier,
-    )
-}
-
-// -----------------------------------------------------------------------
-// Search not ready (no target photo, or no camera)
+// Search not ready (no drone, or no target photo)
 // -----------------------------------------------------------------------
 
 /**
  * Says what is missing before a search. With no target photo it offers to open
  * the Target tab (a search can still start, but cannot match anyone); with no
- * camera it points to the drone connection below.
+ * drone it points to the drone connection below.
  */
 @Composable
 private fun SearchNotReadyCard(
@@ -617,8 +538,8 @@ private fun SearchNotReadyCard(
     modifier: Modifier = Modifier,
 ) {
     val (title, body) = when (readiness) {
-        SearchReadiness.NO_CAMERA ->
-            stringResource(R.string.search_no_camera_title) to stringResource(R.string.search_no_camera_body)
+        SearchReadiness.NO_DRONE ->
+            stringResource(R.string.search_no_drone_title) to null
         else ->
             stringResource(R.string.search_no_target_title) to stringResource(R.string.search_no_target_body)
     }
@@ -639,13 +560,15 @@ private fun SearchNotReadyCard(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.semantics { heading() },
             )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = body,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
+            if (body != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = body,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+            }
             if (readiness == SearchReadiness.NO_TARGET) {
                 Spacer(modifier = Modifier.height(16.dp))
                 Button(
@@ -669,7 +592,7 @@ private fun SearchNotReadyCard(
  */
 @Composable
 private fun ModelsNotLoadedBanner(modifier: Modifier = Modifier) {
-    val bannerText = stringResource(R.string.camera_active_models_not_loaded)
+    val bannerText = stringResource(R.string.models_not_loaded)
     Box(
         modifier = modifier
             .background(
@@ -760,7 +683,7 @@ private fun HudPill(
         Text(
             text = value,
             color = HudWhite,
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.labelMedium.tabular(),
             fontWeight = FontWeight.Bold,
         )
     }
@@ -793,9 +716,9 @@ private fun ConfidenceProgressBar(
             },
     ) {
         Text(
-            text = "Confidence building... $framesMatched/$framesNeeded frames",
+            text = "Confirming $framesMatched/$framesNeeded",
             color = HudWhite,
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.labelMedium.tabular(),
         )
         Spacer(modifier = Modifier.height(4.dp))
         LinearProgressIndicator(
@@ -908,7 +831,7 @@ private fun MatchAlertCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Score: ${(matchEntry.score * 100).toInt()}%",
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MaterialTheme.typography.titleMedium.tabular(),
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.semantics {
                             contentDescription =
@@ -1074,7 +997,7 @@ private fun BottomActionBar(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = if (isSearching) "Stop Search" else "Start Search",
+                text = if (isSearching) "Stop search" else "Start search",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
             )
@@ -1094,7 +1017,7 @@ private fun BottomActionBar(
  * - DISCONNECTED (no [droneState], or [TelloConnectionState.DISCONNECTED]): banner with
  *   a "Connect to Drone" button, Wi-Fi hint text, and (if present) [droneConnectionMessage]
  *   shown as troubleshooting text.
- * - [TelloConnectionState.CONNECTING]: spinner + "Connecting to drone...".
+ * - [TelloConnectionState.CONNECTING]: spinner + "Connecting…".
  * - [TelloConnectionState.CONNECTED]: green "Connected to Drone" status + disconnect action.
  * - [TelloConnectionState.STREAMING]: green "Drone Connected — Streaming" status, battery
  *   (if known), + disconnect action.
@@ -1135,7 +1058,7 @@ private fun DroneConnectionCard(
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
-                        text = "Connecting to drone...",
+                        text = "Connecting…",
                         color = HudWhite,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
@@ -1157,7 +1080,7 @@ private fun DroneConnectionCard(
                         .padding(16.dp),
                 ) {
                     Text(
-                        text = "Connected to Drone",
+                        text = "Connected",
                         color = MatchGreen,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
@@ -1186,7 +1109,7 @@ private fun DroneConnectionCard(
                         .padding(16.dp),
                 ) {
                     Text(
-                        text = "Connection Failed",
+                        text = "Not connected",
                         color = AlertRed,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
@@ -1228,7 +1151,7 @@ private fun DroneConnectionCard(
                         .padding(16.dp),
                 ) {
                     Text(
-                        text = "Connect to Drone",
+                        text = "Drone",
                         color = HudWhite,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
@@ -1244,11 +1167,11 @@ private fun DroneConnectionCard(
                             contentColor = HudWhite,
                         ),
                     ) {
-                        Text("Connect to Drone")
+                        Text("Connect")
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Connect your phone to the Tello WiFi network first",
+                        text = "Join the drone's Wi-Fi first.",
                         color = Color(0xFFAAAAAA),
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -1276,7 +1199,7 @@ private fun DroneConnectionCard(
  *
  * Shows different content based on the drone connection state:
  * - STREAMING with frame: renders the drone frame as an Image
- * - CONNECTING: shows a centered spinner with "Connecting to drone..." text
+ * - CONNECTING: shows a centered spinner with "Connecting…" text
  * - CONNECTED but no frame: shows "Waiting for video feed..." text
  * - DISCONNECTED: falls back to CameraPreviewPlaceholder behavior
  */
@@ -1330,7 +1253,7 @@ private fun DroneVideoPreview(
         }
         else -> {
             // DISCONNECTED or ERROR: show camera placeholder
-            CameraPreviewPlaceholder(
+            VideoPlaceholder(
                 frame = cameraFrame,
                 modifier = modifier,
             )
