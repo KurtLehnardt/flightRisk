@@ -18,6 +18,7 @@ import com.flightrisk.app.demo.DemoText
 import com.flightrisk.app.ui.demo.DemoFrame
 import com.flightrisk.app.ui.demo.DemoBlockedDialog
 import com.flightrisk.app.ui.demo.DemoDisconnectDialog
+import com.flightrisk.app.ui.search.DroneLinkLoss
 import com.flightrisk.app.ui.search.BoundingBox
 import androidx.compose.runtime.collectAsState
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -571,7 +572,7 @@ class MainActivity : ComponentActivity() {
 
             // Wire frame source: the connected drone's latest frame.
             pipeline.frameSource = SearchPipeline.FrameSource {
-                droneManager?.frameSource?.getLatestFrame()
+                droneManager?.frameSource?.getLatestStampedFrame()
             }
 
             // Wire detection callback (delegates to PersonDetector)
@@ -950,6 +951,7 @@ class MainActivity : ComponentActivity() {
 
     private fun handleDroneDisconnect() {
         if (demoActive && droneManager == null) return demoDroneCommand()
+        stopSearchOnDroneLoss()
         droneStateJob?.cancel()
         droneStateJob = null
         droneAlertJob?.cancel()
@@ -968,7 +970,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * The drone link is gone, so a running search ends the way Stop ends it. No landing is
+     * attempted over a dead link; the drone's own failsafe handles that.
+     */
+    private fun stopSearchOnDroneLoss() {
+        DroneLinkLoss.stopSearchIfRunning(realSearchRunning()) {
+            droneStreaming = false
+            stopRealSearch()
+            searchState = searchState.copy(isSearching = false, activeAlert = null)
+        }
+    }
+
     private fun cleanUpDroneConnection() {
+        stopSearchOnDroneLoss()
         droneStateJob?.cancel()
         droneStateJob = null
         droneAlertJob?.cancel()

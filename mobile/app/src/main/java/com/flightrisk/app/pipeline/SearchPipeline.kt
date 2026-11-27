@@ -3,6 +3,8 @@ package com.flightrisk.app.pipeline
 import android.graphics.Bitmap
 import android.util.Log
 import com.flightrisk.app.alert.AlertManager
+import com.flightrisk.app.camera.FrameDeduper
+import com.flightrisk.app.camera.StampedFrame
 import com.flightrisk.app.config.FlightRiskConfig
 import com.flightrisk.app.llm.LlmBackend
 import com.flightrisk.app.llm.LlmSelector
@@ -354,10 +356,12 @@ class SearchPipeline(
      */
     fun interface FrameSource {
         /**
-         * Get the next frame from the source.
-         * @return The frame bitmap, or null if no frame is available.
+         * Get the newest frame from the source.
+         * @return The frame with its sequence number, or null if no frame is available or the
+         *   newest one is stale. The same sequence number may be returned on several calls; the
+         *   pipeline processes each sequence number once.
          */
-        fun getFrame(): Bitmap?
+        fun getFrame(): StampedFrame<Bitmap>?
     }
 
     /** The active frame source. Set this before calling [start]. */
@@ -591,6 +595,10 @@ class SearchPipeline(
 
         val scope = pipelineScope ?: return
 
+        // Each frame is scored once. Scoring one picture again would add a second ReID score
+        // to its track and fake the multi-frame corroboration that confirms a match.
+        val deduper = FrameDeduper()
+
         while (running.get() && scope.isActive) {
             // Wait while paused for match inspection
             if (matchPaused) {
@@ -600,11 +608,13 @@ class SearchPipeline(
 
             try {
                 // 1. Acquire frame
-                val frame = frameSource?.getFrame()
-                if (frame == null) {
+                val stamped = frameSource?.getFrame()
+                if (stamped == null || !deduper.isNew(stamped.sequence)) {
+                    stamped?.frame?.recycle()
                     delay(10)
                     continue
                 }
+                val frame = stamped.frame
 
                 val detector = detectionCallback
                 if (detector == null) {
