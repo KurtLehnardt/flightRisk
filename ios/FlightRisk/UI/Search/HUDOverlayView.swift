@@ -62,12 +62,13 @@ private struct HUDPill: View {
             Text(value)
                 .font(.caption)
                 .fontWeight(.bold)
+                .monospacedDigit()
                 .foregroundStyle(FlightRiskTheme.hudWhite)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(
-            RoundedRectangle(cornerRadius: 16)
+            Capsule()
                 .fill(Color.black.opacity(0.8))
         )
         .accessibilityElement(children: .ignore)

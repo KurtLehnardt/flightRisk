@@ -113,15 +113,15 @@ final class FlightRiskConfig {
 
         /// Signal display names by key.
         static let displayNames: [String: String] = [
-            "reid": "CLIP appearance (ReID)",
-            "clothingColor": "Clothing Color",
-            "heightRatio": "Height Ratio",
-            "reasoning": "LLM Reasoning"
+            "reid": "Appearance model",
+            "clothingColor": "Clothing colour",
+            "heightRatio": "Height",
+            "reasoning": "AI reasoning"
         ]
 
         /// Signal categories for UI grouping.
         static let categories: [(name: String, signals: [String])] = [
-            ("Person Re-ID", ["reid"]),
+            ("Identity", ["reid"]),
             ("Appearance", ["clothingColor", "heightRatio"]),
             ("Other", ["reasoning"])
         ]

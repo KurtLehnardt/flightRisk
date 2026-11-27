@@ -3,7 +3,7 @@ import SwiftUI
 /// First-launch onboarding flow.
 ///
 /// Five steps with animated transitions:
-/// 0. Privacy notice (camera access, on-device processing, etc.)
+/// 0. Privacy notice (camera use for the target photo, on-device processing, etc.)
 /// 1. Emergency callout (911)
 /// 2. "My child is missing" CTA
 /// 3. Photo selection (inline ``TargetPickerView``)
@@ -11,7 +11,7 @@ import SwiftUI
 ///
 /// "Try the demo" sits above every step. The demo uses no camera, no photo and no photo
 /// picker (the Search and Target tabs show a drawn placeholder while it runs), so it can start
-/// before the privacy notice is acknowledged; the notice still shows before the camera starts.
+/// before the privacy notice is acknowledged; the notice still shows before the photo step.
 ///
 /// Persists completion via `@AppStorage` so the flow is only shown
 /// once. The key matches the one read by ``ContentView``. Acknowledging the
@@ -105,7 +105,7 @@ struct OnboardingView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     PrivacyBulletView(
                         title: "Camera Access",
-                        description: "FlightRisk uses your camera to scan for people who match the target photo you provide."
+                        description: "The camera is used only if you choose to take the target photo. It is never used to search."
                     )
                     PrivacyBulletView(
                         title: "On-Device Processing",
@@ -307,20 +307,20 @@ struct OnboardingView: View {
             }
             onboardingComplete = true
         } label: {
-            Text("Start Searching")
+            Text("Continue")
                 .font(.headline)
                 .fontWeight(.bold)
                 .frame(maxWidth: .infinity, minHeight: 56)
         }
         .buttonStyle(.borderedProminent)
-        .accessibilityLabel("Start searching for your child")
+        .accessibilityLabel("Finish setup")
     }
 
     // MARK: Quality Check - Rejected
 
     @ViewBuilder
     private var rejectedQualityContent: some View {
-        Text("Photo quality is too low")
+        Text("Photo quality too low")
             .font(.title2)
             .fontWeight(.bold)
             .foregroundStyle(FlightRiskTheme.alertRed)
@@ -359,7 +359,7 @@ struct OnboardingView: View {
         Button {
             withAnimation { currentStep = 3 }
         } label: {
-            Text("Try Another Photo")
+            Text("Try another photo")
                 .font(.headline)
                 .fontWeight(.bold)
                 .frame(maxWidth: .infinity, minHeight: 56)
@@ -441,7 +441,7 @@ enum PrivacyNotice {
     /// The on-device bullet.
     static let onDeviceText =
         "Person detection and matching run on your device. Matching compares appearance (clothing, colours and build) "
-        + "with your reference photo; FlightRisk does not use face recognition. Camera frames are not uploaded or stored."
+        + "with your reference photo; FlightRisk does not use face recognition. Drone video frames are not uploaded or stored."
 
     /// The cloud bullet. It matches the consent text in Settings
     /// (`SettingsView.cloudConsentMessage`).
@@ -457,7 +457,7 @@ enum PrivacyNotice {
     }
 
     /// Record the tap on "I Understand". The legacy key is written only when
-    /// onboarding finishes, so the camera screens still follow the photo step.
+    /// onboarding finishes, so the photo screens still follow the notice.
     static func acknowledge(defaults: UserDefaults = .standard) {
         defaults.set(true, forKey: acknowledgedKey)
     }

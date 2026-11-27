@@ -68,12 +68,12 @@ enum ReasoningReason {
         "Cloud reasoning is not enabled. Claude would send person crops and the reference photo to Anthropic;"
 
     static let cloudBlocked = cloudBlockedPrefix + " turn on \"Allow cloud reasoning\" to opt in."
-    static let claudeKeyMissing = "No Claude API key is saved on this device."
+    static let claudeKeyMissing = "No API key saved."
     static let claudeKeyUnreadable =
-        "The saved Claude API key can't be read right now (the phone may be locked). It will be checked again when the phone is unlocked."
+        "Can't read the saved key. Unlock the phone."
     static let offline = "No internet connection."
-    static let claudeNotRegistered = "The Claude backend is not loaded."
-    static let gemmaNotReady = "The on-device Gemma model is not downloaded and loaded yet."
+    static let claudeNotRegistered = "Cloud backend not loaded."
+    static let gemmaNotReady = "Local model not ready. Download it first."
 }
 
 // MARK: - Persisted settings

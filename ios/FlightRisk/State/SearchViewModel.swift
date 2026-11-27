@@ -73,16 +73,31 @@ final class SearchViewModel {
     /// and the stable track ID.
     var boxes: [(bbox: [Int], isMatch: Bool, trackId: Int)] = []
 
-    // MARK: - Camera Frame
+    // MARK: - Drone Video Frame
 
-    /// The most recent annotated camera frame for display.
-    var cameraFrame: CGImage?
+    /// The most recent annotated drone video frame for display.
+    var videoFrame: CGImage?
 
     /// Width of the most recent frame in pixels.
     var frameWidth: Int = 0
 
     /// Height of the most recent frame in pixels.
     var frameHeight: Int = 0
+
+    // MARK: - Drone Link
+
+    /// The drone link. A search can only start while it reports a connected drone.
+    var droneLink: (any DroneLink)?
+
+    /// True while a drone is connected. The Search tab reads it, so it updates with the link.
+    var hasDrone: Bool { droneLink?.hasConnectedDrone == true }
+
+    /// The one short message the Search tab shows when a search cannot start or had to stop.
+    /// Cleared when a search starts.
+    var statusMessage: String?
+
+    static let connectDroneFirst = "Connect a drone first."
+    static let droneDisconnected = "Drone disconnected. Reconnect to search."
 
     // MARK: - LLM Backend Status
 
@@ -129,13 +144,20 @@ final class SearchViewModel {
         }
     }
 
-    /// Start a search using the configured pipeline.
+    /// Start a search using the configured pipeline. Refuses, and stays idle, when no drone is
+    /// connected: the search has no other video source, and nothing is started.
     func startSearch() {
+        guard hasDrone else {
+            statusMessage = Self.connectDroneFirst
+            logger.info("Search not started: no drone connected")
+            return
+        }
         guard let pipeline else {
             logger.warning("Cannot start search: no pipeline configured")
             return
         }
 
+        statusMessage = nil
         isSearching = true
         highestMatchScore = 0
         confidenceFrames = 0
@@ -162,6 +184,14 @@ final class SearchViewModel {
 
         isSearching = false
         logger.info("Search stopped: \(reason)")
+    }
+
+    /// Called when the last drone disconnects: a running search stops, because the drone video
+    /// was its only source.
+    func droneDidDisconnect() {
+        guard isSearching else { return }
+        stopSearch(reason: "drone_disconnected")
+        statusMessage = Self.droneDisconnected
     }
 
     /// Dismiss the active match alert and resume pipeline processing.
@@ -217,7 +247,7 @@ final class SearchViewModel {
     private func handleEvent(_ event: PipelineEvent) {
         switch event {
         case .frameProcessed(let annotatedFrame, let currentFps, let count):
-            cameraFrame = annotatedFrame
+            videoFrame = annotatedFrame
             fps = currentFps
             personsDetected = count
             frameWidth = annotatedFrame.width

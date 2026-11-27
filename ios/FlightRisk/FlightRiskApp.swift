@@ -13,7 +13,6 @@ struct FlightRiskApp: App {
     @State private var locationProvider: LocationProvider
     @State private var personDetector: PersonDetector
     @State private var personReID: PersonReID
-    @State private var frameSource = AVCaptureFrameSource()
     @State private var pipeline: SearchPipeline
     @State private var targetNotice: String?
 
@@ -50,7 +49,6 @@ struct FlightRiskApp: App {
         WindowGroup {
             ContentView(
                 viewModel: viewModel,
-                cameraSession: frameSource.session,
                 config: config,
                 gemmaModelManager: gemmaModelManager,
                 pipeline: pipeline,
@@ -76,9 +74,6 @@ struct FlightRiskApp: App {
             detection: personDetector,
             reid: personReID
         )
-
-        // Set frame source for the pipeline
-        await pipeline.setFrameSource(frameSource)
 
         // Publish every reasoning status change (including whether cloud
         // reasoning is active) to the views.
@@ -150,7 +145,7 @@ extension SearchPipeline {
         self.reidCallback = reid
     }
 
-    /// Set the frame source for camera frame acquisition.
+    /// Set the frame source for drone video frame acquisition.
     func setFrameSource(_ source: FrameSource) {
         self.frameSource = source
     }

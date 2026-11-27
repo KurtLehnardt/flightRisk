@@ -137,7 +137,7 @@ targets:
           - UIInterfaceOrientationPortrait
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
-        NSCameraUsageDescription: "FlightRisk uses your camera to scan for people matching the target photo."
+        NSCameraUsageDescription: "FlightRisk uses your camera to take the target photo."
         NSLocationWhenInUseUsageDescription: "FlightRisk attaches GPS coordinates to match alerts so you can navigate to the location."
         NSLocalNetworkUsageDescription: "FlightRisk connects to the ground station address you enter in Settings, over your local network, to show its status and send commands."
         NSPhotoLibraryUsageDescription: "FlightRisk needs access to your photo library to select a target reference photo."

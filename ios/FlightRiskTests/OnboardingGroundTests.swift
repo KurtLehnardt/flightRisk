@@ -1,4 +1,3 @@
-import AVFoundation
 import SwiftUI
 import XCTest
 @testable import FlightRisk
@@ -19,7 +18,6 @@ final class OnboardingGroundTests: XCTestCase {
 
         let view = ContentView(
             viewModel: SearchViewModel(),
-            cameraSession: AVCaptureSession(),
             config: FlightRiskConfig.shared,
             gemmaModelManager: nil,
             pipeline: nil,

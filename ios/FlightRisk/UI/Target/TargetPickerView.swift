@@ -4,7 +4,8 @@ import PhotosUI
 /// Target photo selection view.
 ///
 /// Allows the user to pick a photo from the gallery or take one with
-/// the camera. The selected photo is analyzed for quality using
+/// the camera. Taking the target photo is the only camera use in the app; the camera is never
+/// used to search. The selected photo is analyzed for quality using
 /// ``ImageQualityScorer`` and a quality report with grade badge and
 /// issue chips is displayed via ``PhotoPreviewView``.
 ///
@@ -45,12 +46,12 @@ struct TargetPickerView: View {
     @ViewBuilder
     private var header: some View {
         VStack(spacing: 8) {
-            Text("Select Target Photo")
+            Text("Target photo")
                 .font(.title2)
                 .fontWeight(.bold)
                 .accessibilityAddTraits(.isHeader)
 
-            Text("Choose a clear, recent photo of the child you are searching for.")
+            Text("Pick a clear, recent photo.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -67,7 +68,7 @@ struct TargetPickerView: View {
                 matching: .images,
                 photoLibrary: .shared()
             ) {
-                Label("Select Photo", systemImage: "photo.on.rectangle")
+                Label("Select photo", systemImage: "photo.on.rectangle")
                     .frame(minHeight: 44)
             }
             .buttonStyle(.borderedProminent)
@@ -78,7 +79,7 @@ struct TargetPickerView: View {
             Button {
                 showCamera = true
             } label: {
-                Label("Take Photo", systemImage: "camera")
+                Label("Take photo", systemImage: "camera")
                     .frame(minHeight: 44)
             }
             .buttonStyle(.bordered)
@@ -95,7 +96,7 @@ struct TargetPickerView: View {
     @ViewBuilder
     private var photoContent: some View {
         if isAnalyzing {
-            ProgressView("Analyzing photo quality...")
+            ProgressView("Checking photo")
                 .padding(.top, 32)
         } else if let image = selectedImage {
             PhotoPreviewView(
@@ -123,7 +124,7 @@ struct TargetPickerView: View {
                     Image(systemName: "person.crop.circle.badge.plus")
                         .font(.system(size: 48))
                         .foregroundStyle(.secondary)
-                    Text("No photo selected")
+                    Text("No photo")
                         .font(.body)
                         .foregroundStyle(.secondary)
                 }
@@ -142,7 +143,7 @@ struct TargetPickerView: View {
                   let report = qualityReport else { return }
             onPhotoSelected(image, report)
         } label: {
-            Text("Use This Photo")
+            Text("Use photo")
                 .font(.headline)
                 .fontWeight(.bold)
                 .foregroundStyle(.white)
@@ -162,7 +163,7 @@ struct TargetPickerView: View {
         )
 
         if !acceptable {
-            Text("Photo quality is too low. Please select a better photo.")
+            Text("Photo quality too low. Pick another.")
                 .font(.caption)
                 .foregroundStyle(FlightRiskTheme.alertRed)
                 .multilineTextAlignment(.center)
