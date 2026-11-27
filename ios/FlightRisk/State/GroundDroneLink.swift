@@ -19,16 +19,16 @@ final class GroundDroneLink: DroneLink {
         return ground.reducer.cards.contains { $0.link == .connected }
     }
 
-    func newestFrame() -> CGImage? {
+    func newestFrame() -> DroneFrame? {
         let connected = Set(ground.reducer.cards.filter { $0.link == .connected }.map(\.id))
         let newest = ground.latestFrameAt
             .filter { connected.contains($0.key) }
             .max { $0.value < $1.value }
         guard let newest, let base64 = ground.latestFrames[newest.key]?.image, !base64.isEmpty else { return nil }
-        if cachedAt == newest.value, let cachedImage { return cachedImage }
-        let image = VideoTileLogic.decodeImage(base64: base64, maxPixelSize: 640)
+        if cachedAt == newest.value, let cachedImage { return DroneFrame(image: cachedImage, arrivedAt: newest.value) }
+        guard let image = VideoTileLogic.decodeImage(base64: base64, maxPixelSize: 640) else { return nil }
         cachedImage = image
         cachedAt = newest.value
-        return image
+        return DroneFrame(image: image, arrivedAt: newest.value)
     }
 }

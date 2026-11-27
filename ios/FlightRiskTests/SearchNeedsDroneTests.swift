@@ -11,7 +11,7 @@ final class SearchNeedsDroneTests: XCTestCase {
     private final class FakeLink: DroneLink {
         var hasConnectedDrone: Bool
         init(connected: Bool) { hasConnectedDrone = connected }
-        func newestFrame() -> CGImage? { nil }
+        func newestFrame() -> DroneFrame? { nil }
     }
 
     private final class SpyFrameSource: FrameSource, @unchecked Sendable {

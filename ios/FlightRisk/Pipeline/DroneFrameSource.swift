@@ -9,22 +9,41 @@ protocol DroneLink: AnyObject {
     /// The demo's simulated drones do not count.
     var hasConnectedDrone: Bool { get }
     /// The newest decoded frame of a connected drone, or nil when there is none yet.
-    func newestFrame() -> CGImage?
+    func newestFrame() -> DroneFrame?
+}
+
+/// A decoded drone video frame and the moment it arrived. Two frames with the same arrival time
+/// are the same frame.
+struct DroneFrame {
+    let image: CGImage
+    let arrivedAt: Date
 }
 
 /// A ``FrameSource`` fed by drone video only. It polls the ``DroneLink`` while the search runs
 /// and keeps the newest frame for the pipeline. It never opens a camera.
+///
+/// Each frame is handed to the pipeline at most once, and a frame older than `maxFrameAge` is
+/// never handed out. Without both rules the pipeline would score one frame again and again, and
+/// a stalled feed would keep confirming a match from the last picture it saw.
 final class DroneFrameSource: FrameSource, @unchecked Sendable {
     private let link: any DroneLink
     private let pollInterval: Duration
     private let lock = NSLock()
-    private var latest: CGImage?
+    private let maxFrameAge: TimeInterval
+    private let now: @Sendable () -> Date
+    private var latest: DroneFrame?
+    private var lastServedAt: Date?
     private var callback: ((CGImage) -> Void)?
     private var poller: Task<Void, Never>?
 
-    init(link: any DroneLink, pollInterval: Duration = .milliseconds(200)) {
+    init(link: any DroneLink,
+         pollInterval: Duration = .milliseconds(200),
+         maxFrameAge: TimeInterval = 2,
+         now: @escaping @Sendable () -> Date = { Date() }) {
         self.link = link
         self.pollInterval = pollInterval
+        self.maxFrameAge = maxFrameAge
+        self.now = now
     }
 
     func start() {
@@ -44,11 +63,18 @@ final class DroneFrameSource: FrameSource, @unchecked Sendable {
         poller?.cancel()
         poller = nil
         latest = nil
+        lastServedAt = nil
     }
 
+    /// Returns the newest frame once. A frame already returned, or one older than `maxFrameAge`,
+    /// gives nil.
     func getLatestFrame() -> CGImage? {
         lock.lock(); defer { lock.unlock() }
-        return latest
+        guard let frame = latest else { return nil }
+        if let served = lastServedAt, frame.arrivedAt <= served { return nil }
+        guard now().timeIntervalSince(frame.arrivedAt) <= maxFrameAge else { return nil }
+        lastServedAt = frame.arrivedAt
+        return frame.image
     }
 
     func setOnFrameCallback(_ callback: @escaping (CGImage) -> Void) {
@@ -57,12 +83,20 @@ final class DroneFrameSource: FrameSource, @unchecked Sendable {
     }
 
     @MainActor
-    private func pollOnce() {
-        guard link.hasConnectedDrone, let image = link.newestFrame() else { return }
+    func pollOnce() {
+        guard link.hasConnectedDrone else {
+            lock.lock(); latest = nil; lock.unlock()
+            return
+        }
+        guard let frame = link.newestFrame() else { return }
         lock.lock()
-        latest = image
+        if let current = latest, frame.arrivedAt <= current.arrivedAt {
+            lock.unlock()
+            return
+        }
+        latest = frame
         let cb = callback
         lock.unlock()
-        cb?(image)
+        cb?(frame.image)
     }
 }

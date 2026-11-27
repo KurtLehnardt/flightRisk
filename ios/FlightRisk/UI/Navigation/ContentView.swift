@@ -77,6 +77,11 @@ struct ContentView: View {
                 if viewModel.isSearching { viewModel.stopSearch(reason: "demo_started") }
                 selectedTab = 3
             }
+            .onChange(of: viewModel.hasDrone) { _, connected in
+                // Here, not only in the Search tab, so a disconnect stops the search even when
+                // that tab is not on screen.
+                if !connected { viewModel.droneDidDisconnect() }
+            }
             .onChange(of: scenePhase) { _, phase in
                 // Reconnect the ground link at once instead of after the rest of a
                 // backoff wait. Only here, where the Ground tab exists, so the
@@ -115,8 +120,9 @@ struct ContentView: View {
     private func connectDroneLink() async {
         guard viewModel.droneLink == nil else { return }
         let link = GroundDroneLink(groundViewModel)
-        viewModel.droneLink = link
+        // The source goes in first, so a start tapped in between never runs without one.
         await pipeline?.setFrameSource(DroneFrameSource(link: link))
+        viewModel.droneLink = link
     }
 
     /// The drone search, or during the demo a screen with a drawn placeholder and no camera.
