@@ -56,7 +56,7 @@ class TelloFrameSource(
         private const val IDLE_SLEEP_MS = 5L
     }
 
-    // Thread-safe latest frame (same pattern as CameraXFrameSource)
+    // Thread-safe latest frame
     private val lock = ReentrantLock()
     private var latestFrame: Bitmap? = null
     private var frameCallback: ((Bitmap) -> Unit)? = null
@@ -481,8 +481,7 @@ class TelloFrameSource(
      * to [targetWidth] x [targetHeight].
      *
      * Fallback path when [MediaCodec.getOutputImage] returns null.
-     * Uses [YuvImage] + JPEG compression, matching the pattern in
-     * [CameraXFrameSource.imageProxyToBitmap].
+     * Uses [YuvImage] + JPEG compression.
      */
     private fun outputBufferToBitmap(buffer: java.nio.ByteBuffer, format: MediaFormat): Bitmap? {
         val width = format.getInteger(MediaFormat.KEY_WIDTH)

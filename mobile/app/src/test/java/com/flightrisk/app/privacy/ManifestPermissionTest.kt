@@ -31,8 +31,13 @@ class ManifestPermissionTest {
 
     @Test fun neededPermissionsRemain() {
         val p = permissions()
-        for (n in listOf("CAMERA", "ACCESS_FINE_LOCATION", "INTERNET", "ACCESS_WIFI_STATE", "ACCESS_NETWORK_STATE")) {
+        for (n in listOf("ACCESS_FINE_LOCATION", "INTERNET", "ACCESS_WIFI_STATE", "ACCESS_NETWORK_STATE")) {
             assertTrue(n, p.contains("android.permission.$n"))
         }
+    }
+
+    @Test fun phoneCameraPermissionIsNotRequested() {
+        // A search uses a drone's video only. "Take Photo" opens the camera app, which needs no permission here.
+        assertFalse(permissions().contains("android.permission.CAMERA"))
     }
 }
