@@ -19,11 +19,19 @@ interface FrameSource {
     fun stop()
 
     /**
-     * Return the most recent frame, or null if no frame is available yet.
+     * Return the most recent frame, or null if no frame is available or it is stale.
      *
      * Thread-safe: may be called from any thread.
      */
     fun getLatestFrame(): Bitmap?
+
+    /**
+     * Return the most recent frame with its sequence number and arrival time, or null if there
+     * is no frame or the newest one is older than [LatestFrameSlot.DEFAULT_MAX_AGE_MS].
+     *
+     * The pipeline uses the sequence number to score each frame only once.
+     */
+    fun getLatestStampedFrame(): StampedFrame<Bitmap>?
 
     /**
      * Register a callback invoked each time a new frame arrives.

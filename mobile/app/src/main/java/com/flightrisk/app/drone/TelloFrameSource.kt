@@ -10,6 +10,8 @@ import android.media.MediaCodec
 import android.media.MediaFormat
 import android.util.Log
 import com.flightrisk.app.camera.FrameSource
+import com.flightrisk.app.camera.LatestFrameSlot
+import com.flightrisk.app.camera.StampedFrame
 import com.flightrisk.app.config.DroneConfig
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -58,7 +60,7 @@ class TelloFrameSource(
 
     // Thread-safe latest frame
     private val lock = ReentrantLock()
-    private var latestFrame: Bitmap? = null
+    private val latestSlot = LatestFrameSlot<Bitmap>(System::currentTimeMillis)
     private var frameCallback: ((Bitmap) -> Unit)? = null
     @Volatile
     private var isRunning = false
@@ -172,8 +174,7 @@ class TelloFrameSource(
         }.start()
 
         lock.withLock {
-            latestFrame?.recycle()
-            latestFrame = null
+            latestSlot.clear()?.recycle()
             frameCallback = null
         }
 
@@ -190,9 +191,13 @@ class TelloFrameSource(
         Log.i(TAG, "TelloFrameSource stopped")
     }
 
-    override fun getLatestFrame(): Bitmap? {
+    override fun getLatestFrame(): Bitmap? = getLatestStampedFrame()?.frame
+
+    override fun getLatestStampedFrame(): StampedFrame<Bitmap>? {
         lock.withLock {
-            return latestFrame?.copy(Bitmap.Config.ARGB_8888, false)
+            val held = latestSlot.latest() ?: return null
+            val copy = held.frame.copy(Bitmap.Config.ARGB_8888, false) ?: return null
+            return StampedFrame(copy, held.sequence, held.arrivedAtMs)
         }
     }
 
@@ -596,7 +601,7 @@ class TelloFrameSource(
     // -- Frozen frame detection -----------------------------------------------
 
     /**
-     * Check for frozen frames and update [latestFrame] + invoke callback.
+     * Check for frozen frames and update [latestSlot] + invoke callback.
      */
     private fun handleDecodedFrame(bitmap: Bitmap) {
         val hash = computeFrameHash(bitmap)
@@ -606,7 +611,7 @@ class TelloFrameSource(
                 Log.w(TAG, "Frozen frame detected ($frozenFrameCount identical)")
                 onStreamFrozen?.invoke()
                 frozenFrameCount = 0
-                // Don't update latestFrame with a frozen frame
+                // Don't update latestSlot with a frozen frame
                 bitmap.recycle()
                 return
             }
@@ -617,12 +622,11 @@ class TelloFrameSource(
 
         var callback: ((Bitmap) -> Unit)? = null
         lock.withLock {
-            latestFrame?.recycle()
-            latestFrame = bitmap
+            latestSlot.put(bitmap)?.recycle()
             callback = frameCallback
         }
         // Give the callback a COPY so the consumer owns it independently.
-        // TelloFrameSource owns latestFrame; the consumer owns the copy.
+        // TelloFrameSource owns latestSlot; the consumer owns the copy.
         val frameCopy = bitmap.copy(Bitmap.Config.ARGB_8888, false)
         callback?.invoke(frameCopy)
     }
