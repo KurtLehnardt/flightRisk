@@ -20,6 +20,18 @@ let package = Package(
             name: "PersonVision",
             targets: ["PersonVision"]
         ),
+        .library(
+            name: "MissionCore",
+            targets: ["MissionCore"]
+        ),
+        .library(
+            name: "DroneLinks",
+            targets: ["DroneLinks"]
+        ),
+        .library(
+            name: "MissionUI",
+            targets: ["MissionUI"]
+        ),
     ],
     dependencies: [],
     targets: [
@@ -56,6 +68,42 @@ let package = Package(
             dependencies: ["PersonVision"],
             path: "Tests/PersonVisionTests",
             resources: [.copy("Fixtures")]
+        ),
+    
+        // The phone mission core: parameters, planner, preflight checks, state machine and log.
+        // No dependencies. Its tests read the shared golden fixtures in tests/fixtures/mission_core.
+        .target(
+            name: "MissionCore",
+            dependencies: [],
+            path: "Sources/MissionCore"
+        ),
+        .testTarget(
+            name: "MissionCoreTests",
+            dependencies: ["MissionCore"],
+            path: "Tests/MissionCoreTests"
+        ),
+        // Drone adapters, transports, the MAVLink codec, video depacketizing and the runner.
+        .target(
+            name: "DroneLinks",
+            dependencies: ["MissionCore"],
+            path: "Sources/DroneLinks"
+        ),
+        .testTarget(
+            name: "DroneLinksTests",
+            dependencies: ["DroneLinks", "MissionCore"],
+            path: "Tests/DroneLinksTests"
+        ),
+        // Mission screens. They live in the package so parallel tasks never touch the generated
+        // project.pbxproj; the app injects the plan canvas.
+        .target(
+            name: "MissionUI",
+            dependencies: ["MissionCore", "DroneLinks"],
+            path: "Sources/MissionUI"
+        ),
+        .testTarget(
+            name: "MissionUITests",
+            dependencies: ["MissionUI", "MissionCore"],
+            path: "Tests/MissionUITests"
         ),
     ]
 )

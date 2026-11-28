@@ -113,7 +113,7 @@ jobs:
       # The runner image ships the Android SDK and sets ANDROID_HOME.
       - name: Run Gradle tests
         working-directory: mobile
-        run: ./gradlew :contract:test :app:testDebugUnitTest --console=plain
+        run: ./gradlew :mission:test :contract:test :app:testDebugUnitTest --console=plain
 
   ios-package:
     name: ios package tests
