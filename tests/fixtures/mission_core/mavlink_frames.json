@@ -1,0 +1,2689 @@
+{
+ "v": 1,
+ "generator": "scripts/mission_vectors/mavlink_frames.py",
+ "pymavlink": "2.4.50",
+ "dialect": "common",
+ "format": [
+  "Every frame is MAVLink 2 (start byte 0xFD), unsigned, made by pymavlink from 'fields'.",
+  "A codec encodes 'fields' with the given sysid, compid and seq and must produce 'hex' byte for byte, including the MAVLink 2 truncation of trailing zero payload bytes (never below 1 byte).",
+  "A decoder must turn 'hex' into 'fields'. Missing payload bytes decode as zero.",
+  "Field values: integers as JSON numbers; char arrays as strings without the NUL padding; float fields as the double value of the float32, or \"NaN\"; 'float_bits' holds the exact IEEE 754 bits (big-endian hex) of every float field and wins over the number.",
+  "PARAM_VALUE frames carry 'value': byte-wise (PX4) reads the float bits as an int32; C cast (ArduPilot) reads the float as a number.",
+  "'layouts' gives each subset message in wire order with its CRC_EXTRA; 'extension' fields are MAVLink 2 extensions, outside the CRC_EXTRA calculation and after the base fields.",
+  "'bad_frames' are frames a decoder must skip; 'stream' is one buffer whose good frames must decode in the order of 'decodes'.",
+  "'extended_frames' carry more payload than the definitions here know (newer extension fields); a decoder must accept them, decode the listed fields and ignore the extra bytes. They are decode-only."
+ ],
+ "subset": [
+  "HEARTBEAT",
+  "SYS_STATUS",
+  "BATTERY_STATUS",
+  "GPS_RAW_INT",
+  "GLOBAL_POSITION_INT",
+  "HOME_POSITION",
+  "EXTENDED_SYS_STATE",
+  "STATUSTEXT",
+  "COMMAND_LONG",
+  "COMMAND_ACK",
+  "PARAM_REQUEST_READ",
+  "PARAM_VALUE",
+  "PARAM_ERROR",
+  "MISSION_COUNT",
+  "MISSION_REQUEST",
+  "MISSION_REQUEST_INT",
+  "MISSION_ITEM_INT",
+  "MISSION_ACK",
+  "MISSION_CURRENT",
+  "AUTOPILOT_VERSION"
+ ],
+ "added_to_plan_subset": [
+  "MISSION_REQUEST",
+  "PARAM_ERROR"
+ ],
+ "layouts": {
+  "HEARTBEAT": {
+   "id": 0,
+   "crc_extra": 50,
+   "min_len": 9,
+   "max_len": 9,
+   "fields": [
+    {
+     "name": "custom_mode",
+     "type": "uint32_t",
+     "array": null,
+     "offset": 0,
+     "extension": false
+    },
+    {
+     "name": "type",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 4,
+     "extension": false
+    },
+    {
+     "name": "autopilot",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 5,
+     "extension": false
+    },
+    {
+     "name": "base_mode",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 6,
+     "extension": false
+    },
+    {
+     "name": "system_status",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 7,
+     "extension": false
+    },
+    {
+     "name": "mavlink_version",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 8,
+     "extension": false
+    }
+   ]
+  },
+  "SYS_STATUS": {
+   "id": 1,
+   "crc_extra": 124,
+   "min_len": 31,
+   "max_len": 43,
+   "fields": [
+    {
+     "name": "onboard_control_sensors_present",
+     "type": "uint32_t",
+     "array": null,
+     "offset": 0,
+     "extension": false
+    },
+    {
+     "name": "onboard_control_sensors_enabled",
+     "type": "uint32_t",
+     "array": null,
+     "offset": 4,
+     "extension": false
+    },
+    {
+     "name": "onboard_control_sensors_health",
+     "type": "uint32_t",
+     "array": null,
+     "offset": 8,
+     "extension": false
+    },
+    {
+     "name": "load",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 12,
+     "extension": false
+    },
+    {
+     "name": "voltage_battery",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 14,
+     "extension": false
+    },
+    {
+     "name": "current_battery",
+     "type": "int16_t",
+     "array": null,
+     "offset": 16,
+     "extension": false
+    },
+    {
+     "name": "drop_rate_comm",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 18,
+     "extension": false
+    },
+    {
+     "name": "errors_comm",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 20,
+     "extension": false
+    },
+    {
+     "name": "errors_count1",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 22,
+     "extension": false
+    },
+    {
+     "name": "errors_count2",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 24,
+     "extension": false
+    },
+    {
+     "name": "errors_count3",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 26,
+     "extension": false
+    },
+    {
+     "name": "errors_count4",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 28,
+     "extension": false
+    },
+    {
+     "name": "battery_remaining",
+     "type": "int8_t",
+     "array": null,
+     "offset": 30,
+     "extension": false
+    },
+    {
+     "name": "onboard_control_sensors_present_extended",
+     "type": "uint32_t",
+     "array": null,
+     "offset": 31,
+     "extension": true
+    },
+    {
+     "name": "onboard_control_sensors_enabled_extended",
+     "type": "uint32_t",
+     "array": null,
+     "offset": 35,
+     "extension": true
+    },
+    {
+     "name": "onboard_control_sensors_health_extended",
+     "type": "uint32_t",
+     "array": null,
+     "offset": 39,
+     "extension": true
+    }
+   ]
+  },
+  "BATTERY_STATUS": {
+   "id": 147,
+   "crc_extra": 154,
+   "min_len": 36,
+   "max_len": 54,
+   "fields": [
+    {
+     "name": "current_consumed",
+     "type": "int32_t",
+     "array": null,
+     "offset": 0,
+     "extension": false
+    },
+    {
+     "name": "energy_consumed",
+     "type": "int32_t",
+     "array": null,
+     "offset": 4,
+     "extension": false
+    },
+    {
+     "name": "temperature",
+     "type": "int16_t",
+     "array": null,
+     "offset": 8,
+     "extension": false
+    },
+    {
+     "name": "voltages",
+     "type": "uint16_t",
+     "array": 10,
+     "offset": 10,
+     "extension": false
+    },
+    {
+     "name": "current_battery",
+     "type": "int16_t",
+     "array": null,
+     "offset": 30,
+     "extension": false
+    },
+    {
+     "name": "id",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 32,
+     "extension": false
+    },
+    {
+     "name": "battery_function",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 33,
+     "extension": false
+    },
+    {
+     "name": "type",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 34,
+     "extension": false
+    },
+    {
+     "name": "battery_remaining",
+     "type": "int8_t",
+     "array": null,
+     "offset": 35,
+     "extension": false
+    },
+    {
+     "name": "time_remaining",
+     "type": "int32_t",
+     "array": null,
+     "offset": 36,
+     "extension": true
+    },
+    {
+     "name": "charge_state",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 40,
+     "extension": true
+    },
+    {
+     "name": "voltages_ext",
+     "type": "uint16_t",
+     "array": 4,
+     "offset": 41,
+     "extension": true
+    },
+    {
+     "name": "mode",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 49,
+     "extension": true
+    },
+    {
+     "name": "fault_bitmask",
+     "type": "uint32_t",
+     "array": null,
+     "offset": 50,
+     "extension": true
+    }
+   ]
+  },
+  "GPS_RAW_INT": {
+   "id": 24,
+   "crc_extra": 24,
+   "min_len": 30,
+   "max_len": 52,
+   "fields": [
+    {
+     "name": "time_usec",
+     "type": "uint64_t",
+     "array": null,
+     "offset": 0,
+     "extension": false
+    },
+    {
+     "name": "lat",
+     "type": "int32_t",
+     "array": null,
+     "offset": 8,
+     "extension": false
+    },
+    {
+     "name": "lon",
+     "type": "int32_t",
+     "array": null,
+     "offset": 12,
+     "extension": false
+    },
+    {
+     "name": "alt",
+     "type": "int32_t",
+     "array": null,
+     "offset": 16,
+     "extension": false
+    },
+    {
+     "name": "eph",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 20,
+     "extension": false
+    },
+    {
+     "name": "epv",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 22,
+     "extension": false
+    },
+    {
+     "name": "vel",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 24,
+     "extension": false
+    },
+    {
+     "name": "cog",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 26,
+     "extension": false
+    },
+    {
+     "name": "fix_type",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 28,
+     "extension": false
+    },
+    {
+     "name": "satellites_visible",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 29,
+     "extension": false
+    },
+    {
+     "name": "alt_ellipsoid",
+     "type": "int32_t",
+     "array": null,
+     "offset": 30,
+     "extension": true
+    },
+    {
+     "name": "h_acc",
+     "type": "uint32_t",
+     "array": null,
+     "offset": 34,
+     "extension": true
+    },
+    {
+     "name": "v_acc",
+     "type": "uint32_t",
+     "array": null,
+     "offset": 38,
+     "extension": true
+    },
+    {
+     "name": "vel_acc",
+     "type": "uint32_t",
+     "array": null,
+     "offset": 42,
+     "extension": true
+    },
+    {
+     "name": "hdg_acc",
+     "type": "uint32_t",
+     "array": null,
+     "offset": 46,
+     "extension": true
+    },
+    {
+     "name": "yaw",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 50,
+     "extension": true
+    }
+   ]
+  },
+  "GLOBAL_POSITION_INT": {
+   "id": 33,
+   "crc_extra": 104,
+   "min_len": 28,
+   "max_len": 28,
+   "fields": [
+    {
+     "name": "time_boot_ms",
+     "type": "uint32_t",
+     "array": null,
+     "offset": 0,
+     "extension": false
+    },
+    {
+     "name": "lat",
+     "type": "int32_t",
+     "array": null,
+     "offset": 4,
+     "extension": false
+    },
+    {
+     "name": "lon",
+     "type": "int32_t",
+     "array": null,
+     "offset": 8,
+     "extension": false
+    },
+    {
+     "name": "alt",
+     "type": "int32_t",
+     "array": null,
+     "offset": 12,
+     "extension": false
+    },
+    {
+     "name": "relative_alt",
+     "type": "int32_t",
+     "array": null,
+     "offset": 16,
+     "extension": false
+    },
+    {
+     "name": "vx",
+     "type": "int16_t",
+     "array": null,
+     "offset": 20,
+     "extension": false
+    },
+    {
+     "name": "vy",
+     "type": "int16_t",
+     "array": null,
+     "offset": 22,
+     "extension": false
+    },
+    {
+     "name": "vz",
+     "type": "int16_t",
+     "array": null,
+     "offset": 24,
+     "extension": false
+    },
+    {
+     "name": "hdg",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 26,
+     "extension": false
+    }
+   ]
+  },
+  "HOME_POSITION": {
+   "id": 242,
+   "crc_extra": 104,
+   "min_len": 52,
+   "max_len": 60,
+   "fields": [
+    {
+     "name": "latitude",
+     "type": "int32_t",
+     "array": null,
+     "offset": 0,
+     "extension": false
+    },
+    {
+     "name": "longitude",
+     "type": "int32_t",
+     "array": null,
+     "offset": 4,
+     "extension": false
+    },
+    {
+     "name": "altitude",
+     "type": "int32_t",
+     "array": null,
+     "offset": 8,
+     "extension": false
+    },
+    {
+     "name": "x",
+     "type": "float",
+     "array": null,
+     "offset": 12,
+     "extension": false
+    },
+    {
+     "name": "y",
+     "type": "float",
+     "array": null,
+     "offset": 16,
+     "extension": false
+    },
+    {
+     "name": "z",
+     "type": "float",
+     "array": null,
+     "offset": 20,
+     "extension": false
+    },
+    {
+     "name": "q",
+     "type": "float",
+     "array": 4,
+     "offset": 24,
+     "extension": false
+    },
+    {
+     "name": "approach_x",
+     "type": "float",
+     "array": null,
+     "offset": 40,
+     "extension": false
+    },
+    {
+     "name": "approach_y",
+     "type": "float",
+     "array": null,
+     "offset": 44,
+     "extension": false
+    },
+    {
+     "name": "approach_z",
+     "type": "float",
+     "array": null,
+     "offset": 48,
+     "extension": false
+    },
+    {
+     "name": "time_usec",
+     "type": "uint64_t",
+     "array": null,
+     "offset": 52,
+     "extension": true
+    }
+   ]
+  },
+  "EXTENDED_SYS_STATE": {
+   "id": 245,
+   "crc_extra": 130,
+   "min_len": 2,
+   "max_len": 2,
+   "fields": [
+    {
+     "name": "vtol_state",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 0,
+     "extension": false
+    },
+    {
+     "name": "landed_state",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 1,
+     "extension": false
+    }
+   ]
+  },
+  "STATUSTEXT": {
+   "id": 253,
+   "crc_extra": 83,
+   "min_len": 51,
+   "max_len": 54,
+   "fields": [
+    {
+     "name": "severity",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 0,
+     "extension": false
+    },
+    {
+     "name": "text",
+     "type": "char",
+     "array": 50,
+     "offset": 1,
+     "extension": false
+    },
+    {
+     "name": "id",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 51,
+     "extension": true
+    },
+    {
+     "name": "chunk_seq",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 53,
+     "extension": true
+    }
+   ]
+  },
+  "COMMAND_LONG": {
+   "id": 76,
+   "crc_extra": 152,
+   "min_len": 33,
+   "max_len": 33,
+   "fields": [
+    {
+     "name": "param1",
+     "type": "float",
+     "array": null,
+     "offset": 0,
+     "extension": false
+    },
+    {
+     "name": "param2",
+     "type": "float",
+     "array": null,
+     "offset": 4,
+     "extension": false
+    },
+    {
+     "name": "param3",
+     "type": "float",
+     "array": null,
+     "offset": 8,
+     "extension": false
+    },
+    {
+     "name": "param4",
+     "type": "float",
+     "array": null,
+     "offset": 12,
+     "extension": false
+    },
+    {
+     "name": "param5",
+     "type": "float",
+     "array": null,
+     "offset": 16,
+     "extension": false
+    },
+    {
+     "name": "param6",
+     "type": "float",
+     "array": null,
+     "offset": 20,
+     "extension": false
+    },
+    {
+     "name": "param7",
+     "type": "float",
+     "array": null,
+     "offset": 24,
+     "extension": false
+    },
+    {
+     "name": "command",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 28,
+     "extension": false
+    },
+    {
+     "name": "target_system",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 30,
+     "extension": false
+    },
+    {
+     "name": "target_component",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 31,
+     "extension": false
+    },
+    {
+     "name": "confirmation",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 32,
+     "extension": false
+    }
+   ]
+  },
+  "COMMAND_ACK": {
+   "id": 77,
+   "crc_extra": 143,
+   "min_len": 3,
+   "max_len": 10,
+   "fields": [
+    {
+     "name": "command",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 0,
+     "extension": false
+    },
+    {
+     "name": "result",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 2,
+     "extension": false
+    },
+    {
+     "name": "progress",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 3,
+     "extension": true
+    },
+    {
+     "name": "result_param2",
+     "type": "int32_t",
+     "array": null,
+     "offset": 4,
+     "extension": true
+    },
+    {
+     "name": "target_system",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 8,
+     "extension": true
+    },
+    {
+     "name": "target_component",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 9,
+     "extension": true
+    }
+   ]
+  },
+  "PARAM_REQUEST_READ": {
+   "id": 20,
+   "crc_extra": 214,
+   "min_len": 20,
+   "max_len": 20,
+   "fields": [
+    {
+     "name": "param_index",
+     "type": "int16_t",
+     "array": null,
+     "offset": 0,
+     "extension": false
+    },
+    {
+     "name": "target_system",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 2,
+     "extension": false
+    },
+    {
+     "name": "target_component",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 3,
+     "extension": false
+    },
+    {
+     "name": "param_id",
+     "type": "char",
+     "array": 16,
+     "offset": 4,
+     "extension": false
+    }
+   ]
+  },
+  "PARAM_VALUE": {
+   "id": 22,
+   "crc_extra": 220,
+   "min_len": 25,
+   "max_len": 25,
+   "fields": [
+    {
+     "name": "param_value",
+     "type": "float",
+     "array": null,
+     "offset": 0,
+     "extension": false
+    },
+    {
+     "name": "param_count",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 4,
+     "extension": false
+    },
+    {
+     "name": "param_index",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 6,
+     "extension": false
+    },
+    {
+     "name": "param_id",
+     "type": "char",
+     "array": 16,
+     "offset": 8,
+     "extension": false
+    },
+    {
+     "name": "param_type",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 24,
+     "extension": false
+    }
+   ]
+  },
+  "PARAM_ERROR": {
+   "id": 345,
+   "crc_extra": 209,
+   "min_len": 21,
+   "max_len": 21,
+   "fields": [
+    {
+     "name": "param_index",
+     "type": "int16_t",
+     "array": null,
+     "offset": 0,
+     "extension": false
+    },
+    {
+     "name": "target_system",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 2,
+     "extension": false
+    },
+    {
+     "name": "target_component",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 3,
+     "extension": false
+    },
+    {
+     "name": "param_id",
+     "type": "char",
+     "array": 16,
+     "offset": 4,
+     "extension": false
+    },
+    {
+     "name": "error",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 20,
+     "extension": false
+    }
+   ]
+  },
+  "MISSION_COUNT": {
+   "id": 44,
+   "crc_extra": 221,
+   "min_len": 4,
+   "max_len": 5,
+   "fields": [
+    {
+     "name": "count",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 0,
+     "extension": false
+    },
+    {
+     "name": "target_system",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 2,
+     "extension": false
+    },
+    {
+     "name": "target_component",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 3,
+     "extension": false
+    },
+    {
+     "name": "mission_type",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 4,
+     "extension": true
+    }
+   ]
+  },
+  "MISSION_REQUEST": {
+   "id": 40,
+   "crc_extra": 230,
+   "min_len": 4,
+   "max_len": 5,
+   "fields": [
+    {
+     "name": "seq",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 0,
+     "extension": false
+    },
+    {
+     "name": "target_system",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 2,
+     "extension": false
+    },
+    {
+     "name": "target_component",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 3,
+     "extension": false
+    },
+    {
+     "name": "mission_type",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 4,
+     "extension": true
+    }
+   ]
+  },
+  "MISSION_REQUEST_INT": {
+   "id": 51,
+   "crc_extra": 196,
+   "min_len": 4,
+   "max_len": 5,
+   "fields": [
+    {
+     "name": "seq",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 0,
+     "extension": false
+    },
+    {
+     "name": "target_system",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 2,
+     "extension": false
+    },
+    {
+     "name": "target_component",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 3,
+     "extension": false
+    },
+    {
+     "name": "mission_type",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 4,
+     "extension": true
+    }
+   ]
+  },
+  "MISSION_ITEM_INT": {
+   "id": 73,
+   "crc_extra": 38,
+   "min_len": 37,
+   "max_len": 38,
+   "fields": [
+    {
+     "name": "param1",
+     "type": "float",
+     "array": null,
+     "offset": 0,
+     "extension": false
+    },
+    {
+     "name": "param2",
+     "type": "float",
+     "array": null,
+     "offset": 4,
+     "extension": false
+    },
+    {
+     "name": "param3",
+     "type": "float",
+     "array": null,
+     "offset": 8,
+     "extension": false
+    },
+    {
+     "name": "param4",
+     "type": "float",
+     "array": null,
+     "offset": 12,
+     "extension": false
+    },
+    {
+     "name": "x",
+     "type": "int32_t",
+     "array": null,
+     "offset": 16,
+     "extension": false
+    },
+    {
+     "name": "y",
+     "type": "int32_t",
+     "array": null,
+     "offset": 20,
+     "extension": false
+    },
+    {
+     "name": "z",
+     "type": "float",
+     "array": null,
+     "offset": 24,
+     "extension": false
+    },
+    {
+     "name": "seq",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 28,
+     "extension": false
+    },
+    {
+     "name": "command",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 30,
+     "extension": false
+    },
+    {
+     "name": "target_system",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 32,
+     "extension": false
+    },
+    {
+     "name": "target_component",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 33,
+     "extension": false
+    },
+    {
+     "name": "frame",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 34,
+     "extension": false
+    },
+    {
+     "name": "current",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 35,
+     "extension": false
+    },
+    {
+     "name": "autocontinue",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 36,
+     "extension": false
+    },
+    {
+     "name": "mission_type",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 37,
+     "extension": true
+    }
+   ]
+  },
+  "MISSION_ACK": {
+   "id": 47,
+   "crc_extra": 153,
+   "min_len": 3,
+   "max_len": 4,
+   "fields": [
+    {
+     "name": "target_system",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 0,
+     "extension": false
+    },
+    {
+     "name": "target_component",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 1,
+     "extension": false
+    },
+    {
+     "name": "type",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 2,
+     "extension": false
+    },
+    {
+     "name": "mission_type",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 3,
+     "extension": true
+    }
+   ]
+  },
+  "MISSION_CURRENT": {
+   "id": 42,
+   "crc_extra": 28,
+   "min_len": 2,
+   "max_len": 6,
+   "fields": [
+    {
+     "name": "seq",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 0,
+     "extension": false
+    },
+    {
+     "name": "total",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 2,
+     "extension": true
+    },
+    {
+     "name": "mission_state",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 4,
+     "extension": true
+    },
+    {
+     "name": "mission_mode",
+     "type": "uint8_t",
+     "array": null,
+     "offset": 5,
+     "extension": true
+    }
+   ]
+  },
+  "AUTOPILOT_VERSION": {
+   "id": 148,
+   "crc_extra": 178,
+   "min_len": 60,
+   "max_len": 78,
+   "fields": [
+    {
+     "name": "capabilities",
+     "type": "uint64_t",
+     "array": null,
+     "offset": 0,
+     "extension": false
+    },
+    {
+     "name": "uid",
+     "type": "uint64_t",
+     "array": null,
+     "offset": 8,
+     "extension": false
+    },
+    {
+     "name": "flight_sw_version",
+     "type": "uint32_t",
+     "array": null,
+     "offset": 16,
+     "extension": false
+    },
+    {
+     "name": "middleware_sw_version",
+     "type": "uint32_t",
+     "array": null,
+     "offset": 20,
+     "extension": false
+    },
+    {
+     "name": "os_sw_version",
+     "type": "uint32_t",
+     "array": null,
+     "offset": 24,
+     "extension": false
+    },
+    {
+     "name": "board_version",
+     "type": "uint32_t",
+     "array": null,
+     "offset": 28,
+     "extension": false
+    },
+    {
+     "name": "vendor_id",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 32,
+     "extension": false
+    },
+    {
+     "name": "product_id",
+     "type": "uint16_t",
+     "array": null,
+     "offset": 34,
+     "extension": false
+    },
+    {
+     "name": "flight_custom_version",
+     "type": "uint8_t",
+     "array": 8,
+     "offset": 36,
+     "extension": false
+    },
+    {
+     "name": "middleware_custom_version",
+     "type": "uint8_t",
+     "array": 8,
+     "offset": 44,
+     "extension": false
+    },
+    {
+     "name": "os_custom_version",
+     "type": "uint8_t",
+     "array": 8,
+     "offset": 52,
+     "extension": false
+    },
+    {
+     "name": "uid2",
+     "type": "uint8_t",
+     "array": 18,
+     "offset": 60,
+     "extension": true
+    }
+   ]
+  }
+ },
+ "frames": [
+  {
+   "name": "heartbeat_gcs",
+   "msg": "HEARTBEAT",
+   "msgid": 0,
+   "sysid": 255,
+   "compid": 190,
+   "seq": 0,
+   "payload_len": 9,
+   "truncated": false,
+   "fields": {
+    "type": 6,
+    "autopilot": 8,
+    "base_mode": 0,
+    "custom_mode": 0,
+    "system_status": 4,
+    "mavlink_version": 3
+   },
+   "float_bits": {},
+   "hex": "fd09000000ffbe0000000000000006080004033d48",
+   "note": "The phone's own heartbeat: MAV_TYPE_GCS, MAV_AUTOPILOT_INVALID."
+  },
+  {
+   "name": "heartbeat_ardupilot_guided_armed",
+   "msg": "HEARTBEAT",
+   "msgid": 0,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 17,
+   "payload_len": 9,
+   "truncated": false,
+   "fields": {
+    "type": 2,
+    "autopilot": 3,
+    "base_mode": 217,
+    "custom_mode": 4,
+    "system_status": 4,
+    "mavlink_version": 3
+   },
+   "float_bits": {},
+   "hex": "fd090000110101000000040000000203d904035549",
+   "note": "ArduCopter in GUIDED, armed, flying."
+  },
+  {
+   "name": "heartbeat_px4_mission_armed",
+   "msg": "HEARTBEAT",
+   "msgid": 0,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 200,
+   "payload_len": 9,
+   "truncated": false,
+   "fields": {
+    "type": 2,
+    "autopilot": 12,
+    "base_mode": 157,
+    "custom_mode": 67371008,
+    "system_status": 4,
+    "mavlink_version": 3
+   },
+   "float_bits": {},
+   "hex": "fd090000c8010100000000000404020c9d04038d43",
+   "note": "PX4 in AUTO.MISSION, armed: custom_mode packs main mode 4 in byte 2 and sub mode 4 in byte 3."
+  },
+  {
+   "name": "sys_status",
+   "msg": "SYS_STATUS",
+   "msgid": 1,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 18,
+   "payload_len": 31,
+   "truncated": true,
+   "fields": {
+    "onboard_control_sensors_present": 308345903,
+    "onboard_control_sensors_enabled": 308345903,
+    "onboard_control_sensors_health": 308345903,
+    "load": 312,
+    "voltage_battery": 15800,
+    "current_battery": 1530,
+    "battery_remaining": 76,
+    "drop_rate_comm": 0,
+    "errors_comm": 0,
+    "errors_count1": 0,
+    "errors_count2": 0,
+    "errors_count3": 0,
+    "errors_count4": 0,
+    "onboard_control_sensors_present_extended": 0,
+    "onboard_control_sensors_enabled_extended": 0,
+    "onboard_control_sensors_health_extended": 0
+   },
+   "float_bits": {},
+   "hex": "fd1f00001201010100002ffc60122ffc60122ffc60123801b83dfa050000000000000000000000004c92da",
+   "note": "Extension fields are zero, so the payload is truncated to 31 bytes."
+  },
+  {
+   "name": "sys_status_battery_unknown",
+   "msg": "SYS_STATUS",
+   "msgid": 1,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 19,
+   "payload_len": 32,
+   "truncated": true,
+   "fields": {
+    "onboard_control_sensors_present": 308345903,
+    "onboard_control_sensors_enabled": 0,
+    "onboard_control_sensors_health": 0,
+    "load": 0,
+    "voltage_battery": 65535,
+    "current_battery": -1,
+    "battery_remaining": -1,
+    "drop_rate_comm": 0,
+    "errors_comm": 0,
+    "errors_count1": 0,
+    "errors_count2": 0,
+    "errors_count3": 0,
+    "errors_count4": 0,
+    "onboard_control_sensors_present_extended": 1,
+    "onboard_control_sensors_enabled_extended": 0,
+    "onboard_control_sensors_health_extended": 0
+   },
+   "float_bits": {},
+   "hex": "fd2000001301010100002ffc601200000000000000000000ffffffff000000000000000000000000ff01abc4",
+   "note": "battery_remaining -1 and voltage_battery UINT16_MAX mean unknown; a nonzero extension keeps 43 bytes."
+  },
+  {
+   "name": "battery_status",
+   "msg": "BATTERY_STATUS",
+   "msgid": 147,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 20,
+   "payload_len": 41,
+   "truncated": true,
+   "fields": {
+    "id": 0,
+    "battery_function": 1,
+    "type": 1,
+    "temperature": 3150,
+    "voltages": [
+     4200,
+     4190,
+     4180,
+     4170,
+     65535,
+     65535,
+     65535,
+     65535,
+     65535,
+     65535
+    ],
+    "current_battery": 1530,
+    "current_consumed": 812,
+    "energy_consumed": -1,
+    "battery_remaining": 74,
+    "time_remaining": 0,
+    "charge_state": 1,
+    "voltages_ext": [
+     0,
+     0,
+     0,
+     0
+    ],
+    "mode": 0,
+    "fault_bitmask": 0
+   },
+   "float_bits": {},
+   "hex": "fd2900001401019300002c030000ffffffff4e0c68105e1054104a10fffffffffffffffffffffffffa050001014a00000000019b5e",
+   "note": "Battery 0, four cells reported; unused cells are UINT16_MAX."
+  },
+  {
+   "name": "battery_status_second_pack",
+   "msg": "BATTERY_STATUS",
+   "msgid": 147,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 21,
+   "payload_len": 36,
+   "truncated": true,
+   "fields": {
+    "id": 1,
+    "battery_function": 1,
+    "type": 1,
+    "temperature": 32767,
+    "voltages": [
+     65535,
+     65535,
+     65535,
+     65535,
+     65535,
+     65535,
+     65535,
+     65535,
+     65535,
+     65535
+    ],
+    "current_battery": -1,
+    "current_consumed": -1,
+    "energy_consumed": -1,
+    "battery_remaining": -1,
+    "time_remaining": 0,
+    "charge_state": 0,
+    "voltages_ext": [
+     0,
+     0,
+     0,
+     0
+    ],
+    "mode": 0,
+    "fault_bitmask": 0
+   },
+   "float_bits": {},
+   "hex": "fd240000150101930000ffffffffffffffffff7fffffffffffffffffffffffffffffffffffffffffffff010101ff7786",
+   "note": "A second battery instance; the phone reads instance 0 only."
+  },
+  {
+   "name": "gps_raw_int",
+   "msg": "GPS_RAW_INT",
+   "msgid": 24,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 22,
+   "payload_len": 43,
+   "truncated": true,
+   "fields": {
+    "time_usec": 123456789012,
+    "fix_type": 3,
+    "lat": 406894000,
+    "lon": -1117310000,
+    "alt": 1600120,
+    "eph": 121,
+    "epv": 180,
+    "vel": 310,
+    "cog": 9000,
+    "satellites_visible": 14,
+    "alt_ellipsoid": 1585300,
+    "h_acc": 900,
+    "v_acc": 1400,
+    "vel_acc": 200,
+    "hdg_acc": 0,
+    "yaw": 0
+   },
+   "float_bits": {},
+   "hex": "fd2b0000160101180000141a99be1c000000b0b54018d03367bd786a18007900b40036012823030e943018008403000078050000c83ce2",
+   "note": "3D fix, 14 satellites; negative longitude."
+  },
+  {
+   "name": "gps_raw_int_no_fix",
+   "msg": "GPS_RAW_INT",
+   "msgid": 24,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 23,
+   "payload_len": 30,
+   "truncated": true,
+   "fields": {
+    "time_usec": 5000000,
+    "fix_type": 1,
+    "lat": 0,
+    "lon": 0,
+    "alt": 0,
+    "eph": 65535,
+    "epv": 65535,
+    "vel": 65535,
+    "cog": 65535,
+    "satellites_visible": 255,
+    "alt_ellipsoid": 0,
+    "h_acc": 0,
+    "v_acc": 0,
+    "vel_acc": 0,
+    "hdg_acc": 0,
+    "yaw": 0
+   },
+   "float_bits": {},
+   "hex": "fd1e0000170101180000404b4c0000000000000000000000000000000000ffffffffffffffff01ff1347",
+   "note": "No fix: satellites_visible 255 means unknown."
+  },
+  {
+   "name": "global_position_int",
+   "msg": "GLOBAL_POSITION_INT",
+   "msgid": 33,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 24,
+   "payload_len": 28,
+   "truncated": false,
+   "fields": {
+    "time_boot_ms": 184200,
+    "lat": 406894450,
+    "lon": -1117306000,
+    "alt": 1610050,
+    "relative_alt": 10050,
+    "vx": 300,
+    "vy": -12,
+    "vz": -5,
+    "hdg": 9000
+   },
+   "float_bits": {},
+   "hex": "fd1c000018010121000088cf020072b74018704367bd42911800422700002c01f4fffbff2823d5f0",
+   "note": "relative_alt is millimetres above home; hdg is centidegrees."
+  },
+  {
+   "name": "global_position_int_below_home_heading_unknown",
+   "msg": "GLOBAL_POSITION_INT",
+   "msgid": 33,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 25,
+   "payload_len": 28,
+   "truncated": false,
+   "fields": {
+    "time_boot_ms": 4200,
+    "lat": 406894000,
+    "lon": -1117310000,
+    "alt": 1599750,
+    "relative_alt": -250,
+    "vx": 0,
+    "vy": 0,
+    "vz": 0,
+    "hdg": 65535
+   },
+   "float_bits": {},
+   "hex": "fd1c000019010121000068100000b0b54018d03367bd0669180006ffffff000000000000ffff12fc",
+   "note": "Negative relative_alt; hdg UINT16_MAX means unknown."
+  },
+  {
+   "name": "home_position",
+   "msg": "HOME_POSITION",
+   "msgid": 242,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 26,
+   "payload_len": 28,
+   "truncated": true,
+   "fields": {
+    "latitude": 406894000,
+    "longitude": -1117310000,
+    "altitude": 1600000,
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.0,
+    "q": [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "approach_x": 0.0,
+    "approach_y": 0.0,
+    "approach_z": 0.0,
+    "time_usec": 0
+   },
+   "float_bits": {
+    "x": "00000000",
+    "y": "00000000",
+    "z": "00000000",
+    "q": [
+     "3f800000",
+     "00000000",
+     "00000000",
+     "00000000"
+    ],
+    "approach_x": "00000000",
+    "approach_y": "00000000",
+    "approach_z": "00000000"
+   },
+   "hex": "fd1c00001a0101f20000b0b54018d03367bd006a18000000000000000000000000000000803fef85",
+   "note": "Home with an identity quaternion; time_usec (an extension) is zero, so the frame is truncated."
+  },
+  {
+   "name": "extended_sys_state_in_air",
+   "msg": "EXTENDED_SYS_STATE",
+   "msgid": 245,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 27,
+   "payload_len": 2,
+   "truncated": false,
+   "fields": {
+    "vtol_state": 3,
+    "landed_state": 2
+   },
+   "float_bits": {},
+   "hex": "fd0200001b0101f500000302437a",
+   "note": "ArduCopter reports MAV_VTOL_STATE_MC (3); landed_state 2 is IN_AIR."
+  },
+  {
+   "name": "extended_sys_state_on_ground",
+   "msg": "EXTENDED_SYS_STATE",
+   "msgid": 245,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 28,
+   "payload_len": 2,
+   "truncated": false,
+   "fields": {
+    "vtol_state": 0,
+    "landed_state": 1
+   },
+   "float_bits": {},
+   "hex": "fd0200001c0101f500000001ad56",
+   "note": "PX4 multicopter: vtol_state 0, landed_state 1 is ON_GROUND."
+  },
+  {
+   "name": "statustext_prearm",
+   "msg": "STATUSTEXT",
+   "msgid": 253,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 29,
+   "payload_len": 31,
+   "truncated": true,
+   "fields": {
+    "severity": 2,
+    "text": "PreArm: Need Position Estimate",
+    "id": 0,
+    "chunk_seq": 0
+   },
+   "float_bits": {},
+   "hex": "fd1f00001d0101fd00000250726541726d3a204e65656420506f736974696f6e20457374696d617465e200",
+   "note": "Trailing zero bytes of the text are truncated from the payload; a decoder zero-fills them."
+  },
+  {
+   "name": "statustext_full_50",
+   "msg": "STATUSTEXT",
+   "msgid": 253,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 30,
+   "payload_len": 51,
+   "truncated": true,
+   "fields": {
+    "severity": 6,
+    "text": "ArduCopter V4.6.3 (92b0cd78) quad frame, 4 motors ",
+    "id": 0,
+    "chunk_seq": 0
+   },
+   "float_bits": {},
+   "hex": "fd3300001e0101fd00000641726475436f707465722056342e362e3320283932623063643738292071756164206672616d652c2034206d6f746f7273204d0c",
+   "note": "Exactly 50 characters: the text has no terminating NUL."
+  },
+  {
+   "name": "command_long_arm",
+   "msg": "COMMAND_LONG",
+   "msgid": 76,
+   "sysid": 255,
+   "compid": 190,
+   "seq": 1,
+   "payload_len": 32,
+   "truncated": true,
+   "fields": {
+    "target_system": 1,
+    "target_component": 1,
+    "command": 400,
+    "confirmation": 0,
+    "param1": 1.0,
+    "param2": 0.0,
+    "param3": 0.0,
+    "param4": 0.0,
+    "param5": 0.0,
+    "param6": 0.0,
+    "param7": 0.0
+   },
+   "float_bits": {
+    "param1": "3f800000",
+    "param2": "00000000",
+    "param3": "00000000",
+    "param4": "00000000",
+    "param5": "00000000",
+    "param6": "00000000",
+    "param7": "00000000"
+   },
+   "hex": "fd20000001ffbe4c00000000803f000000000000000000000000000000000000000000000000900101017004",
+   "note": "MAV_CMD_COMPONENT_ARM_DISARM; confirmation 0 is the last byte, so it is truncated."
+  },
+  {
+   "name": "command_long_set_message_interval",
+   "msg": "COMMAND_LONG",
+   "msgid": 76,
+   "sysid": 255,
+   "compid": 190,
+   "seq": 2,
+   "payload_len": 32,
+   "truncated": true,
+   "fields": {
+    "target_system": 1,
+    "target_component": 1,
+    "command": 511,
+    "confirmation": 0,
+    "param1": 33.0,
+    "param2": 200000.0,
+    "param3": 0.0,
+    "param4": 0.0,
+    "param5": 0.0,
+    "param6": 0.0,
+    "param7": 0.0
+   },
+   "float_bits": {
+    "param1": "42040000",
+    "param2": "48435000",
+    "param3": "00000000",
+    "param4": "00000000",
+    "param5": "00000000",
+    "param6": "00000000",
+    "param7": "00000000"
+   },
+   "hex": "fd20000002ffbe4c000000000442005043480000000000000000000000000000000000000000ff01010191b4",
+   "note": "MAV_CMD_SET_MESSAGE_INTERVAL for GLOBAL_POSITION_INT at 5 Hz."
+  },
+  {
+   "name": "command_long_px4_hold_retry",
+   "msg": "COMMAND_LONG",
+   "msgid": 76,
+   "sysid": 255,
+   "compid": 190,
+   "seq": 3,
+   "payload_len": 33,
+   "truncated": false,
+   "fields": {
+    "target_system": 1,
+    "target_component": 1,
+    "command": 176,
+    "confirmation": 1,
+    "param1": 1.0,
+    "param2": 4.0,
+    "param3": 3.0,
+    "param4": 0.0,
+    "param5": 0.0,
+    "param6": 0.0,
+    "param7": 0.0
+   },
+   "float_bits": {
+    "param1": "3f800000",
+    "param2": "40800000",
+    "param3": "40400000",
+    "param4": "00000000",
+    "param5": "00000000",
+    "param6": "00000000",
+    "param7": "00000000"
+   },
+   "hex": "fd21000003ffbe4c00000000803f000080400000404000000000000000000000000000000000b000010101c64a",
+   "note": "MAV_CMD_DO_SET_MODE to PX4 AUTO.LOITER, second try (confirmation 1)."
+  },
+  {
+   "name": "command_long_land_third_try",
+   "msg": "COMMAND_LONG",
+   "msgid": 76,
+   "sysid": 255,
+   "compid": 190,
+   "seq": 255,
+   "payload_len": 33,
+   "truncated": false,
+   "fields": {
+    "target_system": 1,
+    "target_component": 1,
+    "command": 21,
+    "confirmation": 2,
+    "param1": 0.0,
+    "param2": 0.0,
+    "param3": 0.0,
+    "param4": 0.0,
+    "param5": 0.0,
+    "param6": 0.0,
+    "param7": 0.0
+   },
+   "float_bits": {
+    "param1": "00000000",
+    "param2": "00000000",
+    "param3": "00000000",
+    "param4": "00000000",
+    "param5": "00000000",
+    "param6": "00000000",
+    "param7": "00000000"
+   },
+   "hex": "fd210000ffffbe4c0000000000000000000000000000000000000000000000000000000000001500010102d554",
+   "note": "MAV_CMD_NAV_LAND, third try; sequence number 255 (the next frame wraps to 0)."
+  },
+  {
+   "name": "command_long_request_home",
+   "msg": "COMMAND_LONG",
+   "msgid": 76,
+   "sysid": 255,
+   "compid": 190,
+   "seq": 0,
+   "payload_len": 32,
+   "truncated": true,
+   "fields": {
+    "target_system": 1,
+    "target_component": 1,
+    "command": 512,
+    "confirmation": 0,
+    "param1": 242.0,
+    "param2": 0.0,
+    "param3": 0.0,
+    "param4": 0.0,
+    "param5": 0.0,
+    "param6": 0.0,
+    "param7": 0.0
+   },
+   "float_bits": {
+    "param1": "43720000",
+    "param2": "00000000",
+    "param3": "00000000",
+    "param4": "00000000",
+    "param5": "00000000",
+    "param6": "00000000",
+    "param7": "00000000"
+   },
+   "hex": "fd20000000ffbe4c00000000724300000000000000000000000000000000000000000000000000020101d108",
+   "note": "MAV_CMD_REQUEST_MESSAGE for HOME_POSITION; sequence number 0 after the wrap."
+  },
+  {
+   "name": "command_ack_accepted_ardupilot",
+   "msg": "COMMAND_ACK",
+   "msgid": 77,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 31,
+   "payload_len": 10,
+   "truncated": false,
+   "fields": {
+    "command": 400,
+    "result": 0,
+    "progress": 0,
+    "result_param2": 0,
+    "target_system": 255,
+    "target_component": 190
+   },
+   "float_bits": {},
+   "hex": "fd0a00001f01014d00009001000000000000ffbedeab",
+   "note": "ArduCopter addresses the ACK to the sender (extension fields target_system and target_component)."
+  },
+  {
+   "name": "command_ack_denied_px4",
+   "msg": "COMMAND_ACK",
+   "msgid": 77,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 32,
+   "payload_len": 10,
+   "truncated": false,
+   "fields": {
+    "command": 400,
+    "result": 2,
+    "progress": 0,
+    "result_param2": 0,
+    "target_system": 255,
+    "target_component": 190
+   },
+   "float_bits": {},
+   "hex": "fd0a00002001014d00009001020000000000ffbe52d9",
+   "note": "PX4 arm refused by its preflight checks: MAV_RESULT_DENIED."
+  },
+  {
+   "name": "command_ack_no_target",
+   "msg": "COMMAND_ACK",
+   "msgid": 77,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 33,
+   "payload_len": 1,
+   "truncated": true,
+   "fields": {
+    "command": 176,
+    "result": 0,
+    "progress": 0,
+    "result_param2": 0,
+    "target_system": 0,
+    "target_component": 0
+   },
+   "float_bits": {},
+   "hex": "fd0100002101014d0000b0ccf2",
+   "note": "All extension fields zero: the payload is 3 bytes."
+  },
+  {
+   "name": "param_request_read_by_name",
+   "msg": "PARAM_REQUEST_READ",
+   "msgid": 20,
+   "sysid": 255,
+   "compid": 190,
+   "seq": 4,
+   "payload_len": 17,
+   "truncated": true,
+   "fields": {
+    "target_system": 1,
+    "target_component": 1,
+    "param_id": "FS_GCS_ENABLE",
+    "param_index": -1
+   },
+   "float_bits": {},
+   "hex": "fd11000004ffbe140000ffff010146535f4743535f454e41424c45ffe6",
+   "note": "param_index -1 selects the name; trailing NULs of param_id are truncated."
+  },
+  {
+   "name": "param_request_read_16_chars",
+   "msg": "PARAM_REQUEST_READ",
+   "msgid": 20,
+   "sysid": 255,
+   "compid": 190,
+   "seq": 5,
+   "payload_len": 20,
+   "truncated": false,
+   "fields": {
+    "target_system": 1,
+    "target_component": 1,
+    "param_id": "FENCE_ALT_MAX_TP",
+    "param_index": -1
+   },
+   "float_bits": {},
+   "hex": "fd14000005ffbe140000ffff010146454e43455f414c545f4d41585f54508ea1",
+   "note": "A 16-character name has no terminating NUL."
+  },
+  {
+   "name": "param_value_ardupilot_int8",
+   "msg": "PARAM_VALUE",
+   "msgid": 22,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 34,
+   "payload_len": 25,
+   "truncated": false,
+   "fields": {
+    "param_id": "FS_GCS_ENABLE",
+    "param_value": 1.0,
+    "param_type": 2,
+    "param_count": 1250,
+    "param_index": 65535
+   },
+   "float_bits": {
+    "param_value": "3f800000"
+   },
+   "hex": "fd1900002201011600000000803fe204ffff46535f4743535f454e41424c4500000002b5a3",
+   "note": "ArduCopter: INT8 sent as a C cast to float; by-name reads echo index -1 (65535).",
+   "value": {
+    "encoding": "c_cast",
+    "number": 1.0
+   }
+  },
+  {
+   "name": "param_value_ardupilot_real32",
+   "msg": "PARAM_VALUE",
+   "msgid": 22,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 35,
+   "payload_len": 25,
+   "truncated": false,
+   "fields": {
+    "param_id": "FS_GCS_TIMEOUT",
+    "param_value": 5.0,
+    "param_type": 9,
+    "param_count": 1250,
+    "param_index": 65535
+   },
+   "float_bits": {
+    "param_value": "40a00000"
+   },
+   "hex": "fd1900002301011600000000a040e204ffff46535f4743535f54494d454f5554000009c241",
+   "note": "ArduCopter REAL32.",
+   "value": {
+    "encoding": "c_cast",
+    "number": 5.0
+   }
+  },
+  {
+   "name": "param_value_px4_int32_bytewise",
+   "msg": "PARAM_VALUE",
+   "msgid": 22,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 36,
+   "payload_len": 25,
+   "truncated": false,
+   "fields": {
+    "param_id": "NAV_DLL_ACT",
+    "param_value": 2.802596928649634e-45,
+    "param_type": 6,
+    "param_count": 1027,
+    "param_index": 611
+   },
+   "float_bits": {
+    "param_value": "00000002"
+   },
+   "hex": "fd19000024010116000002000000030463024e41565f444c4c5f4143540000000000069339",
+   "note": "PX4: the int32 2 is copied byte-wise into the float field (a subnormal float).",
+   "value": {
+    "encoding": "bytewise",
+    "int": 2
+   }
+  },
+  {
+   "name": "param_value_px4_int32_negative_bytewise",
+   "msg": "PARAM_VALUE",
+   "msgid": 22,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 37,
+   "payload_len": 25,
+   "truncated": false,
+   "fields": {
+    "param_id": "FR_SYNTH_NEG",
+    "param_value": "NaN",
+    "param_type": 6,
+    "param_count": 1027,
+    "param_index": 12
+   },
+   "float_bits": {
+    "param_value": "ffffffff"
+   },
+   "hex": "fd190000250101160000ffffffff03040c0046525f53594e54485f4e45470000000006fbd7",
+   "note": "Synthetic name. The int32 -1 byte-wise is the float bit pattern ffffffff, a NaN: a decoder must keep the bits and never canonicalise the NaN.",
+   "value": {
+    "encoding": "bytewise",
+    "int": -1
+   }
+  },
+  {
+   "name": "param_value_px4_real32",
+   "msg": "PARAM_VALUE",
+   "msgid": 22,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 38,
+   "payload_len": 25,
+   "truncated": false,
+   "fields": {
+    "param_id": "GF_MAX_HOR_DIST",
+    "param_value": 120.0,
+    "param_type": 9,
+    "param_count": 1027,
+    "param_index": 402
+   },
+   "float_bits": {
+    "param_value": "42f00000"
+   },
+   "hex": "fd1900002601011600000000f0420304920147465f4d41585f484f525f4449535400094113",
+   "note": "PX4 REAL32.",
+   "value": {
+    "encoding": "c_cast",
+    "number": 120.0
+   }
+  },
+  {
+   "name": "param_error_does_not_exist",
+   "msg": "PARAM_ERROR",
+   "msgid": 345,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 39,
+   "payload_len": 21,
+   "truncated": false,
+   "fields": {
+    "target_system": 255,
+    "target_component": 190,
+    "param_id": "SYSID_MYGCS",
+    "param_index": -1,
+    "error": 1
+   },
+   "float_bits": {},
+   "hex": "fd150000270101590100ffffffbe53595349445f4d59474353000000000001312d",
+   "note": "ArduCopter 4.7.3 answers a read of an unknown name with MAV_PARAM_ERROR_DOES_NOT_EXIST."
+  },
+  {
+   "name": "mission_count",
+   "msg": "MISSION_COUNT",
+   "msgid": 44,
+   "sysid": 255,
+   "compid": 190,
+   "seq": 6,
+   "payload_len": 4,
+   "truncated": true,
+   "fields": {
+    "target_system": 1,
+    "target_component": 1,
+    "count": 7,
+    "mission_type": 0
+   },
+   "float_bits": {},
+   "hex": "fd04000006ffbe2c0000070001016094",
+   "note": "Upload start; mission_type 0 is MAV_MISSION_TYPE_MISSION."
+  },
+  {
+   "name": "mission_request_ardupilot",
+   "msg": "MISSION_REQUEST",
+   "msgid": 40,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 40,
+   "payload_len": 4,
+   "truncated": true,
+   "fields": {
+    "target_system": 255,
+    "target_component": 190,
+    "seq": 0,
+    "mission_type": 0
+   },
+   "float_bits": {},
+   "hex": "fd0400002801012800000000ffbe2fe5",
+   "note": "ArduCopter requests items with MISSION_REQUEST (40)."
+  },
+  {
+   "name": "mission_request_int_px4",
+   "msg": "MISSION_REQUEST_INT",
+   "msgid": 51,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 41,
+   "payload_len": 4,
+   "truncated": true,
+   "fields": {
+    "target_system": 255,
+    "target_component": 190,
+    "seq": 3,
+    "mission_type": 0
+   },
+   "float_bits": {},
+   "hex": "fd0400002901013300000300ffbe7653",
+   "note": "PX4 requests items with MISSION_REQUEST_INT (51)."
+  },
+  {
+   "name": "mission_item_int_home_placeholder",
+   "msg": "MISSION_ITEM_INT",
+   "msgid": 73,
+   "sysid": 255,
+   "compid": 190,
+   "seq": 7,
+   "payload_len": 37,
+   "truncated": true,
+   "fields": {
+    "target_system": 1,
+    "target_component": 1,
+    "seq": 0,
+    "frame": 0,
+    "command": 16,
+    "current": 0,
+    "autocontinue": 1,
+    "param1": 0.0,
+    "param2": 0.0,
+    "param3": 0.0,
+    "param4": 0.0,
+    "x": 406894000,
+    "y": -1117310000,
+    "z": 0.0,
+    "mission_type": 0
+   },
+   "float_bits": {
+    "param1": "00000000",
+    "param2": "00000000",
+    "param3": "00000000",
+    "param4": "00000000",
+    "z": "00000000"
+   },
+   "hex": "fd25000007ffbe49000000000000000000000000000000000000b0b54018d03367bd0000000000001000010100000148ba",
+   "note": "ArduPilot sequence 0: the home placeholder."
+  },
+  {
+   "name": "mission_item_int_takeoff",
+   "msg": "MISSION_ITEM_INT",
+   "msgid": 73,
+   "sysid": 255,
+   "compid": 190,
+   "seq": 8,
+   "payload_len": 37,
+   "truncated": true,
+   "fields": {
+    "target_system": 1,
+    "target_component": 1,
+    "seq": 1,
+    "frame": 3,
+    "command": 22,
+    "current": 0,
+    "autocontinue": 1,
+    "param1": 0.0,
+    "param2": 0.0,
+    "param3": 0.0,
+    "param4": "NaN",
+    "x": 406894000,
+    "y": -1117310000,
+    "z": 10.0,
+    "mission_type": 0
+   },
+   "float_bits": {
+    "param1": "00000000",
+    "param2": "00000000",
+    "param3": "00000000",
+    "param4": "7fc00000",
+    "z": "41200000"
+   },
+   "hex": "fd25000008ffbe4900000000000000000000000000000000c07fb0b54018d03367bd000020410100160001010300011dc9",
+   "note": "NAV_TAKEOFF to 10 m relative to home; yaw NaN keeps the autopilot's heading behaviour."
+  },
+  {
+   "name": "mission_item_int_waypoint",
+   "msg": "MISSION_ITEM_INT",
+   "msgid": 73,
+   "sysid": 255,
+   "compid": 190,
+   "seq": 9,
+   "payload_len": 37,
+   "truncated": true,
+   "fields": {
+    "target_system": 1,
+    "target_component": 1,
+    "seq": 3,
+    "frame": 3,
+    "command": 16,
+    "current": 0,
+    "autocontinue": 1,
+    "param1": 0.0,
+    "param2": 0.0,
+    "param3": 0.0,
+    "param4": "NaN",
+    "x": 406894450,
+    "y": -1117310000,
+    "z": 10.0,
+    "mission_type": 0
+   },
+   "float_bits": {
+    "param1": "00000000",
+    "param2": "00000000",
+    "param3": "00000000",
+    "param4": "7fc00000",
+    "z": "41200000"
+   },
+   "hex": "fd25000009ffbe4900000000000000000000000000000000c07f72b74018d03367bd00002041030010000101030001bb2e",
+   "note": "NAV_WAYPOINT in MAV_FRAME_GLOBAL_RELATIVE_ALT."
+  },
+  {
+   "name": "mission_item_int_change_speed",
+   "msg": "MISSION_ITEM_INT",
+   "msgid": 73,
+   "sysid": 255,
+   "compid": 190,
+   "seq": 10,
+   "payload_len": 37,
+   "truncated": true,
+   "fields": {
+    "target_system": 1,
+    "target_component": 1,
+    "seq": 2,
+    "frame": 2,
+    "command": 178,
+    "current": 0,
+    "autocontinue": 1,
+    "param1": 1.0,
+    "param2": 3.0,
+    "param3": -1.0,
+    "param4": 0.0,
+    "x": 0,
+    "y": 0,
+    "z": 0.0,
+    "mission_type": 0
+   },
+   "float_bits": {
+    "param1": "3f800000",
+    "param2": "40400000",
+    "param3": "bf800000",
+    "param4": "00000000",
+    "z": "00000000"
+   },
+   "hex": "fd2500000affbe4900000000803f00004040000080bf000000000000000000000000000000000200b200010102000193ef",
+   "note": "DO_CHANGE_SPEED in MAV_FRAME_MISSION: ground speed 3 m/s, throttle unchanged."
+  },
+  {
+   "name": "mission_item_int_return",
+   "msg": "MISSION_ITEM_INT",
+   "msgid": 73,
+   "sysid": 255,
+   "compid": 190,
+   "seq": 11,
+   "payload_len": 37,
+   "truncated": true,
+   "fields": {
+    "target_system": 1,
+    "target_component": 1,
+    "seq": 6,
+    "frame": 2,
+    "command": 20,
+    "current": 0,
+    "autocontinue": 1,
+    "param1": 0.0,
+    "param2": 0.0,
+    "param3": 0.0,
+    "param4": 0.0,
+    "x": 0,
+    "y": 0,
+    "z": 0.0,
+    "mission_type": 0
+   },
+   "float_bits": {
+    "param1": "00000000",
+    "param2": "00000000",
+    "param3": "00000000",
+    "param4": "00000000",
+    "z": "00000000"
+   },
+   "hex": "fd2500000bffbe49000000000000000000000000000000000000000000000000000000000000060014000101020001bc9b",
+   "note": "NAV_RETURN_TO_LAUNCH in MAV_FRAME_MISSION; mission_type 0 is truncated."
+  },
+  {
+   "name": "mission_ack_accepted_px4",
+   "msg": "MISSION_ACK",
+   "msgid": 47,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 42,
+   "payload_len": 2,
+   "truncated": true,
+   "fields": {
+    "target_system": 255,
+    "target_component": 190,
+    "type": 0,
+    "mission_type": 0
+   },
+   "float_bits": {},
+   "hex": "fd0200002a01012f0000ffbed547",
+   "note": "Upload accepted. PX4 1.17 appends opaque_id (a newer extension); see 'extended_frames'."
+  },
+  {
+   "name": "mission_ack_no_space_ardupilot",
+   "msg": "MISSION_ACK",
+   "msgid": 47,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 43,
+   "payload_len": 3,
+   "truncated": true,
+   "fields": {
+    "target_system": 255,
+    "target_component": 190,
+    "type": 4,
+    "mission_type": 0
+   },
+   "float_bits": {},
+   "hex": "fd0300002b01012f0000ffbe048008",
+   "note": "MAV_MISSION_NO_SPACE."
+  },
+  {
+   "name": "mission_current_full",
+   "msg": "MISSION_CURRENT",
+   "msgid": 42,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 44,
+   "payload_len": 6,
+   "truncated": false,
+   "fields": {
+    "seq": 3,
+    "total": 7,
+    "mission_state": 3,
+    "mission_mode": 1
+   },
+   "float_bits": {},
+   "hex": "fd0600002c01012a00000300070003018c1b",
+   "note": "Current item 3 of 7, mission active."
+  },
+  {
+   "name": "mission_current_seq_only",
+   "msg": "MISSION_CURRENT",
+   "msgid": 42,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 45,
+   "payload_len": 1,
+   "truncated": true,
+   "fields": {
+    "seq": 1,
+    "total": 0,
+    "mission_state": 0,
+    "mission_mode": 0
+   },
+   "float_bits": {},
+   "hex": "fd0100002d01012a00000165dd",
+   "note": "Only seq set: the payload is truncated to 1 byte, and a decoder zero-fills the rest."
+  },
+  {
+   "name": "autopilot_version_ardupilot",
+   "msg": "AUTOPILOT_VERSION",
+   "msgid": 148,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 46,
+   "payload_len": 44,
+   "truncated": true,
+   "fields": {
+    "capabilities": 65007,
+    "flight_sw_version": 67503103,
+    "middleware_sw_version": 0,
+    "os_sw_version": 0,
+    "board_version": 0,
+    "flight_custom_version": [
+     57,
+     50,
+     98,
+     48,
+     99,
+     100,
+     55,
+     56
+    ],
+    "middleware_custom_version": [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ],
+    "os_custom_version": [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ],
+    "vendor_id": 0,
+    "product_id": 0,
+    "uid": 0,
+    "uid2": [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ]
+   },
+   "float_bits": {},
+   "hex": "fd2c00002e0101940000effd0000000000000000000000000000ff030604000000000000000000000000000000003932623063643738ed33",
+   "note": "ArduCopter 4.6.3, official (type byte 255)."
+  },
+  {
+   "name": "autopilot_version_px4",
+   "msg": "AUTOPILOT_VERSION",
+   "msgid": 148,
+   "sysid": 1,
+   "compid": 1,
+   "seq": 47,
+   "payload_len": 78,
+   "truncated": false,
+   "fields": {
+    "capabilities": 15935,
+    "flight_sw_version": 17891583,
+    "middleware_sw_version": 17891583,
+    "os_sw_version": 184549376,
+    "board_version": 0,
+    "flight_custom_version": [
+     214,
+     241,
+     42,
+     209,
+     0,
+     0,
+     0,
+     0
+    ],
+    "middleware_custom_version": [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ],
+    "os_custom_version": [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ],
+    "vendor_id": 0,
+    "product_id": 0,
+    "uid": 283686952306183,
+    "uid2": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18
+    ]
+   },
+   "float_bits": {},
+   "hex": "fd4e00002f01019400003f3e0000000000000706050403020100ff001101ff0011010000000b0000000000000000d6f12ad100000000000000000000000000000000000000000102030405060708090a0b0c0d0e0f101112ce38",
+   "note": "PX4 1.17.0; uid2 set, so the frame is not truncated."
+  }
+ ],
+ "bad_frames": [
+  {
+   "name": "bad_crc",
+   "hex": "fd090000110101000000040000000203d9040355b6",
+   "skip": "the checksum does not match"
+  },
+  {
+   "name": "truncated",
+   "hex": "fd1c000018010121000088cf020072b740187043",
+   "skip": "the buffer ends inside the frame"
+  },
+  {
+   "name": "unknown_message",
+   "hex": "fd08000032010151c3000102030405060708d899",
+   "skip": "message id 50001 is not in the subset, so its checksum cannot be checked: produce nothing and resume the search at the next byte"
+  },
+  {
+   "name": "signed",
+   "hex": "fd090100330101000000040000000203d9040382ee01101112131415161718191a1b",
+   "skip": "incompat flag 0x01 (signed): produce nothing; v1 links are unsigned"
+  },
+  {
+   "name": "unknown_incompat_flag",
+   "hex": "fd090200340101000000040000000203d90403f95d",
+   "skip": "an incompat flag the codec does not know: drop the frame (MAVLink 2 rule)"
+  },
+  {
+   "name": "mavlink1",
+   "hex": "fe0935010100040000000203d904036c5b",
+   "skip": "MAVLink 1 frame (0xFE); v1 speaks MAVLink 2 only"
+  }
+ ],
+ "extended_frames": [
+  {
+   "name": "mission_ack_accepted_px4_extended",
+   "msg": "MISSION_ACK",
+   "hex": "fd0800002a01012f0000ffbe0000019e3c5acc9b",
+   "fields": {
+    "target_system": 255,
+    "target_component": 190,
+    "type": 0,
+    "mission_type": 0
+   },
+   "note": "MISSION_ACK with PX4's opaque_id (mission checksum) appended."
+  },
+  {
+   "name": "mission_current_full_extended",
+   "msg": "MISSION_CURRENT",
+   "hex": "fd1200002c01012a0000030007000301019e3c5a00000000000000006af8",
+   "fields": {
+    "seq": 3,
+    "total": 7,
+    "mission_state": 3,
+    "mission_mode": 1
+   },
+   "note": "MISSION_CURRENT with mission_id, fence_id and rally_points_id appended."
+  }
+ ],
+ "stream": {
+  "hex": "0013fd02fffd090000c8010100000000000404020c9d04038d43fd090000110101000000040000000203d9040355b6fd0a00001f01014d00009001000000000000ffbedeabfd090100330101000000040000000203d9040382ee01101112131415161718191a1bfd0400002801012800000000ffbe2fe5fd08000032010151c3000102030405060708d899fd190000250101160000ffffffff03040c0046525f53594e54485f4e45470000000006fbd7fd1c000018010121000088cf020072b740187043fd1f00001d0101fd00000250726541726d3a204e65656420506f736974696f6e20457374696d617465e200fd0100002d01012a00000165dd",
+  "decodes": [
+   "heartbeat_px4_mission_armed",
+   "command_ack_accepted_ardupilot",
+   "mission_request_ardupilot",
+   "param_value_px4_int32_negative_bytewise",
+   "statustext_prearm",
+   "mission_current_seq_only"
+  ],
+  "note": "Garbage, a bad checksum, a signed frame, an unknown message and a truncated frame sit between good frames. After any frame it cannot accept the parser resumes its search at the byte after that 0xFD (never skipping a length it could not verify), so the truncated frame costs no good frame."
+ }
+}
