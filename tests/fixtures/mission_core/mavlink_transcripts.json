@@ -1,0 +1,8736 @@
+{
+ "v": 1,
+ "generator": "scripts/mission_vectors/mavlink_frames.py",
+ "pymavlink": "2.4.50",
+ "semantics": [
+  "Each transcript runs one client operation ('op') against a scripted vehicle on a virtual clock in milliseconds; t = 0 is the moment the harness calls the op.",
+  "Setup: with 'connected' true the harness first delivers 'setup.heartbeat' from the vehicle (sysid 1, compid 1) and lets the client finish connect before t = 0; the client sends nothing but heartbeats during setup. 'setup.commanded_role' (when present) is the role the phone last commanded before t = 0.",
+  "A step with \"from\": \"vehicle\" is delivered at its t, from 'src' (default sysid 1, compid 1). A step with \"from\": \"phone\" must be sent by the client at its t, within 'timing.tolerance_ms', from sysid 255, compid 190. Steps with equal t happen in list order.",
+  "Phone message matching: every listed field must be equal and every unlisted field must be zero (or empty); floats compare as float32 and \"NaN\" matches any NaN.",
+  "Every message the client sends must match the next phone step, in order, except HEARTBEAT when 'heartbeats' is \"ignore\". With 'heartbeats' \"match\", heartbeats are phone steps like any other. After the last step the client sends nothing (heartbeats aside) until 'end_ms'.",
+  "A \"query\" step reads the client at its t: \"snapshot\" must contain every key of 'expect' with that value (null means unknown); \"statustext\" must equal the list of STATUSTEXT messages received so far.",
+  "'result' (null for observe-only transcripts) is how the op must resolve and when: outcome \"ok\", \"refused\" or \"timeout\" with the listed data. These map to CommandResult ok, refused and timeout of plan section 2.2.",
+  "Retries: a command, a parameter name and MISSION_COUNT are tried up to 'timing.tries' times, 'timing.retry_ms' apart; the op times out 'retry_ms' after the last try. During an upload the op times out 'mission_idle_ms' after the last request. One COMMAND_LONG is outstanding at a time.",
+  "Results not in 'refused' or 'timeout': ACK result 0 (ACCEPTED) is ok. Any other ACK result is refused, never retried. No v1 command expects IN_PROGRESS (5); a client treats it as not final and keeps the same deadline.",
+  "Mode roles: 'modes' maps each autopilot's custom_mode to a name and a role (mission, takeoff, hold, return, land, other); an unknown custom_mode is named MODE_<n> with role other. 'commanded' is true while the role matches the role the phone last commanded and got ACCEPTED for (start and resume: mission, which also allows takeoff, and return once MISSION_CURRENT shows seq = total - 1; hold: hold; return_home: return; land: land). At connect the current role counts as commanded. Heartbeats that arrive while a mode command waits for its ACK do not change 'commanded'.",
+  "Snapshot keys: link_up, control_link, sysid, compid, autopilot, armed (base_mode bit 128), mode, role, commanded, lat_e7, lon_e7, rel_alt_mm, heading_cdeg, position_at_ms (GLOBAL_POSITION_INT), battery_pct, battery_at_ms, voltage_mv, gps_fix, satellites, gps_at_ms, landed (on_ground, in_air, takeoff, landing or null), landed_at_ms, mission_item, home. A reading of -1, UINT16_MAX or 255 (where the message defines it as unknown) leaves the previous value and its time unchanged.",
+  "Bits of base_mode other than 128 (armed) and 1 (custom mode) and system_status vary with firmware state; the vehicles here use plausible values and clients must not depend on them."
+ ],
+ "sources": {
+  "AP463": {
+   "name": "ArduCopter 4.6.3",
+   "commit": "92b0cd788ec29406f26c6f9c31d5ceedbd1cc538",
+   "url": "https://github.com/ArduPilot/ardupilot/blob/92b0cd788ec29406f26c6f9c31d5ceedbd1cc538/"
+  },
+  "AP473": {
+   "name": "ArduCopter 4.7.3",
+   "commit": "d9c5097c3d8333435712ffed86bca8ce00c4bb46",
+   "url": "https://github.com/ArduPilot/ardupilot/blob/d9c5097c3d8333435712ffed86bca8ce00c4bb46/"
+  },
+  "PX4": {
+   "name": "PX4 1.17.0",
+   "commit": "d6f12ad1c4f70ad3230afd7d86e971421e02fef4",
+   "url": "https://github.com/PX4/PX4-Autopilot/blob/d6f12ad1c4f70ad3230afd7d86e971421e02fef4/"
+  },
+  "MAVLINK": {
+   "name": "MAVLink developer guide",
+   "url": "https://mavlink.io/en/"
+  },
+  "PLAN": {
+   "name": "FlightRisk phone-only mission plan v1 (persisted by task W1-3 as docs/design/phone-mission/spec.md)",
+   "url": ""
+  }
+ },
+ "citation_format": "'<source key> <path>:<line or first-last>' resolves to sources[key].url + path + '#L<line>'; for MAVLINK and PLAN the rest is a page or a section.",
+ "gcs": {
+  "sysid": 255,
+  "compid": 190
+ },
+ "timing": {
+  "tries": 3,
+  "retry_ms": 1000,
+  "heartbeat_ms": 1000,
+  "link_loss_ms": 3000,
+  "mission_idle_ms": 3000,
+  "tolerance_ms": 50
+ },
+ "streams": [
+  {
+   "msgid": 33,
+   "interval_us": 200000
+  },
+  {
+   "msgid": 1,
+   "interval_us": 1000000
+  },
+  {
+   "msgid": 147,
+   "interval_us": 1000000
+  },
+  {
+   "msgid": 24,
+   "interval_us": 1000000
+  },
+  {
+   "msgid": 245,
+   "interval_us": 1000000
+  },
+  {
+   "msgid": 42,
+   "interval_us": 1000000
+  }
+ ],
+ "multirotor_types": [
+  {
+   "type": 2,
+   "name": "QUADROTOR"
+  },
+  {
+   "type": 3,
+   "name": "COAXIAL"
+  },
+  {
+   "type": 13,
+   "name": "HEXAROTOR"
+  },
+  {
+   "type": 14,
+   "name": "OCTOROTOR"
+  },
+  {
+   "type": 15,
+   "name": "TRICOPTER"
+  },
+  {
+   "type": 29,
+   "name": "DODECAROTOR"
+  },
+  {
+   "type": 35,
+   "name": "DECAROTOR"
+  }
+ ],
+ "modes": {
+  "ardupilot": [
+   {
+    "custom_mode": 0,
+    "name": "STABILIZE",
+    "role": "other"
+   },
+   {
+    "custom_mode": 1,
+    "name": "ACRO",
+    "role": "other"
+   },
+   {
+    "custom_mode": 2,
+    "name": "ALT_HOLD",
+    "role": "other"
+   },
+   {
+    "custom_mode": 3,
+    "name": "AUTO",
+    "role": "mission"
+   },
+   {
+    "custom_mode": 4,
+    "name": "GUIDED",
+    "role": "hold"
+   },
+   {
+    "custom_mode": 5,
+    "name": "LOITER",
+    "role": "other"
+   },
+   {
+    "custom_mode": 6,
+    "name": "RTL",
+    "role": "return"
+   },
+   {
+    "custom_mode": 7,
+    "name": "CIRCLE",
+    "role": "other"
+   },
+   {
+    "custom_mode": 9,
+    "name": "LAND",
+    "role": "land"
+   },
+   {
+    "custom_mode": 16,
+    "name": "POSHOLD",
+    "role": "other"
+   },
+   {
+    "custom_mode": 17,
+    "name": "BRAKE",
+    "role": "other"
+   },
+   {
+    "custom_mode": 20,
+    "name": "GUIDED_NOGPS",
+    "role": "other"
+   },
+   {
+    "custom_mode": 21,
+    "name": "SMART_RTL",
+    "role": "return"
+   },
+   {
+    "custom_mode": 27,
+    "name": "AUTO_RTL",
+    "role": "return"
+   }
+  ],
+  "px4": [
+   {
+    "custom_mode": 65536,
+    "name": "MANUAL",
+    "role": "other"
+   },
+   {
+    "custom_mode": 131072,
+    "name": "ALTCTL",
+    "role": "other"
+   },
+   {
+    "custom_mode": 196608,
+    "name": "POSCTL",
+    "role": "other"
+   },
+   {
+    "custom_mode": 17039360,
+    "name": "AUTO.READY",
+    "role": "other"
+   },
+   {
+    "custom_mode": 33816576,
+    "name": "AUTO.TAKEOFF",
+    "role": "takeoff"
+   },
+   {
+    "custom_mode": 50593792,
+    "name": "AUTO.LOITER",
+    "role": "hold"
+   },
+   {
+    "custom_mode": 67371008,
+    "name": "AUTO.MISSION",
+    "role": "mission"
+   },
+   {
+    "custom_mode": 84148224,
+    "name": "AUTO.RTL",
+    "role": "return"
+   },
+   {
+    "custom_mode": 100925440,
+    "name": "AUTO.LAND",
+    "role": "land"
+   },
+   {
+    "custom_mode": 151257088,
+    "name": "AUTO.PRECLAND",
+    "role": "land"
+   },
+   {
+    "custom_mode": 327680,
+    "name": "ACRO",
+    "role": "other"
+   },
+   {
+    "custom_mode": 393216,
+    "name": "OFFBOARD",
+    "role": "other"
+   },
+   {
+    "custom_mode": 458752,
+    "name": "STABILIZED",
+    "role": "other"
+   }
+  ]
+ },
+ "set_mode": {
+  "ardupilot": {
+   "hold": [
+    1,
+    4,
+    0
+   ],
+   "mission": [
+    1,
+    3,
+    0
+   ],
+   "land": [
+    1,
+    9,
+    0
+   ]
+  },
+  "px4": {
+   "hold": [
+    1,
+    4,
+    3
+   ],
+   "mission": [
+    1,
+    4,
+    4
+   ],
+   "land": [
+    1,
+    4,
+    6
+   ]
+  }
+ },
+ "mission_items": {
+  "takeoff": "MAV_CMD_NAV_TAKEOFF (22), frame 3, param4 NaN, x/y the takeoff point, z alt_cm / 100",
+  "speed": "MAV_CMD_DO_CHANGE_SPEED (178), frame 2, param1 1 (ground speed), param2 cm_s / 100, param3 -1",
+  "waypoint": "MAV_CMD_NAV_WAYPOINT (16), frame 3, param1-3 0, param4 NaN, z alt_cm / 100",
+  "return": "MAV_CMD_NAV_RETURN_TO_LAUNCH (20), frame 2, all zero",
+  "home": "ArduPilot only, sequence 0: MAV_CMD_NAV_WAYPOINT (16), frame 0, x/y home, z 0",
+  "all": "current 0, autocontinue 1, mission_type 0"
+ },
+ "behaviours": [
+  {
+   "id": "MAV-01",
+   "name": "gcs_heartbeat",
+   "plan": "2.4 link loss",
+   "text": "The phone sends a GCS HEARTBEAT (sysid 255, compid 190, type GCS, autopilot INVALID) every second; in host mode it sends first, before it hears the vehicle."
+  },
+  {
+   "id": "MAV-02",
+   "name": "listen_mode",
+   "plan": "1.1 Wi-Fi topology",
+   "text": "In listen mode the phone sends nothing until a vehicle packet arrives, then answers its source and keeps the 1 s heartbeat."
+  },
+  {
+   "id": "MAV-03",
+   "name": "connect",
+   "plan": "2.6",
+   "text": "Connect waits for an autopilot HEARTBEAT and records its sysid, compid, autopilot and type. GCS heartbeats, components that are not autopilots and later systems are ignored."
+  },
+  {
+   "id": "MAV-04",
+   "name": "refuse_vehicle",
+   "plan": "1.1",
+   "text": "Connect refuses an autopilot other than ArduPilot (3) or PX4 (12), and a vehicle type that is not a multirotor, and then sends nothing more."
+  },
+  {
+   "id": "MAV-05",
+   "name": "message_intervals",
+   "plan": "2.6",
+   "text": "The phone requests message intervals with MAV_CMD_SET_MESSAGE_INTERVAL, one command at a time; a refused interval is reported, not fatal."
+  },
+  {
+   "id": "MAV-06",
+   "name": "home_on_request",
+   "plan": "2.6",
+   "text": "HOME_POSITION is requested with MAV_CMD_REQUEST_MESSAGE and the request resolves on the first HOME_POSITION after it, whether it comes before or after the ACK."
+  },
+  {
+   "id": "MAV-07",
+   "name": "home_unset",
+   "plan": "2.6",
+   "text": "Without a home the request is refused (PX4) or accepted and left unanswered (ArduPilot), which ends in a timeout after three tries."
+  },
+  {
+   "id": "MAV-08",
+   "name": "autopilot_version",
+   "plan": "2.6",
+   "text": "AUTOPILOT_VERSION is requested once and flight_sw_version is decoded as major.minor.patch."
+  },
+  {
+   "id": "MAV-09",
+   "name": "command_retry",
+   "plan": "2.6",
+   "text": "COMMAND_LONG is resent after 1 s without an ACK, with confirmation raised by one, up to three tries."
+  },
+  {
+   "id": "MAV-10",
+   "name": "command_timeout",
+   "plan": "2.6",
+   "text": "Three tries without an ACK end in a timeout 1 s after the last try; no fourth try is sent."
+  },
+  {
+   "id": "MAV-11",
+   "name": "command_refused",
+   "plan": "2.6",
+   "text": "Any ACK result other than ACCEPTED ends the command as refused at once; the phone does not retry it."
+  },
+  {
+   "id": "MAV-12",
+   "name": "command_ack_match",
+   "plan": "2.6",
+   "text": "An ACK counts only when its command matches and it is addressed to the phone (or to system 0)."
+  },
+  {
+   "id": "MAV-13",
+   "name": "param_read",
+   "plan": "2.6",
+   "text": "Parameters are read by name; integer values decode byte-wise on PX4 and by C cast on ArduPilot."
+  },
+  {
+   "id": "MAV-14",
+   "name": "param_retry",
+   "plan": "2.6",
+   "text": "A parameter read is resent after 1 s without its PARAM_VALUE, up to three tries; values for other names are ignored."
+  },
+  {
+   "id": "MAV-15",
+   "name": "param_absent",
+   "plan": "2.6",
+   "text": "A name the vehicle does not know ends as refused on PARAM_ERROR (ArduCopter 4.7) or as a timeout after three silent tries (ArduCopter 4.6, PX4); the preflight counts either as unreadable."
+  },
+  {
+   "id": "MAV-16",
+   "name": "param_alias",
+   "plan": "2.4 GCS failsafe",
+   "text": "A read with several names tries them in order and returns the first that answers, so a renamed parameter (ArduCopter 4.7) is still read."
+  },
+  {
+   "id": "MAV-17",
+   "name": "mission_upload",
+   "plan": "2.6",
+   "text": "Missions are uploaded with MISSION_COUNT, the vehicle's requests and MISSION_ITEM_INT replies, ending in MISSION_ACK ACCEPTED. ArduPilot gets a home placeholder at sequence 0 and requests with MISSION_REQUEST; PX4 does not and requests with MISSION_REQUEST_INT."
+  },
+  {
+   "id": "MAV-18",
+   "name": "mission_rerequest",
+   "plan": "2.6",
+   "text": "MISSION_COUNT is resent after 1 s without a request; a repeated request is answered with the same item."
+  },
+  {
+   "id": "MAV-19",
+   "name": "mission_refused",
+   "plan": "2.6",
+   "text": "A MISSION_ACK with an error ends the upload as refused; no more items are sent."
+  },
+  {
+   "id": "MAV-20",
+   "name": "mission_timeout",
+   "plan": "2.6",
+   "text": "Three unanswered MISSION_COUNT tries, or 3 s without a request during an upload, end in a timeout."
+  },
+  {
+   "id": "MAV-21",
+   "name": "start",
+   "plan": "2.6",
+   "text": "Start sets the hold mode, arms, then sends MAV_CMD_MISSION_START (0, 0); each step waits for its ACK."
+  },
+  {
+   "id": "MAV-22",
+   "name": "start_refused",
+   "plan": "2.6",
+   "text": "A refused step ends the start as refused at that step; the later steps are never sent."
+  },
+  {
+   "id": "MAV-23",
+   "name": "hold",
+   "plan": "2.6",
+   "text": "Hold sets ArduCopter GUIDED or PX4 AUTO.LOITER with MAV_CMD_DO_SET_MODE."
+  },
+  {
+   "id": "MAV-24",
+   "name": "resume",
+   "plan": "2.6",
+   "text": "Resume sets ArduCopter AUTO or PX4 AUTO.MISSION with MAV_CMD_DO_SET_MODE."
+  },
+  {
+   "id": "MAV-25",
+   "name": "return",
+   "plan": "2.6",
+   "text": "Return sends MAV_CMD_NAV_RETURN_TO_LAUNCH."
+  },
+  {
+   "id": "MAV-26",
+   "name": "land",
+   "plan": "2.6, 2.4 Land all",
+   "text": "Land sends MAV_CMD_NAV_LAND."
+  },
+  {
+   "id": "MAV-27",
+   "name": "land_escalation",
+   "plan": "2.4 Land all",
+   "text": "MAV_CMD_NAV_LAND is tried up to three times; if it is not accepted, MAV_CMD_DO_SET_MODE LAND is tried up to three times."
+  },
+  {
+   "id": "MAV-28",
+   "name": "telemetry",
+   "plan": "2.2 Telemetry",
+   "text": "Telemetry messages fill one snapshot with raw units and the time of each reading; unknown values (-1, UINT16_MAX, 255) never overwrite a reading."
+  },
+  {
+   "id": "MAV-29",
+   "name": "mode_report",
+   "plan": "2.2 R8, R12",
+   "text": "The snapshot reports the mode, its role and whether the phone commanded it; heartbeats that arrive while a mode command waits for its ACK are not judged."
+  },
+  {
+   "id": "MAV-30",
+   "name": "mission_progress",
+   "plan": "2.6",
+   "text": "MISSION_CURRENT is mapped to the plan's item index (ArduPilot sequence minus 1 for the home placeholder)."
+  },
+  {
+   "id": "MAV-31",
+   "name": "link_liveness",
+   "plan": "2.2 R7, 2.4 Land all",
+   "text": "The link is up while vehicle packets arrive and down after 3 s without one; the control link stays true once any packet has arrived."
+  }
+ ],
+ "transcripts": [
+  {
+   "id": "MAV-01.ap",
+   "behaviour": "MAV-01",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "GCS heartbeat at 1 Hz in host mode",
+   "encodes": "ArduCopter resets its GCS failsafe timer only on a HEARTBEAT whose sysid is SYSID_MYGCS (4.6, default 255) or within MAV_GCS_SYSID..MAV_GCS_SYSID_HI (4.7), whatever its type, and its GCS failsafe arms only after the first such heartbeat. The phone therefore sends sysid 255 with type GCS, first and every second.",
+   "cites": [
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:4149-4155",
+    "AP463 ArduCopter/events.cpp:124-160",
+    "AP473 libraries/GCS_MAVLink/GCS_Common.cpp:4338-4344",
+    "AP473 libraries/GCS_MAVLink/GCS.cpp:45-59",
+    "MAVLINK services/heartbeat.html"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": false
+   },
+   "heartbeats": "match",
+   "op": {
+    "name": "connect",
+    "args": {
+     "transport": "host"
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 6,
+      "autopilot": 8,
+      "base_mode": 0,
+      "custom_mode": 0,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 400,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 3,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "system_status": 3,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 1000,
+     "from": "phone",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 6,
+      "autopilot": 8,
+      "base_mode": 0,
+      "custom_mode": 0,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 2000,
+     "from": "phone",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 6,
+      "autopilot": 8,
+      "base_mode": 0,
+      "custom_mode": 0,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    }
+   ],
+   "result": {
+    "t": 400,
+    "outcome": "ok",
+    "data": {
+     "sysid": 1,
+     "compid": 1,
+     "autopilot": "ardupilot",
+     "mav_type": 2
+    }
+   },
+   "end_ms": 2500
+  },
+  {
+   "id": "MAV-01.px4",
+   "behaviour": "MAV-01",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "GCS heartbeat at 1 Hz in host mode",
+   "encodes": "PX4 counts any HEARTBEAT of type MAV_TYPE_GCS, from any sysid, as the GCS link; data-link loss triggers after COM_DL_LOSS_T without one, only once one was seen, and PX4 sends COMMAND_ACK only to components it has heard from. The phone therefore sends sysid 255 with type GCS, first and every second.",
+   "cites": [
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:2152-2165",
+    "PX4 src/modules/commander/Commander.cpp:2845-2858",
+    "PX4 src/modules/mavlink/mavlink_main.cpp:2696-2701",
+    "MAVLINK services/heartbeat.html"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": false
+   },
+   "heartbeats": "match",
+   "op": {
+    "name": "connect",
+    "args": {
+     "transport": "host"
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 6,
+      "autopilot": 8,
+      "base_mode": 0,
+      "custom_mode": 0,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 400,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 12,
+      "base_mode": 81,
+      "custom_mode": 196608,
+      "system_status": 3,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 1000,
+     "from": "phone",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 6,
+      "autopilot": 8,
+      "base_mode": 0,
+      "custom_mode": 0,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 2000,
+     "from": "phone",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 6,
+      "autopilot": 8,
+      "base_mode": 0,
+      "custom_mode": 0,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    }
+   ],
+   "result": {
+    "t": 400,
+    "outcome": "ok",
+    "data": {
+     "sysid": 1,
+     "compid": 1,
+     "autopilot": "px4",
+     "mav_type": 2
+    }
+   },
+   "end_ms": 2500
+  },
+  {
+   "id": "MAV-02.ap",
+   "behaviour": "MAV-02",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Listen mode answers the first vehicle packet",
+   "encodes": "A bridge in listen mode sends the vehicle's stream first; the phone replies to the packet's source address and from then on heartbeats every second, which the vehicle needs before its GCS failsafe and command ACKs work (see MAV-01).",
+   "cites": [
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:4149-4155",
+    "AP463 ArduCopter/events.cpp:124-160",
+    "AP473 libraries/GCS_MAVLink/GCS_Common.cpp:4338-4344",
+    "AP473 libraries/GCS_MAVLink/GCS.cpp:45-59",
+    "PLAN 1.1"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": false
+   },
+   "heartbeats": "match",
+   "op": {
+    "name": "connect",
+    "args": {
+     "transport": "listen"
+    }
+   },
+   "steps": [
+    {
+     "t": 700,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 3,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "system_status": 3,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 700,
+     "from": "phone",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 6,
+      "autopilot": 8,
+      "base_mode": 0,
+      "custom_mode": 0,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 1700,
+     "from": "phone",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 6,
+      "autopilot": 8,
+      "base_mode": 0,
+      "custom_mode": 0,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 2700,
+     "from": "phone",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 6,
+      "autopilot": 8,
+      "base_mode": 0,
+      "custom_mode": 0,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    }
+   ],
+   "result": {
+    "t": 700,
+    "outcome": "ok",
+    "data": {
+     "sysid": 1,
+     "compid": 1,
+     "autopilot": "ardupilot",
+     "mav_type": 2
+    }
+   },
+   "end_ms": 3000
+  },
+  {
+   "id": "MAV-02.px4",
+   "behaviour": "MAV-02",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Listen mode answers the first vehicle packet",
+   "encodes": "A bridge in listen mode sends the vehicle's stream first; the phone replies to the packet's source address and from then on heartbeats every second, which the vehicle needs before its GCS failsafe and command ACKs work (see MAV-01).",
+   "cites": [
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:2152-2165",
+    "PX4 src/modules/commander/Commander.cpp:2845-2858",
+    "PX4 src/modules/mavlink/mavlink_main.cpp:2696-2701",
+    "PLAN 1.1"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": false
+   },
+   "heartbeats": "match",
+   "op": {
+    "name": "connect",
+    "args": {
+     "transport": "listen"
+    }
+   },
+   "steps": [
+    {
+     "t": 700,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 12,
+      "base_mode": 81,
+      "custom_mode": 196608,
+      "system_status": 3,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 700,
+     "from": "phone",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 6,
+      "autopilot": 8,
+      "base_mode": 0,
+      "custom_mode": 0,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 1700,
+     "from": "phone",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 6,
+      "autopilot": 8,
+      "base_mode": 0,
+      "custom_mode": 0,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 2700,
+     "from": "phone",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 6,
+      "autopilot": 8,
+      "base_mode": 0,
+      "custom_mode": 0,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    }
+   ],
+   "result": {
+    "t": 700,
+    "outcome": "ok",
+    "data": {
+     "sysid": 1,
+     "compid": 1,
+     "autopilot": "px4",
+     "mav_type": 2
+    }
+   },
+   "end_ms": 3000
+  },
+  {
+   "id": "MAV-03.ap",
+   "behaviour": "MAV-03",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Connect identifies the autopilot and ignores other senders",
+   "encodes": "ArduCopter's autopilot heartbeat comes from compid 1 with autopilot 3 (ARDUPILOTMEGA) and type QUADROTOR (from the frame). A camera component (autopilot INVALID), a second GCS and a second vehicle on the same network are not the vehicle.",
+   "cites": [
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:3092-3101",
+    "AP463 ArduCopter/GCS_Mavlink.cpp:7-27",
+    "AP463 libraries/GCS_MAVLink/GCS_MAVLink.cpp:79",
+    "MAVLINK services/heartbeat.html"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": false
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "connect",
+    "args": {
+     "transport": "host"
+    }
+   },
+   "steps": [
+    {
+     "t": 100,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 30,
+      "autopilot": 8,
+      "base_mode": 0,
+      "custom_mode": 0,
+      "system_status": 4,
+      "mavlink_version": 3
+     },
+     "src": {
+      "sysid": 1,
+      "compid": 100
+     }
+    },
+    {
+     "t": 200,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 6,
+      "autopilot": 8,
+      "base_mode": 0,
+      "custom_mode": 0,
+      "system_status": 4,
+      "mavlink_version": 3
+     },
+     "src": {
+      "sysid": 200,
+      "compid": 190
+     }
+    },
+    {
+     "t": 300,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 3,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "system_status": 3,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 1300,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 3,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "system_status": 3,
+      "mavlink_version": 3
+     },
+     "src": {
+      "sysid": 2,
+      "compid": 1
+     }
+    },
+    {
+     "t": 1400,
+     "query": "snapshot",
+     "expect": {
+      "sysid": 1,
+      "compid": 1,
+      "autopilot": "ardupilot"
+     }
+    }
+   ],
+   "result": {
+    "t": 300,
+    "outcome": "ok",
+    "data": {
+     "sysid": 1,
+     "compid": 1,
+     "autopilot": "ardupilot",
+     "mav_type": 2
+    }
+   },
+   "end_ms": 2000
+  },
+  {
+   "id": "MAV-03.px4",
+   "behaviour": "MAV-03",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Connect identifies the autopilot and ignores other senders",
+   "encodes": "PX4's heartbeat comes from MAV_COMP_ID (default 1) with autopilot 12 (PX4) and type from MAV_TYPE (2 for multicopter airframes). A camera component (autopilot INVALID), a second GCS and a second vehicle on the same network are not the vehicle.",
+   "cites": [
+    "PX4 src/modules/mavlink/streams/HEARTBEAT.hpp:129",
+    "PX4 ROMFS/px4fmu_common/init.d/rc.mc_defaults:10-11",
+    "PX4 src/modules/mavlink/mavlink_params.c:41-50",
+    "MAVLINK services/heartbeat.html"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": false
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "connect",
+    "args": {
+     "transport": "host"
+    }
+   },
+   "steps": [
+    {
+     "t": 100,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 30,
+      "autopilot": 8,
+      "base_mode": 0,
+      "custom_mode": 0,
+      "system_status": 4,
+      "mavlink_version": 3
+     },
+     "src": {
+      "sysid": 1,
+      "compid": 100
+     }
+    },
+    {
+     "t": 200,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 6,
+      "autopilot": 8,
+      "base_mode": 0,
+      "custom_mode": 0,
+      "system_status": 4,
+      "mavlink_version": 3
+     },
+     "src": {
+      "sysid": 200,
+      "compid": 190
+     }
+    },
+    {
+     "t": 300,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 12,
+      "base_mode": 81,
+      "custom_mode": 196608,
+      "system_status": 3,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 1300,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 12,
+      "base_mode": 81,
+      "custom_mode": 196608,
+      "system_status": 3,
+      "mavlink_version": 3
+     },
+     "src": {
+      "sysid": 2,
+      "compid": 1
+     }
+    },
+    {
+     "t": 1400,
+     "query": "snapshot",
+     "expect": {
+      "sysid": 1,
+      "compid": 1,
+      "autopilot": "px4"
+     }
+    }
+   ],
+   "result": {
+    "t": 300,
+    "outcome": "ok",
+    "data": {
+     "sysid": 1,
+     "compid": 1,
+     "autopilot": "px4",
+     "mav_type": 2
+    }
+   },
+   "end_ms": 2000
+  },
+  {
+   "id": "MAV-04.ap",
+   "behaviour": "MAV-04",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Connect refuses an unsupported vehicle",
+   "encodes": "An ArduPlane heartbeat (autopilot 3, type FIXED_WING) uses Plane mode numbers, so Copter's GUIDED (4) would select a different Plane mode; v1 flies multirotors only. After refusing, the phone sends nothing more on that link, not even heartbeats.",
+   "cites": [
+    "AP463 ArduCopter/mode.h:75-105",
+    "MAVLINK messages/common.html#MAV_TYPE"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": false
+   },
+   "heartbeats": "match",
+   "op": {
+    "name": "connect",
+    "args": {
+     "transport": "host"
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 6,
+      "autopilot": 8,
+      "base_mode": 0,
+      "custom_mode": 0,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 300,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 1,
+      "autopilot": 3,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "system_status": 3,
+      "mavlink_version": 3
+     }
+    }
+   ],
+   "result": {
+    "t": 300,
+    "outcome": "refused",
+    "data": {
+     "reason": "unsupported_vehicle_type",
+     "autopilot": 3,
+     "mav_type": 1
+    }
+   },
+   "end_ms": 2500
+  },
+  {
+   "id": "MAV-04.px4",
+   "behaviour": "MAV-04",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Connect refuses an unsupported vehicle",
+   "encodes": "A PX4 VTOL (type 22) can be in fixed-wing flight, where hold and land behave differently; v1 flies multirotors only. After refusing, the phone sends nothing more on that link, not even heartbeats.",
+   "cites": [
+    "PX4 src/modules/commander/px4_custom_mode.h:46-98",
+    "MAVLINK messages/common.html#MAV_TYPE"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": false
+   },
+   "heartbeats": "match",
+   "op": {
+    "name": "connect",
+    "args": {
+     "transport": "host"
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 6,
+      "autopilot": 8,
+      "base_mode": 0,
+      "custom_mode": 0,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 300,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 22,
+      "autopilot": 12,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "system_status": 3,
+      "mavlink_version": 3
+     }
+    }
+   ],
+   "result": {
+    "t": 300,
+    "outcome": "refused",
+    "data": {
+     "reason": "unsupported_vehicle_type",
+     "autopilot": 12,
+     "mav_type": 22
+    }
+   },
+   "end_ms": 2500
+  },
+  {
+   "id": "MAV-04.other",
+   "behaviour": "MAV-04",
+   "autopilot": "other",
+   "firmware": [],
+   "title": "Connect refuses an unsupported vehicle",
+   "encodes": "An autopilot that is neither ArduPilot (3) nor PX4 (12), here MAV_AUTOPILOT_GENERIC, has unknown mode numbers and is refused. After refusing, the phone sends nothing more on that link, not even heartbeats.",
+   "cites": [
+    "PLAN 1.1",
+    "MAVLINK messages/common.html#MAV_AUTOPILOT"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": false
+   },
+   "heartbeats": "match",
+   "op": {
+    "name": "connect",
+    "args": {
+     "transport": "host"
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 6,
+      "autopilot": 8,
+      "base_mode": 0,
+      "custom_mode": 0,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 300,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 0,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "system_status": 3,
+      "mavlink_version": 3
+     }
+    }
+   ],
+   "result": {
+    "t": 300,
+    "outcome": "refused",
+    "data": {
+     "reason": "unsupported_autopilot",
+     "autopilot": 0,
+     "mav_type": 2
+    }
+   },
+   "end_ms": 2500
+  },
+  {
+   "id": "MAV-05.ap",
+   "behaviour": "MAV-05",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Request message intervals one at a time",
+   "encodes": "ArduCopter accepts SET_MESSAGE_INTERVAL for every subset message (params 3 to 7 must be 0, else DENIED); EXTENDED_SYS_STATE is in no ArduCopter stream, so it arrives only because it is requested. COMMAND_ACK names only the command, not param1, so the phone keeps one SET_MESSAGE_INTERVAL outstanding at a time. MISSION_CURRENT is added to the plan's list for lane progress.",
+   "cites": [
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:3120-3135",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:1121",
+    "AP473 libraries/GCS_MAVLink/GCS_Common.cpp:3186-3224",
+    "MAVLINK messages/common.html#MAV_CMD_SET_MESSAGE_INTERVAL"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 81,
+     "custom_mode": 0,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "request_streams",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 511,
+      "confirmation": 0,
+      "param1": 33.0,
+      "param2": 200000.0
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 511,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 40,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 511,
+      "confirmation": 0,
+      "param1": 1.0,
+      "param2": 1000000.0
+     }
+    },
+    {
+     "t": 80,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 511,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 80,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 511,
+      "confirmation": 0,
+      "param1": 147.0,
+      "param2": 1000000.0
+     }
+    },
+    {
+     "t": 120,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 511,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 120,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 511,
+      "confirmation": 0,
+      "param1": 24.0,
+      "param2": 1000000.0
+     }
+    },
+    {
+     "t": 160,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 511,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 160,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 511,
+      "confirmation": 0,
+      "param1": 245.0,
+      "param2": 1000000.0
+     }
+    },
+    {
+     "t": 200,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 511,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 200,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 511,
+      "confirmation": 0,
+      "param1": 42.0,
+      "param2": 1000000.0
+     }
+    },
+    {
+     "t": 240,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 511,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    }
+   ],
+   "result": {
+    "t": 240,
+    "outcome": "ok",
+    "data": {
+     "accepted": [
+      33,
+      1,
+      147,
+      24,
+      245,
+      42
+     ],
+     "refused": []
+    }
+   },
+   "end_ms": 2240
+  },
+  {
+   "id": "MAV-05.px4",
+   "behaviour": "MAV-05",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Request message intervals one at a time",
+   "encodes": "PX4 accepts SET_MESSAGE_INTERVAL for messages it has a stream for and answers FAILED for MISSION_CURRENT, which its mission manager sends at 1 Hz without a stream. COMMAND_ACK names only the command, not param1, so the phone keeps one SET_MESSAGE_INTERVAL outstanding at a time. MISSION_CURRENT is added to the plan's list for lane progress.",
+   "cites": [
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:584-588",
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:2245-2290",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:506-510",
+    "MAVLINK messages/common.html#MAV_CMD_SET_MESSAGE_INTERVAL"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 81,
+     "custom_mode": 196608,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "request_streams",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 511,
+      "confirmation": 0,
+      "param1": 33.0,
+      "param2": 200000.0
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 511,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 40,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 511,
+      "confirmation": 0,
+      "param1": 1.0,
+      "param2": 1000000.0
+     }
+    },
+    {
+     "t": 80,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 511,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 80,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 511,
+      "confirmation": 0,
+      "param1": 147.0,
+      "param2": 1000000.0
+     }
+    },
+    {
+     "t": 120,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 511,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 120,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 511,
+      "confirmation": 0,
+      "param1": 24.0,
+      "param2": 1000000.0
+     }
+    },
+    {
+     "t": 160,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 511,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 160,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 511,
+      "confirmation": 0,
+      "param1": 245.0,
+      "param2": 1000000.0
+     }
+    },
+    {
+     "t": 200,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 511,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 200,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 511,
+      "confirmation": 0,
+      "param1": 42.0,
+      "param2": 1000000.0
+     }
+    },
+    {
+     "t": 240,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 511,
+      "result": 4,
+      "target_system": 255,
+      "target_component": 190
+     }
+    }
+   ],
+   "result": {
+    "t": 240,
+    "outcome": "ok",
+    "data": {
+     "accepted": [
+      33,
+      1,
+      147,
+      24,
+      245
+     ],
+     "refused": [
+      42
+     ]
+    }
+   },
+   "end_ms": 2240
+  },
+  {
+   "id": "MAV-06.ap",
+   "behaviour": "MAV-06",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Request HOME_POSITION",
+   "encodes": "ArduCopter queues the requested message and ACKs ACCEPTED at once, so HOME_POSITION arrives after the ACK. The request resolves on the HOME_POSITION; a later ACK is ignored.",
+   "cites": [
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:3203-3212",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:3026-3030",
+    "MAVLINK messages/common.html#MAV_CMD_REQUEST_MESSAGE"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 81,
+     "custom_mode": 0,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "request_home",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 512,
+      "confirmation": 0,
+      "param1": 242.0
+     }
+    },
+    {
+     "t": 30,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 512,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 60,
+     "from": "vehicle",
+     "msg": "HOME_POSITION",
+     "fields": {
+      "latitude": 406894000,
+      "longitude": -1117310000,
+      "altitude": 1600000,
+      "q": [
+       1.0,
+       0.0,
+       0.0,
+       0.0
+      ]
+     }
+    }
+   ],
+   "result": {
+    "t": 60,
+    "outcome": "ok",
+    "data": {
+     "lat_e7": 406894000,
+     "lon_e7": -1117310000,
+     "alt_mm": 1600000
+    }
+   },
+   "end_ms": 1560
+  },
+  {
+   "id": "MAV-06.px4",
+   "behaviour": "MAV-06",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Request HOME_POSITION",
+   "encodes": "PX4 sends the requested message inside the command handler, so HOME_POSITION arrives before the ACK. The request resolves on the HOME_POSITION; a later ACK is ignored.",
+   "cites": [
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:603-606",
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:726-752",
+    "PX4 src/modules/mavlink/streams/HOME_POSITION.hpp:60-92",
+    "MAVLINK messages/common.html#MAV_CMD_REQUEST_MESSAGE"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 81,
+     "custom_mode": 196608,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "request_home",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 512,
+      "confirmation": 0,
+      "param1": 242.0
+     }
+    },
+    {
+     "t": 30,
+     "from": "vehicle",
+     "msg": "HOME_POSITION",
+     "fields": {
+      "latitude": 406894000,
+      "longitude": -1117310000,
+      "altitude": 1600000,
+      "q": [
+       1.0,
+       0.0,
+       0.0,
+       0.0
+      ]
+     }
+    },
+    {
+     "t": 31,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 512,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    }
+   ],
+   "result": {
+    "t": 30,
+    "outcome": "ok",
+    "data": {
+     "lat_e7": 406894000,
+     "lon_e7": -1117310000,
+     "alt_mm": 1600000
+    }
+   },
+   "end_ms": 1530
+  },
+  {
+   "id": "MAV-07.ap",
+   "behaviour": "MAV-07",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "HOME_POSITION requested before home is set",
+   "encodes": "ArduCopter ACKs MAV_CMD_REQUEST_MESSAGE for HOME_POSITION with ACCEPTED but sends nothing while home is unset, so each try waits 1 s for the message and the request times out after three tries.",
+   "cites": [
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:3203-3212",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:3026-3030"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 81,
+     "custom_mode": 0,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "request_home",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 512,
+      "confirmation": 0,
+      "param1": 242.0
+     }
+    },
+    {
+     "t": 30,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 512,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 1000,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 512,
+      "confirmation": 1,
+      "param1": 242.0
+     }
+    },
+    {
+     "t": 1030,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 512,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 2000,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 512,
+      "confirmation": 2,
+      "param1": 242.0
+     }
+    },
+    {
+     "t": 2030,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 512,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    }
+   ],
+   "result": {
+    "t": 3000,
+    "outcome": "timeout",
+    "data": {}
+   },
+   "end_ms": 4500
+  },
+  {
+   "id": "MAV-07.px4",
+   "behaviour": "MAV-07",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "HOME_POSITION requested before home is set",
+   "encodes": "PX4 answers MAV_CMD_REQUEST_MESSAGE for HOME_POSITION with DENIED while home is not valid; the request ends as refused at once and the caller asks again later.",
+   "cites": [
+    "PX4 src/modules/mavlink/streams/HOME_POSITION.hpp:60-92",
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:726-752"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 81,
+     "custom_mode": 196608,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "request_home",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 512,
+      "confirmation": 0,
+      "param1": 242.0
+     }
+    },
+    {
+     "t": 30,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 512,
+      "result": 2,
+      "target_system": 255,
+      "target_component": 190
+     }
+    }
+   ],
+   "result": {
+    "t": 30,
+    "outcome": "refused",
+    "data": {
+     "mav_result": 2
+    }
+   },
+   "end_ms": 3000
+  },
+  {
+   "id": "MAV-08.ap",
+   "behaviour": "MAV-08",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Read the autopilot version",
+   "encodes": "flight_sw_version packs major, minor and patch in bytes 3, 2 and 1 and the release type in byte 0 (255 is official). The phone logs it and uses it to order renamed parameter names (MAV-16).",
+   "cites": [
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:2906-2954",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:6976-7006",
+    "MAVLINK messages/common.html#AUTOPILOT_VERSION"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 81,
+     "custom_mode": 0,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "read_version",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 512,
+      "confirmation": 0,
+      "param1": 148.0
+     }
+    },
+    {
+     "t": 30,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 512,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 60,
+     "from": "vehicle",
+     "msg": "AUTOPILOT_VERSION",
+     "fields": {
+      "capabilities": 65007,
+      "flight_sw_version": 67503103,
+      "flight_custom_version": [
+       57,
+       50,
+       98,
+       48,
+       99,
+       100,
+       55,
+       56
+      ]
+     }
+    }
+   ],
+   "result": {
+    "t": 60,
+    "outcome": "ok",
+    "data": {
+     "flight_sw_version": "4.6.3",
+     "release_type": 255,
+     "capabilities": 65007
+    }
+   },
+   "end_ms": 2000
+  },
+  {
+   "id": "MAV-08.px4",
+   "behaviour": "MAV-08",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Read the autopilot version",
+   "encodes": "flight_sw_version packs major, minor and patch in bytes 3, 2 and 1 and the release type in byte 0 (255 is official). The phone logs it and uses it to order renamed parameter names (MAV-16).",
+   "cites": [
+    "PX4 src/modules/mavlink/mavlink_main.cpp:1054-1066",
+    "PX4 src/modules/mavlink/streams/AUTOPILOT_VERSION.hpp:56-59",
+    "MAVLINK messages/common.html#AUTOPILOT_VERSION"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 81,
+     "custom_mode": 196608,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "read_version",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 512,
+      "confirmation": 0,
+      "param1": 148.0
+     }
+    },
+    {
+     "t": 30,
+     "from": "vehicle",
+     "msg": "AUTOPILOT_VERSION",
+     "fields": {
+      "capabilities": 15935,
+      "flight_sw_version": 17891583,
+      "middleware_sw_version": 17891583
+     }
+    },
+    {
+     "t": 31,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 512,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    }
+   ],
+   "result": {
+    "t": 30,
+    "outcome": "ok",
+    "data": {
+     "flight_sw_version": "1.17.0",
+     "release_type": 255,
+     "capabilities": 15935
+    }
+   },
+   "end_ms": 2000
+  },
+  {
+   "id": "MAV-09.ap",
+   "behaviour": "MAV-09",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Command resent after 1 s without an ACK",
+   "encodes": "ArduCopter never reads COMMAND_LONG.confirmation and runs a repeated command again; the phone only retries commands whose repeat is harmless (mode changes, return, land, arm when already armed).",
+   "cites": [
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:5170-5200",
+    "MAVLINK services/command.html",
+    "AP463 ArduCopter/GCS_Mavlink.cpp:825-836"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 217,
+     "custom_mode": 3,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "return_home",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 20,
+      "confirmation": 0
+     }
+    },
+    {
+     "t": 1000,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 20,
+      "confirmation": 1
+     }
+    },
+    {
+     "t": 1040,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 20,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    }
+   ],
+   "result": {
+    "t": 1040,
+    "outcome": "ok",
+    "data": {}
+   },
+   "end_ms": 3500
+  },
+  {
+   "id": "MAV-09.px4",
+   "behaviour": "MAV-09",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Command resent after 1 s without an ACK",
+   "encodes": "PX4 copies confirmation into the vehicle command but does not deduplicate, so a repeated DO_SET_MODE is applied again, which is harmless.",
+   "cites": [
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:439-458",
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:122-134",
+    "PX4 src/modules/commander/Commander.cpp:2674-2680",
+    "MAVLINK services/command.html",
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:497",
+    "PX4 src/modules/commander/Commander.cpp:800-908",
+    "PX4 src/modules/commander/px4_custom_mode.h:46-98"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 157,
+     "custom_mode": 67371008,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "hold",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 0,
+      "param1": 1.0,
+      "param2": 4.0,
+      "param3": 3.0
+     }
+    },
+    {
+     "t": 1000,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 1,
+      "param1": 1.0,
+      "param2": 4.0,
+      "param3": 3.0
+     }
+    },
+    {
+     "t": 1040,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 176,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    }
+   ],
+   "result": {
+    "t": 1040,
+    "outcome": "ok",
+    "data": {}
+   },
+   "end_ms": 3500
+  },
+  {
+   "id": "MAV-10.ap",
+   "behaviour": "MAV-10",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Command times out after three tries",
+   "encodes": "Without any ACK the phone stops after three tries and reports a timeout 1 s after the last; the autopilot keeps its mode, and the mission rules decide what follows.",
+   "cites": [
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:5170-5200",
+    "MAVLINK services/command.html",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:4872-4878",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:2826-2838",
+    "AP463 ArduCopter/mode.h:75-105"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 217,
+     "custom_mode": 4,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "resume",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 0,
+      "param1": 1.0,
+      "param2": 3.0
+     }
+    },
+    {
+     "t": 1000,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 1,
+      "param1": 1.0,
+      "param2": 3.0
+     }
+    },
+    {
+     "t": 2000,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 2,
+      "param1": 1.0,
+      "param2": 3.0
+     }
+    }
+   ],
+   "result": {
+    "t": 3000,
+    "outcome": "timeout",
+    "data": {}
+   },
+   "end_ms": 5000
+  },
+  {
+   "id": "MAV-10.px4",
+   "behaviour": "MAV-10",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Command times out after three tries",
+   "encodes": "Without any ACK the phone stops after three tries and reports a timeout 1 s after the last.",
+   "cites": [
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:439-458",
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:122-134",
+    "PX4 src/modules/commander/Commander.cpp:2674-2680",
+    "MAVLINK services/command.html",
+    "PX4 src/modules/commander/Commander.cpp:1050-1062"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 157,
+     "custom_mode": 67371008,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "return_home",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 20,
+      "confirmation": 0
+     }
+    },
+    {
+     "t": 1000,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 20,
+      "confirmation": 1
+     }
+    },
+    {
+     "t": 2000,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 20,
+      "confirmation": 2
+     }
+    }
+   ],
+   "result": {
+    "t": 3000,
+    "outcome": "timeout",
+    "data": {}
+   },
+   "end_ms": 5000
+  },
+  {
+   "id": "MAV-11.ap",
+   "behaviour": "MAV-11",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Refused command is not retried",
+   "encodes": "ArduCopter answers a refused mode change with MAV_RESULT_FAILED (for example AUTO with no mission). The phone reports the refusal with the result and sends no further try.",
+   "cites": [
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:5170-5200",
+    "MAVLINK services/command.html",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:4872-4878",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:2826-2838",
+    "AP463 ArduCopter/mode.h:75-105",
+    "AP463 ArduCopter/mode_auto.cpp:23-31"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 217,
+     "custom_mode": 4,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "resume",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 0,
+      "param1": 1.0,
+      "param2": 3.0
+     }
+    },
+    {
+     "t": 30,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 176,
+      "result": 4,
+      "target_system": 255,
+      "target_component": 190
+     }
+    }
+   ],
+   "result": {
+    "t": 30,
+    "outcome": "refused",
+    "data": {
+     "mav_result": 4
+    }
+   },
+   "end_ms": 3000
+  },
+  {
+   "id": "MAV-11.px4",
+   "behaviour": "MAV-11",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Refused command is not retried",
+   "encodes": "PX4 answers a mode change it refuses with MAV_RESULT_TEMPORARILY_REJECTED. The phone does not retry it by itself; the caller decides.",
+   "cites": [
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:439-458",
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:122-134",
+    "PX4 src/modules/commander/Commander.cpp:2674-2680",
+    "MAVLINK services/command.html",
+    "PX4 src/modules/commander/Commander.cpp:800-908",
+    "PX4 src/modules/commander/px4_custom_mode.h:46-98"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 157,
+     "custom_mode": 67371008,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "hold",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 0,
+      "param1": 1.0,
+      "param2": 4.0,
+      "param3": 3.0
+     }
+    },
+    {
+     "t": 30,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 176,
+      "result": 1,
+      "target_system": 255,
+      "target_component": 190
+     }
+    }
+   ],
+   "result": {
+    "t": 30,
+    "outcome": "refused",
+    "data": {
+     "mav_result": 1
+    }
+   },
+   "end_ms": 3000
+  },
+  {
+   "id": "MAV-12.ap",
+   "behaviour": "MAV-12",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Only the matching ACK addressed to the phone counts",
+   "encodes": "ArduCopter addresses COMMAND_ACK to the sender's sysid and compid. An ACK for another command, or one addressed to another GCS, is not the answer; system 0 is accepted as a broadcast.",
+   "cites": [
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:5170-5200",
+    "MAVLINK services/command.html",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:5189-5191"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 217,
+     "custom_mode": 3,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "return_home",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 20,
+      "confirmation": 0
+     }
+    },
+    {
+     "t": 20,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 176,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 30,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 20,
+      "result": 4,
+      "target_system": 200,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 20,
+      "result": 0,
+      "target_system": 0,
+      "target_component": 0
+     }
+    }
+   ],
+   "result": {
+    "t": 40,
+    "outcome": "ok",
+    "data": {}
+   },
+   "end_ms": 3000
+  },
+  {
+   "id": "MAV-12.px4",
+   "behaviour": "MAV-12",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Only the matching ACK addressed to the phone counts",
+   "encodes": "PX4 addresses COMMAND_ACK to the sender's sysid and compid. An ACK for another command, or one addressed to another GCS, is not the answer; system 0 is accepted as a broadcast.",
+   "cites": [
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:439-458",
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:122-134",
+    "PX4 src/modules/commander/Commander.cpp:2674-2680",
+    "MAVLINK services/command.html"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 157,
+     "custom_mode": 67371008,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "return_home",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 20,
+      "confirmation": 0
+     }
+    },
+    {
+     "t": 20,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 176,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 30,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 20,
+      "result": 4,
+      "target_system": 200,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 20,
+      "result": 0,
+      "target_system": 0,
+      "target_component": 0
+     }
+    }
+   ],
+   "result": {
+    "t": 40,
+    "outcome": "ok",
+    "data": {}
+   },
+   "end_ms": 3000
+  },
+  {
+   "id": "MAV-13.ap.a",
+   "behaviour": "MAV-13",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Read a parameter by name",
+   "encodes": "ArduCopter sends INT8 FS_GCS_ENABLE as a C cast to float (1.0) with type INT8. The reply is matched by name, never by index.",
+   "cites": [
+    "AP463 libraries/GCS_MAVLink/GCS_MAVLink.cpp:101-114",
+    "AP463 libraries/AP_Param/AP_Param.cpp:1946-1960",
+    "MAVLINK services/parameter.html",
+    "AP463 ArduCopter/Parameters.h:411",
+    "AP463 ArduCopter/Parameters.cpp:160-165"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 81,
+     "custom_mode": 0,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "read_param",
+    "args": {
+     "names": [
+      "FS_GCS_ENABLE"
+     ]
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "PARAM_REQUEST_READ",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "param_id": "FS_GCS_ENABLE",
+      "param_index": -1
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "PARAM_VALUE",
+     "fields": {
+      "param_id": "FS_GCS_ENABLE",
+      "param_value": 1.0,
+      "param_type": 2,
+      "param_count": 1250,
+      "param_index": 65535
+     }
+    }
+   ],
+   "result": {
+    "t": 40,
+    "outcome": "ok",
+    "data": {
+     "name": "FS_GCS_ENABLE",
+     "value": 1,
+     "type": 2
+    }
+   },
+   "end_ms": 2000
+  },
+  {
+   "id": "MAV-13.ap.b",
+   "behaviour": "MAV-13",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Read a parameter by name",
+   "encodes": "ArduCopter sends float FS_GCS_TIMEOUT (seconds) as REAL32. The reply is matched by name, never by index.",
+   "cites": [
+    "AP463 libraries/GCS_MAVLink/GCS_MAVLink.cpp:101-114",
+    "AP463 libraries/AP_Param/AP_Param.cpp:1946-1960",
+    "MAVLINK services/parameter.html",
+    "AP463 ArduCopter/Parameters.cpp:984-991",
+    "AP473 ArduCopter/Parameters.h:642"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 81,
+     "custom_mode": 0,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "read_param",
+    "args": {
+     "names": [
+      "FS_GCS_TIMEOUT"
+     ]
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "PARAM_REQUEST_READ",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "param_id": "FS_GCS_TIMEOUT",
+      "param_index": -1
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "PARAM_VALUE",
+     "fields": {
+      "param_id": "FS_GCS_TIMEOUT",
+      "param_value": 5.0,
+      "param_type": 9,
+      "param_count": 1250,
+      "param_index": 65535
+     }
+    }
+   ],
+   "result": {
+    "t": 40,
+    "outcome": "ok",
+    "data": {
+     "name": "FS_GCS_TIMEOUT",
+     "value": 5.0,
+     "type": 9
+    }
+   },
+   "end_ms": 2000
+  },
+  {
+   "id": "MAV-13.px4.a",
+   "behaviour": "MAV-13",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Read a parameter by name",
+   "encodes": "PX4 copies the int32 NAV_DLL_ACT (2, Return) byte-wise into param_value; a C cast would read about 2.8e-45 and wrongly see 0. The reply is matched by name, never by index.",
+   "cites": [
+    "PX4 src/modules/mavlink/mavlink_parameters.cpp:492-500",
+    "PX4 src/modules/mavlink/mavlink_parameters.cpp:531-545",
+    "PX4 src/modules/mavlink/mavlink_main.cpp:1054-1066",
+    "MAVLINK services/parameter.html",
+    "PX4 src/modules/commander/commander_params.c:575-598"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 81,
+     "custom_mode": 196608,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "read_param",
+    "args": {
+     "names": [
+      "NAV_DLL_ACT"
+     ]
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "PARAM_REQUEST_READ",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "param_id": "NAV_DLL_ACT",
+      "param_index": -1
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "PARAM_VALUE",
+     "fields": {
+      "param_id": "NAV_DLL_ACT",
+      "param_value": 2.802596928649634e-45,
+      "param_type": 6,
+      "param_count": 1027,
+      "param_index": 611
+     }
+    }
+   ],
+   "result": {
+    "t": 40,
+    "outcome": "ok",
+    "data": {
+     "name": "NAV_DLL_ACT",
+     "value": 2,
+     "type": 6
+    }
+   },
+   "end_ms": 2000
+  },
+  {
+   "id": "MAV-13.px4.b",
+   "behaviour": "MAV-13",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Read a parameter by name",
+   "encodes": "PX4 copies the int32 COM_DL_LOSS_T (seconds) byte-wise. The reply is matched by name, never by index.",
+   "cites": [
+    "PX4 src/modules/mavlink/mavlink_parameters.cpp:492-500",
+    "PX4 src/modules/mavlink/mavlink_parameters.cpp:531-545",
+    "PX4 src/modules/mavlink/mavlink_main.cpp:1054-1066",
+    "MAVLINK services/parameter.html",
+    "PX4 src/modules/commander/commander_params.c:85-98"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 81,
+     "custom_mode": 196608,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "read_param",
+    "args": {
+     "names": [
+      "COM_DL_LOSS_T"
+     ]
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "PARAM_REQUEST_READ",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "param_id": "COM_DL_LOSS_T",
+      "param_index": -1
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "PARAM_VALUE",
+     "fields": {
+      "param_id": "COM_DL_LOSS_T",
+      "param_value": 1.401298464324817e-44,
+      "param_type": 6,
+      "param_count": 1027,
+      "param_index": 611
+     }
+    }
+   ],
+   "result": {
+    "t": 40,
+    "outcome": "ok",
+    "data": {
+     "name": "COM_DL_LOSS_T",
+     "value": 10,
+     "type": 6
+    }
+   },
+   "end_ms": 2000
+  },
+  {
+   "id": "MAV-14.ap",
+   "behaviour": "MAV-14",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Parameter read resent after 1 s",
+   "encodes": "ArduCopter answers queued reads from its io timer, up to five per pass, so a reply can be late or lost on a busy link. PARAM_REQUEST_READ has no confirmation field, so a retry is the same message; a PARAM_VALUE for another name is ignored.",
+   "cites": [
+    "AP463 libraries/GCS_MAVLink/GCS_MAVLink.cpp:101-114",
+    "AP463 libraries/AP_Param/AP_Param.cpp:1946-1960",
+    "MAVLINK services/parameter.html",
+    "AP463 libraries/GCS_MAVLink/GCS_Param.cpp:225-261"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 81,
+     "custom_mode": 0,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "read_param",
+    "args": {
+     "names": [
+      "FS_GCS_ENABLE"
+     ]
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "PARAM_REQUEST_READ",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "param_id": "FS_GCS_ENABLE",
+      "param_index": -1
+     }
+    },
+    {
+     "t": 300,
+     "from": "vehicle",
+     "msg": "PARAM_VALUE",
+     "fields": {
+      "param_id": "FS_GCS_TIMEOUT",
+      "param_value": 5.0,
+      "param_type": 9,
+      "param_count": 1250,
+      "param_index": 65535
+     }
+    },
+    {
+     "t": 1000,
+     "from": "phone",
+     "msg": "PARAM_REQUEST_READ",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "param_id": "FS_GCS_ENABLE",
+      "param_index": -1
+     }
+    },
+    {
+     "t": 1050,
+     "from": "vehicle",
+     "msg": "PARAM_VALUE",
+     "fields": {
+      "param_id": "FS_GCS_ENABLE",
+      "param_value": 1.0,
+      "param_type": 2,
+      "param_count": 1250,
+      "param_index": 65535
+     }
+    }
+   ],
+   "result": {
+    "t": 1050,
+    "outcome": "ok",
+    "data": {
+     "name": "FS_GCS_ENABLE",
+     "value": 1,
+     "type": 2
+    }
+   },
+   "end_ms": 3000
+  },
+  {
+   "id": "MAV-14.px4",
+   "behaviour": "MAV-14",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Parameter read resent after 1 s",
+   "encodes": "PX4 answers a read once; a lost reply is not resent. PARAM_REQUEST_READ has no confirmation field, so a retry is the same message; a PARAM_VALUE for another name is ignored.",
+   "cites": [
+    "PX4 src/modules/mavlink/mavlink_parameters.cpp:492-500",
+    "PX4 src/modules/mavlink/mavlink_parameters.cpp:531-545",
+    "PX4 src/modules/mavlink/mavlink_main.cpp:1054-1066",
+    "MAVLINK services/parameter.html",
+    "PX4 src/modules/mavlink/mavlink_parameters.cpp:176-205"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 81,
+     "custom_mode": 196608,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "read_param",
+    "args": {
+     "names": [
+      "NAV_DLL_ACT"
+     ]
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "PARAM_REQUEST_READ",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "param_id": "NAV_DLL_ACT",
+      "param_index": -1
+     }
+    },
+    {
+     "t": 300,
+     "from": "vehicle",
+     "msg": "PARAM_VALUE",
+     "fields": {
+      "param_id": "COM_DL_LOSS_T",
+      "param_value": 1.401298464324817e-44,
+      "param_type": 6,
+      "param_count": 1027,
+      "param_index": 611
+     }
+    },
+    {
+     "t": 1000,
+     "from": "phone",
+     "msg": "PARAM_REQUEST_READ",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "param_id": "NAV_DLL_ACT",
+      "param_index": -1
+     }
+    },
+    {
+     "t": 1050,
+     "from": "vehicle",
+     "msg": "PARAM_VALUE",
+     "fields": {
+      "param_id": "NAV_DLL_ACT",
+      "param_value": 2.802596928649634e-45,
+      "param_type": 6,
+      "param_count": 1027,
+      "param_index": 611
+     }
+    }
+   ],
+   "result": {
+    "t": 1050,
+    "outcome": "ok",
+    "data": {
+     "name": "NAV_DLL_ACT",
+     "value": 2,
+     "type": 6
+    }
+   },
+   "end_ms": 3000
+  },
+  {
+   "id": "MAV-15.ap.463",
+   "behaviour": "MAV-15",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3"
+   ],
+   "title": "Unknown parameter name on ArduCopter 4.6",
+   "encodes": "ArduCopter 4.6.3 drops a read of an unknown name without any reply, so the read times out after three tries. Here the phone asks 4.6.3 for the 4.7 name MAV_GCS_SYSID.",
+   "cites": [
+    "AP463 libraries/GCS_MAVLink/GCS_MAVLink.cpp:101-114",
+    "AP463 libraries/AP_Param/AP_Param.cpp:1946-1960",
+    "MAVLINK services/parameter.html",
+    "AP463 libraries/GCS_MAVLink/GCS_Param.cpp:391-394"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 81,
+     "custom_mode": 0,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "read_param",
+    "args": {
+     "names": [
+      "MAV_GCS_SYSID"
+     ]
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "PARAM_REQUEST_READ",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "param_id": "MAV_GCS_SYSID",
+      "param_index": -1
+     }
+    },
+    {
+     "t": 1000,
+     "from": "phone",
+     "msg": "PARAM_REQUEST_READ",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "param_id": "MAV_GCS_SYSID",
+      "param_index": -1
+     }
+    },
+    {
+     "t": 2000,
+     "from": "phone",
+     "msg": "PARAM_REQUEST_READ",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "param_id": "MAV_GCS_SYSID",
+      "param_index": -1
+     }
+    }
+   ],
+   "result": {
+    "t": 3000,
+    "outcome": "timeout",
+    "data": {}
+   },
+   "end_ms": 4500
+  },
+  {
+   "id": "MAV-15.ap.473",
+   "behaviour": "MAV-15",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Unknown parameter name on ArduCopter 4.7",
+   "encodes": "ArduCopter 4.7.3 answers a read of an unknown name with PARAM_ERROR (MAV_PARAM_ERROR_DOES_NOT_EXIST) addressed to the requester, so the read ends as refused at once. Here the phone asks 4.7.3 for the 4.6 name SYSID_MYGCS, which 4.7 renamed to MAV_GCS_SYSID.",
+   "cites": [
+    "AP463 libraries/GCS_MAVLink/GCS_MAVLink.cpp:101-114",
+    "AP463 libraries/AP_Param/AP_Param.cpp:1946-1960",
+    "MAVLINK services/parameter.html",
+    "AP473 libraries/GCS_MAVLink/GCS_Param.cpp:405-421",
+    "AP473 libraries/GCS_MAVLink/GCS_Param.cpp:450-466"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 81,
+     "custom_mode": 0,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "read_param",
+    "args": {
+     "names": [
+      "SYSID_MYGCS"
+     ]
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "PARAM_REQUEST_READ",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "param_id": "SYSID_MYGCS",
+      "param_index": -1
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "PARAM_ERROR",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "param_id": "SYSID_MYGCS",
+      "param_index": -1,
+      "error": 1
+     }
+    }
+   ],
+   "result": {
+    "t": 40,
+    "outcome": "refused",
+    "data": {
+     "param_error": 1
+    }
+   },
+   "end_ms": 3000
+  },
+  {
+   "id": "MAV-15.px4",
+   "behaviour": "MAV-15",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Unknown parameter name on PX4",
+   "encodes": "PX4 sends nothing for a read of an unknown name (no PARAM_VALUE, no STATUSTEXT), so the read times out after three tries. The name is synthetic.",
+   "cites": [
+    "PX4 src/modules/mavlink/mavlink_parameters.cpp:492-500",
+    "PX4 src/modules/mavlink/mavlink_parameters.cpp:531-545",
+    "PX4 src/modules/mavlink/mavlink_main.cpp:1054-1066",
+    "MAVLINK services/parameter.html",
+    "PX4 src/modules/mavlink/mavlink_parameters.cpp:187-205",
+    "PX4 src/modules/mavlink/mavlink_parameters.cpp:475-478"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 81,
+     "custom_mode": 196608,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "read_param",
+    "args": {
+     "names": [
+      "FR_ABSENT"
+     ]
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "PARAM_REQUEST_READ",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "param_id": "FR_ABSENT",
+      "param_index": -1
+     }
+    },
+    {
+     "t": 1000,
+     "from": "phone",
+     "msg": "PARAM_REQUEST_READ",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "param_id": "FR_ABSENT",
+      "param_index": -1
+     }
+    },
+    {
+     "t": 2000,
+     "from": "phone",
+     "msg": "PARAM_REQUEST_READ",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "param_id": "FR_ABSENT",
+      "param_index": -1
+     }
+    }
+   ],
+   "result": {
+    "t": 3000,
+    "outcome": "timeout",
+    "data": {}
+   },
+   "end_ms": 4500
+  },
+  {
+   "id": "MAV-16.ap.473",
+   "behaviour": "MAV-16",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Renamed GCS sysid parameter on ArduCopter 4.7",
+   "encodes": "ArduCopter 4.7.3 renamed SYSID_MYGCS to MAV_GCS_SYSID (and SYSID_THISMAV to MAV_SYSID). With the 4.6 name first, PARAM_ERROR moves the read to the next name at once; the value is INT16 255.",
+   "cites": [
+    "AP463 libraries/GCS_MAVLink/GCS_MAVLink.cpp:101-114",
+    "AP463 libraries/AP_Param/AP_Param.cpp:1946-1960",
+    "MAVLINK services/parameter.html",
+    "AP473 libraries/GCS_MAVLink/GCS.cpp:45-59",
+    "AP473 libraries/GCS_MAVLink/GCS.h:1323",
+    "AP473 ArduCopter/Parameters.cpp:1296-1298",
+    "AP473 libraries/GCS_MAVLink/GCS_Param.cpp:405-421"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 81,
+     "custom_mode": 0,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "read_param",
+    "args": {
+     "names": [
+      "SYSID_MYGCS",
+      "MAV_GCS_SYSID"
+     ]
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "PARAM_REQUEST_READ",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "param_id": "SYSID_MYGCS",
+      "param_index": -1
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "PARAM_ERROR",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "param_id": "SYSID_MYGCS",
+      "param_index": -1,
+      "error": 1
+     }
+    },
+    {
+     "t": 40,
+     "from": "phone",
+     "msg": "PARAM_REQUEST_READ",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "param_id": "MAV_GCS_SYSID",
+      "param_index": -1
+     }
+    },
+    {
+     "t": 80,
+     "from": "vehicle",
+     "msg": "PARAM_VALUE",
+     "fields": {
+      "param_id": "MAV_GCS_SYSID",
+      "param_value": 255.0,
+      "param_type": 4,
+      "param_count": 1250,
+      "param_index": 65535
+     }
+    }
+   ],
+   "result": {
+    "t": 80,
+    "outcome": "ok",
+    "data": {
+     "name": "MAV_GCS_SYSID",
+     "value": 255,
+     "type": 4
+    }
+   },
+   "end_ms": 3000
+  },
+  {
+   "id": "MAV-16.ap.463",
+   "behaviour": "MAV-16",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3"
+   ],
+   "title": "GCS sysid parameter on ArduCopter 4.6",
+   "encodes": "ArduCopter 4.6.3 knows SYSID_MYGCS (INT16, default 255); the first name answers and the second is never asked.",
+   "cites": [
+    "AP463 libraries/GCS_MAVLink/GCS_MAVLink.cpp:101-114",
+    "AP463 libraries/AP_Param/AP_Param.cpp:1946-1960",
+    "MAVLINK services/parameter.html",
+    "AP463 ArduCopter/Parameters.h:394",
+    "AP463 ArduCopter/Parameters.cpp:46-52"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 81,
+     "custom_mode": 0,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "read_param",
+    "args": {
+     "names": [
+      "SYSID_MYGCS",
+      "MAV_GCS_SYSID"
+     ]
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "PARAM_REQUEST_READ",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "param_id": "SYSID_MYGCS",
+      "param_index": -1
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "PARAM_VALUE",
+     "fields": {
+      "param_id": "SYSID_MYGCS",
+      "param_value": 255.0,
+      "param_type": 4,
+      "param_count": 1250,
+      "param_index": 65535
+     }
+    }
+   ],
+   "result": {
+    "t": 40,
+    "outcome": "ok",
+    "data": {
+     "name": "SYSID_MYGCS",
+     "value": 255,
+     "type": 4
+    }
+   },
+   "end_ms": 3000
+  },
+  {
+   "id": "MAV-16.px4",
+   "behaviour": "MAV-16",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Name list with a silent first name on PX4",
+   "encodes": "PX4 1.17.0 renames none of the parameters the phone reads, so the first name here is synthetic: PX4 stays silent for it, the phone moves on after three tries, and MAV_SYS_ID answers byte-wise.",
+   "cites": [
+    "PX4 src/modules/mavlink/mavlink_parameters.cpp:492-500",
+    "PX4 src/modules/mavlink/mavlink_parameters.cpp:531-545",
+    "PX4 src/modules/mavlink/mavlink_main.cpp:1054-1066",
+    "MAVLINK services/parameter.html",
+    "PX4 src/modules/mavlink/mavlink_parameters.cpp:187-205",
+    "PX4 src/modules/mavlink/mavlink_params.c:41"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 81,
+     "custom_mode": 196608,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "read_param",
+    "args": {
+     "names": [
+      "FR_ABSENT",
+      "MAV_SYS_ID"
+     ]
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "PARAM_REQUEST_READ",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "param_id": "FR_ABSENT",
+      "param_index": -1
+     }
+    },
+    {
+     "t": 1000,
+     "from": "phone",
+     "msg": "PARAM_REQUEST_READ",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "param_id": "FR_ABSENT",
+      "param_index": -1
+     }
+    },
+    {
+     "t": 2000,
+     "from": "phone",
+     "msg": "PARAM_REQUEST_READ",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "param_id": "FR_ABSENT",
+      "param_index": -1
+     }
+    },
+    {
+     "t": 3000,
+     "from": "phone",
+     "msg": "PARAM_REQUEST_READ",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "param_id": "MAV_SYS_ID",
+      "param_index": -1
+     }
+    },
+    {
+     "t": 3040,
+     "from": "vehicle",
+     "msg": "PARAM_VALUE",
+     "fields": {
+      "param_id": "MAV_SYS_ID",
+      "param_value": 1.401298464324817e-45,
+      "param_type": 6,
+      "param_count": 1027,
+      "param_index": 611
+     }
+    }
+   ],
+   "result": {
+    "t": 3040,
+    "outcome": "ok",
+    "data": {
+     "name": "MAV_SYS_ID",
+     "value": 1,
+     "type": 6
+    }
+   },
+   "end_ms": 5000
+  },
+  {
+   "id": "MAV-17.ap",
+   "behaviour": "MAV-17",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Upload a mission",
+   "encodes": "ArduCopter requests every item with MISSION_REQUEST (never MISSION_REQUEST_INT) and accepts MISSION_ITEM_INT in reply. Sequence 0 is stored but always read back as home, so the phone sends a placeholder at home. Location items use MAV_FRAME_GLOBAL_RELATIVE_ALT; DO_CHANGE_SPEED and NAV_RETURN_TO_LAUNCH carry no location and use MAV_FRAME_MISSION (z must not be NaN). The final MISSION_ACK ACCEPTED ends the upload.",
+   "cites": [
+    "AP463 libraries/GCS_MAVLink/MissionItemProtocol.cpp:372",
+    "AP473 libraries/GCS_MAVLink/MissionItemProtocol.cpp:370",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:4512-4515",
+    "AP463 libraries/GCS_MAVLink/MissionItemProtocol.cpp:289-299",
+    "AP463 libraries/AP_Mission/AP_Mission.cpp:816-821",
+    "AP463 libraries/AP_Mission/AP_Mission.cpp:1465-1490",
+    "MAVLINK services/mission.html",
+    "AP463 libraries/GCS_MAVLink/MissionItemProtocol.cpp:325-331",
+    "AP463 libraries/AP_Mission/AP_Mission.cpp:1126-1127",
+    "AP463 libraries/AP_Mission/AP_Mission.cpp:1197-1201"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 81,
+     "custom_mode": 0,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "upload_mission",
+    "args": {
+     "home": {
+      "lat_e7": 406894000,
+      "lon_e7": -1117310000
+     },
+     "items": [
+      {
+       "kind": "takeoff",
+       "lat_e7": 406894000,
+       "lon_e7": -1117310000,
+       "alt_cm": 1000
+      },
+      {
+       "kind": "speed",
+       "cm_s": 300
+      },
+      {
+       "kind": "waypoint",
+       "lat_e7": 406894450,
+       "lon_e7": -1117310000,
+       "alt_cm": 1000
+      },
+      {
+       "kind": "waypoint",
+       "lat_e7": 406894450,
+       "lon_e7": -1117306000,
+       "alt_cm": 1000
+      },
+      {
+       "kind": "waypoint",
+       "lat_e7": 406893550,
+       "lon_e7": -1117306000,
+       "alt_cm": 1000
+      },
+      {
+       "kind": "return"
+      }
+     ]
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "MISSION_COUNT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "count": 7,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 30,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 0,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 30,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 0,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 0,
+      "command": 16,
+      "x": 406894000,
+      "y": -1117310000,
+      "z": 0.0
+     }
+    },
+    {
+     "t": 60,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 1,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 60,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 1,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 3,
+      "command": 22,
+      "param4": "NaN",
+      "x": 406894000,
+      "y": -1117310000,
+      "z": 10.0
+     }
+    },
+    {
+     "t": 90,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 2,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 90,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 2,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 2,
+      "command": 178,
+      "param1": 1.0,
+      "param2": 3.0,
+      "param3": -1.0
+     }
+    },
+    {
+     "t": 120,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 3,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 120,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 3,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 3,
+      "command": 16,
+      "param4": "NaN",
+      "x": 406894450,
+      "y": -1117310000,
+      "z": 10.0
+     }
+    },
+    {
+     "t": 150,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 4,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 150,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 4,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 3,
+      "command": 16,
+      "param4": "NaN",
+      "x": 406894450,
+      "y": -1117306000,
+      "z": 10.0
+     }
+    },
+    {
+     "t": 180,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 5,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 180,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 5,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 3,
+      "command": 16,
+      "param4": "NaN",
+      "x": 406893550,
+      "y": -1117306000,
+      "z": 10.0
+     }
+    },
+    {
+     "t": 210,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 6,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 210,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 6,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 2,
+      "command": 20
+     }
+    },
+    {
+     "t": 240,
+     "from": "vehicle",
+     "msg": "MISSION_ACK",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "type": 0,
+      "mission_type": 0
+     }
+    }
+   ],
+   "result": {
+    "t": 240,
+    "outcome": "ok",
+    "data": {}
+   },
+   "end_ms": 2240
+  },
+  {
+   "id": "MAV-17.px4",
+   "behaviour": "MAV-17",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Upload a mission",
+   "encodes": "PX4 requests items with MISSION_REQUEST_INT (int mode is its default) and stores sequence 0 as the first real item. It accepts NAV_TAKEOFF and NAV_WAYPOINT only in a global frame and DO_CHANGE_SPEED and NAV_RETURN_TO_LAUNCH only in MAV_FRAME_MISSION; a waypoint's param4 is the yaw in degrees, so NaN (not 0, which is north) keeps the heading behaviour. The final MISSION_ACK ACCEPTED ends the upload.",
+   "cites": [
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:445-470",
+    "PX4 src/modules/mavlink/mavlink_mission.h:117",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:996-1035",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:1397-1402",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:1550",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:1602-1630",
+    "MAVLINK services/mission.html",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:1437-1442",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:1285-1304"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 81,
+     "custom_mode": 196608,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "upload_mission",
+    "args": {
+     "home": {
+      "lat_e7": 406894000,
+      "lon_e7": -1117310000
+     },
+     "items": [
+      {
+       "kind": "takeoff",
+       "lat_e7": 406894000,
+       "lon_e7": -1117310000,
+       "alt_cm": 1000
+      },
+      {
+       "kind": "speed",
+       "cm_s": 300
+      },
+      {
+       "kind": "waypoint",
+       "lat_e7": 406894450,
+       "lon_e7": -1117310000,
+       "alt_cm": 1000
+      },
+      {
+       "kind": "waypoint",
+       "lat_e7": 406894450,
+       "lon_e7": -1117306000,
+       "alt_cm": 1000
+      },
+      {
+       "kind": "waypoint",
+       "lat_e7": 406893550,
+       "lon_e7": -1117306000,
+       "alt_cm": 1000
+      },
+      {
+       "kind": "return"
+      }
+     ]
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "MISSION_COUNT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "count": 6,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 30,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST_INT",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 0,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 30,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 0,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 3,
+      "command": 22,
+      "param4": "NaN",
+      "x": 406894000,
+      "y": -1117310000,
+      "z": 10.0
+     }
+    },
+    {
+     "t": 60,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST_INT",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 1,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 60,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 1,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 2,
+      "command": 178,
+      "param1": 1.0,
+      "param2": 3.0,
+      "param3": -1.0
+     }
+    },
+    {
+     "t": 90,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST_INT",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 2,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 90,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 2,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 3,
+      "command": 16,
+      "param4": "NaN",
+      "x": 406894450,
+      "y": -1117310000,
+      "z": 10.0
+     }
+    },
+    {
+     "t": 120,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST_INT",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 3,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 120,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 3,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 3,
+      "command": 16,
+      "param4": "NaN",
+      "x": 406894450,
+      "y": -1117306000,
+      "z": 10.0
+     }
+    },
+    {
+     "t": 150,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST_INT",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 4,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 150,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 4,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 3,
+      "command": 16,
+      "param4": "NaN",
+      "x": 406893550,
+      "y": -1117306000,
+      "z": 10.0
+     }
+    },
+    {
+     "t": 180,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST_INT",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 5,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 180,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 5,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 2,
+      "command": 20
+     }
+    },
+    {
+     "t": 210,
+     "from": "vehicle",
+     "msg": "MISSION_ACK",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "type": 0,
+      "mission_type": 0
+     }
+    }
+   ],
+   "result": {
+    "t": 210,
+    "outcome": "ok",
+    "data": {}
+   },
+   "end_ms": 2210
+  },
+  {
+   "id": "MAV-18.ap",
+   "behaviour": "MAV-18",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "MISSION_COUNT resent; a repeated request is answered again",
+   "encodes": "ArduCopter re-sends the same request when no item arrives for about 1 s. The phone answers every request with the item it names and resends MISSION_COUNT after 1 s without a first request.",
+   "cites": [
+    "AP463 libraries/GCS_MAVLink/MissionItemProtocol.cpp:372",
+    "AP473 libraries/GCS_MAVLink/MissionItemProtocol.cpp:370",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:4512-4515",
+    "AP463 libraries/GCS_MAVLink/MissionItemProtocol.cpp:289-299",
+    "AP463 libraries/AP_Mission/AP_Mission.cpp:816-821",
+    "AP463 libraries/AP_Mission/AP_Mission.cpp:1465-1490",
+    "MAVLINK services/mission.html",
+    "AP463 libraries/GCS_MAVLink/MissionItemProtocol.cpp:407-411"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 81,
+     "custom_mode": 0,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "upload_mission",
+    "args": {
+     "home": {
+      "lat_e7": 406894000,
+      "lon_e7": -1117310000
+     },
+     "items": [
+      {
+       "kind": "takeoff",
+       "lat_e7": 406894000,
+       "lon_e7": -1117310000,
+       "alt_cm": 1000
+      },
+      {
+       "kind": "waypoint",
+       "lat_e7": 406894450,
+       "lon_e7": -1117310000,
+       "alt_cm": 1000
+      },
+      {
+       "kind": "return"
+      }
+     ]
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "MISSION_COUNT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "count": 4,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 1000,
+     "from": "phone",
+     "msg": "MISSION_COUNT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "count": 4,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 1040,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 0,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 1040,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 0,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 0,
+      "command": 16,
+      "x": 406894000,
+      "y": -1117310000,
+      "z": 0.0
+     }
+    },
+    {
+     "t": 1080,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 1,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 1080,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 1,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 3,
+      "command": 22,
+      "param4": "NaN",
+      "x": 406894000,
+      "y": -1117310000,
+      "z": 10.0
+     }
+    },
+    {
+     "t": 2080,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 1,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 2080,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 1,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 3,
+      "command": 22,
+      "param4": "NaN",
+      "x": 406894000,
+      "y": -1117310000,
+      "z": 10.0
+     }
+    },
+    {
+     "t": 2120,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 2,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 2120,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 2,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 3,
+      "command": 16,
+      "param4": "NaN",
+      "x": 406894450,
+      "y": -1117310000,
+      "z": 10.0
+     }
+    },
+    {
+     "t": 2160,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 3,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 2160,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 3,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 2,
+      "command": 20
+     }
+    },
+    {
+     "t": 2200,
+     "from": "vehicle",
+     "msg": "MISSION_ACK",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "type": 0,
+      "mission_type": 0
+     }
+    }
+   ],
+   "result": {
+    "t": 2200,
+    "outcome": "ok",
+    "data": {}
+   },
+   "end_ms": 4200
+  },
+  {
+   "id": "MAV-18.px4",
+   "behaviour": "MAV-18",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "MISSION_COUNT resent; a repeated request is answered again",
+   "encodes": "PX4 re-sends the same request every 250 ms until the item arrives (5 s protocol timeout). The phone answers every request with the item it names and resends MISSION_COUNT after 1 s without a first request.",
+   "cites": [
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:445-470",
+    "PX4 src/modules/mavlink/mavlink_mission.h:117",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:996-1035",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:1397-1402",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:1550",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:1602-1630",
+    "MAVLINK services/mission.html",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:561-581",
+    "PX4 src/modules/mavlink/mavlink_mission.h:80-81"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 81,
+     "custom_mode": 196608,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "upload_mission",
+    "args": {
+     "home": {
+      "lat_e7": 406894000,
+      "lon_e7": -1117310000
+     },
+     "items": [
+      {
+       "kind": "takeoff",
+       "lat_e7": 406894000,
+       "lon_e7": -1117310000,
+       "alt_cm": 1000
+      },
+      {
+       "kind": "waypoint",
+       "lat_e7": 406894450,
+       "lon_e7": -1117310000,
+       "alt_cm": 1000
+      },
+      {
+       "kind": "return"
+      }
+     ]
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "MISSION_COUNT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "count": 3,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 1000,
+     "from": "phone",
+     "msg": "MISSION_COUNT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "count": 3,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 1040,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST_INT",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 0,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 1040,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 0,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 3,
+      "command": 22,
+      "param4": "NaN",
+      "x": 406894000,
+      "y": -1117310000,
+      "z": 10.0
+     }
+    },
+    {
+     "t": 1080,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST_INT",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 1,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 1080,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 1,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 3,
+      "command": 16,
+      "param4": "NaN",
+      "x": 406894450,
+      "y": -1117310000,
+      "z": 10.0
+     }
+    },
+    {
+     "t": 1330,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST_INT",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 1,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 1330,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 1,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 3,
+      "command": 16,
+      "param4": "NaN",
+      "x": 406894450,
+      "y": -1117310000,
+      "z": 10.0
+     }
+    },
+    {
+     "t": 1370,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST_INT",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 2,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 1370,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 2,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 2,
+      "command": 20
+     }
+    },
+    {
+     "t": 1410,
+     "from": "vehicle",
+     "msg": "MISSION_ACK",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "type": 0,
+      "mission_type": 0
+     }
+    }
+   ],
+   "result": {
+    "t": 1410,
+    "outcome": "ok",
+    "data": {}
+   },
+   "end_ms": 3410
+  },
+  {
+   "id": "MAV-19.ap",
+   "behaviour": "MAV-19",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Mission refused for lack of space",
+   "encodes": "ArduCopter answers a MISSION_COUNT above its storage with MISSION_ACK NO_SPACE (4) and aborts. ArduCopter truncates its stored mission to the new count when an upload starts, so a failed upload leaves no usable mission and the phone must never start after it.",
+   "cites": [
+    "AP463 libraries/GCS_MAVLink/MissionItemProtocol.cpp:372",
+    "AP473 libraries/GCS_MAVLink/MissionItemProtocol.cpp:370",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:4512-4515",
+    "AP463 libraries/GCS_MAVLink/MissionItemProtocol.cpp:289-299",
+    "AP463 libraries/AP_Mission/AP_Mission.cpp:816-821",
+    "AP463 libraries/AP_Mission/AP_Mission.cpp:1465-1490",
+    "MAVLINK services/mission.html",
+    "AP463 libraries/GCS_MAVLink/MissionItemProtocol.cpp:91-104"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 81,
+     "custom_mode": 0,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "upload_mission",
+    "args": {
+     "home": {
+      "lat_e7": 406894000,
+      "lon_e7": -1117310000
+     },
+     "items": [
+      {
+       "kind": "takeoff",
+       "lat_e7": 406894000,
+       "lon_e7": -1117310000,
+       "alt_cm": 1000
+      },
+      {
+       "kind": "speed",
+       "cm_s": 300
+      },
+      {
+       "kind": "waypoint",
+       "lat_e7": 406894450,
+       "lon_e7": -1117310000,
+       "alt_cm": 1000
+      },
+      {
+       "kind": "waypoint",
+       "lat_e7": 406894450,
+       "lon_e7": -1117306000,
+       "alt_cm": 1000
+      },
+      {
+       "kind": "waypoint",
+       "lat_e7": 406893550,
+       "lon_e7": -1117306000,
+       "alt_cm": 1000
+      },
+      {
+       "kind": "return"
+      }
+     ]
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "MISSION_COUNT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "count": 7,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 30,
+     "from": "vehicle",
+     "msg": "MISSION_ACK",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "type": 4,
+      "mission_type": 0
+     }
+    }
+   ],
+   "result": {
+    "t": 30,
+    "outcome": "refused",
+    "data": {
+     "mission_result": 4
+    }
+   },
+   "end_ms": 3000
+  },
+  {
+   "id": "MAV-19.px4",
+   "behaviour": "MAV-19",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Mission item refused mid-upload",
+   "encodes": "PX4 answers an item it cannot use with STATUSTEXT and MISSION_ACK (here MAV_MISSION_UNSUPPORTED, 3) and returns to idle; the phone sends no further item.",
+   "cites": [
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:445-470",
+    "PX4 src/modules/mavlink/mavlink_mission.h:117",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:996-1035",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:1397-1402",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:1550",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:1602-1630",
+    "MAVLINK services/mission.html",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:1124-1136"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 81,
+     "custom_mode": 196608,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "upload_mission",
+    "args": {
+     "home": {
+      "lat_e7": 406894000,
+      "lon_e7": -1117310000
+     },
+     "items": [
+      {
+       "kind": "takeoff",
+       "lat_e7": 406894000,
+       "lon_e7": -1117310000,
+       "alt_cm": 1000
+      },
+      {
+       "kind": "waypoint",
+       "lat_e7": 406894450,
+       "lon_e7": -1117310000,
+       "alt_cm": 1000
+      },
+      {
+       "kind": "return"
+      }
+     ]
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "MISSION_COUNT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "count": 3,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 30,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST_INT",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 0,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 30,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 0,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 3,
+      "command": 22,
+      "param4": "NaN",
+      "x": 406894000,
+      "y": -1117310000,
+      "z": 10.0
+     }
+    },
+    {
+     "t": 60,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST_INT",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 1,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 60,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 1,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 3,
+      "command": 16,
+      "param4": "NaN",
+      "x": 406894450,
+      "y": -1117310000,
+      "z": 10.0
+     }
+    },
+    {
+     "t": 90,
+     "from": "vehicle",
+     "msg": "MISSION_ACK",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "type": 3,
+      "mission_type": 0
+     }
+    }
+   ],
+   "result": {
+    "t": 90,
+    "outcome": "refused",
+    "data": {
+     "mission_result": 3
+    }
+   },
+   "end_ms": 3000
+  },
+  {
+   "id": "MAV-20.ap",
+   "behaviour": "MAV-20",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "MISSION_COUNT never answered",
+   "encodes": "Without any request the phone sends MISSION_COUNT three times, 1 s apart, and times out 1 s after the last; ArduCopter itself abandons an upload after 8 s.",
+   "cites": [
+    "AP463 libraries/GCS_MAVLink/MissionItemProtocol.cpp:372",
+    "AP473 libraries/GCS_MAVLink/MissionItemProtocol.cpp:370",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:4512-4515",
+    "AP463 libraries/GCS_MAVLink/MissionItemProtocol.cpp:289-299",
+    "AP463 libraries/AP_Mission/AP_Mission.cpp:816-821",
+    "AP463 libraries/AP_Mission/AP_Mission.cpp:1465-1490",
+    "MAVLINK services/mission.html",
+    "AP463 libraries/GCS_MAVLink/MissionItemProtocol.cpp:391-404"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 81,
+     "custom_mode": 0,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "upload_mission",
+    "args": {
+     "home": {
+      "lat_e7": 406894000,
+      "lon_e7": -1117310000
+     },
+     "items": [
+      {
+       "kind": "takeoff",
+       "lat_e7": 406894000,
+       "lon_e7": -1117310000,
+       "alt_cm": 1000
+      },
+      {
+       "kind": "waypoint",
+       "lat_e7": 406894450,
+       "lon_e7": -1117310000,
+       "alt_cm": 1000
+      },
+      {
+       "kind": "return"
+      }
+     ]
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "MISSION_COUNT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "count": 4,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 1000,
+     "from": "phone",
+     "msg": "MISSION_COUNT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "count": 4,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 2000,
+     "from": "phone",
+     "msg": "MISSION_COUNT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "count": 4,
+      "mission_type": 0
+     }
+    }
+   ],
+   "result": {
+    "t": 3000,
+    "outcome": "timeout",
+    "data": {}
+   },
+   "end_ms": 4500
+  },
+  {
+   "id": "MAV-20.px4",
+   "behaviour": "MAV-20",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Vehicle silent in the middle of an upload",
+   "encodes": "PX4 keeps re-requesting every 250 ms while the link works, so 3 s with no request means the link is gone; the phone times out 3 s after the last request and does not send items unasked.",
+   "cites": [
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:445-470",
+    "PX4 src/modules/mavlink/mavlink_mission.h:117",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:996-1035",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:1397-1402",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:1550",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:1602-1630",
+    "MAVLINK services/mission.html",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:561-581"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 81,
+     "custom_mode": 196608,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "upload_mission",
+    "args": {
+     "home": {
+      "lat_e7": 406894000,
+      "lon_e7": -1117310000
+     },
+     "items": [
+      {
+       "kind": "takeoff",
+       "lat_e7": 406894000,
+       "lon_e7": -1117310000,
+       "alt_cm": 1000
+      },
+      {
+       "kind": "waypoint",
+       "lat_e7": 406894450,
+       "lon_e7": -1117310000,
+       "alt_cm": 1000
+      },
+      {
+       "kind": "return"
+      }
+     ]
+    }
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "MISSION_COUNT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "count": 3,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 30,
+     "from": "vehicle",
+     "msg": "MISSION_REQUEST_INT",
+     "fields": {
+      "target_system": 255,
+      "target_component": 190,
+      "seq": 0,
+      "mission_type": 0
+     }
+    },
+    {
+     "t": 30,
+     "from": "phone",
+     "msg": "MISSION_ITEM_INT",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "seq": 0,
+      "current": 0,
+      "autocontinue": 1,
+      "mission_type": 0,
+      "frame": 3,
+      "command": 22,
+      "param4": "NaN",
+      "x": 406894000,
+      "y": -1117310000,
+      "z": 10.0
+     }
+    }
+   ],
+   "result": {
+    "t": 3030,
+    "outcome": "timeout",
+    "data": {}
+   },
+   "end_ms": 4500
+  },
+  {
+   "id": "MAV-21.ap",
+   "behaviour": "MAV-21",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Start: hold mode, arm, mission start",
+   "encodes": "ArduCopter refuses arming in AUTO unless AUTO_OPTIONS bit 0 is set (default 0) but always allows a GCS to arm in GUIDED, so the phone sets GUIDED first. MAV_CMD_MISSION_START needs param1 and param2 0 (else DENIED), switches to AUTO, sets auto-armed and starts the mission, whose first item after home is the takeoff. Armed on the ground without a takeoff, ArduCopter disarms after DISARM_DELAY (10 s). Each step waits for its ACK; ArduCopter and PX4 both run a repeated MISSION_START again, which restarts at item 0 and is harmless during the takeoff.",
+   "cites": [
+    "AP463 ArduCopter/GCS_Mavlink.cpp:958-972",
+    "AP473 ArduCopter/GCS_MAVLink_Copter.cpp:695-709",
+    "AP463 ArduCopter/mode_guided.cpp:106-114",
+    "AP463 ArduCopter/mode_auto.cpp:210-216",
+    "AP463 ArduCopter/Parameters.cpp:967-972",
+    "AP463 ArduCopter/mode_auto.cpp:23-31",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:5020-5042",
+    "AP463 ArduCopter/motors.cpp:87-133",
+    "AP463 ArduCopter/Parameters.cpp:340-346",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:5170-5200",
+    "MAVLINK services/command.html"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 81,
+     "custom_mode": 0,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "start",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 0,
+      "param1": 1.0,
+      "param2": 4.0
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 176,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 40,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 400,
+      "confirmation": 0,
+      "param1": 1.0
+     }
+    },
+    {
+     "t": 300,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 400,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 300,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 300,
+      "confirmation": 0
+     }
+    },
+    {
+     "t": 340,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 300,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 1000,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 3,
+      "base_mode": 217,
+      "custom_mode": 3,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 1000,
+     "query": "snapshot",
+     "expect": {
+      "armed": true,
+      "role": "mission",
+      "commanded": true
+     }
+    }
+   ],
+   "result": {
+    "t": 340,
+    "outcome": "ok",
+    "data": {}
+   },
+   "end_ms": 2000
+  },
+  {
+   "id": "MAV-21.px4",
+   "behaviour": "MAV-21",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Start: hold mode, arm, mission start",
+   "encodes": "PX4 allows arming in AUTO.LOITER, so the phone holds first. MAV_CMD_MISSION_START with param1 0 sets the mission index to 0, switches to AUTO.MISSION and arms in one step (already armed is accepted). Armed without a takeoff, PX4 disarms after COM_DISARM_PRFLT (10 s). Each step waits for its ACK; ArduCopter and PX4 both run a repeated MISSION_START again, which restarts at item 0 and is harmless during the takeoff.",
+   "cites": [
+    "PX4 src/modules/commander/Commander.cpp:948-982",
+    "PX4 src/modules/commander/Commander.cpp:1127-1153",
+    "PX4 src/modules/navigator/navigator_main.cpp:681-686",
+    "PX4 src/modules/commander/ModeUtil/mode_requirements.cpp:100-200",
+    "PX4 src/modules/commander/commander_params.c:243",
+    "PX4 src/modules/commander/Commander.cpp:2294-2296",
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:439-458",
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:122-134",
+    "PX4 src/modules/commander/Commander.cpp:2674-2680",
+    "MAVLINK services/command.html"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 81,
+     "custom_mode": 196608,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "start",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 0,
+      "param1": 1.0,
+      "param2": 4.0,
+      "param3": 3.0
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 176,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 40,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 400,
+      "confirmation": 0,
+      "param1": 1.0
+     }
+    },
+    {
+     "t": 300,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 400,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 300,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 300,
+      "confirmation": 0
+     }
+    },
+    {
+     "t": 340,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 300,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 1000,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 12,
+      "base_mode": 157,
+      "custom_mode": 67371008,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 1000,
+     "query": "snapshot",
+     "expect": {
+      "armed": true,
+      "role": "mission",
+      "commanded": true
+     }
+    }
+   ],
+   "result": {
+    "t": 340,
+    "outcome": "ok",
+    "data": {}
+   },
+   "end_ms": 2000
+  },
+  {
+   "id": "MAV-22.ap.arm",
+   "behaviour": "MAV-22",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Arming refused: no mission start",
+   "encodes": "ArduCopter answers a failed prearm or arm check with MAV_RESULT_FAILED and explains it in a STATUSTEXT. The phone stops at the refused step and never sends MISSION_START; the STATUSTEXT is kept for the Check screen.",
+   "cites": [
+    "AP463 ArduCopter/GCS_Mavlink.cpp:958-972",
+    "AP473 ArduCopter/GCS_MAVLink_Copter.cpp:695-709",
+    "AP463 ArduCopter/mode_guided.cpp:106-114",
+    "AP463 ArduCopter/mode_auto.cpp:210-216",
+    "AP463 ArduCopter/Parameters.cpp:967-972",
+    "AP463 ArduCopter/mode_auto.cpp:23-31",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:5020-5042",
+    "AP463 ArduCopter/motors.cpp:87-133",
+    "AP463 ArduCopter/Parameters.cpp:340-346"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 81,
+     "custom_mode": 0,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "start",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 0,
+      "param1": 1.0,
+      "param2": 4.0
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 176,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 40,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 400,
+      "confirmation": 0,
+      "param1": 1.0
+     }
+    },
+    {
+     "t": 250,
+     "from": "vehicle",
+     "msg": "STATUSTEXT",
+     "fields": {
+      "severity": 2,
+      "text": "PreArm: Need Position Estimate"
+     }
+    },
+    {
+     "t": 260,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 400,
+      "result": 4,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 300,
+     "query": "statustext",
+     "expect": [
+      {
+       "severity": 2,
+       "text": "PreArm: Need Position Estimate"
+      }
+     ]
+    }
+   ],
+   "result": {
+    "t": 260,
+    "outcome": "refused",
+    "data": {
+     "step": "arm",
+     "mav_result": 4
+    }
+   },
+   "end_ms": 3000
+  },
+  {
+   "id": "MAV-22.ap.start",
+   "behaviour": "MAV-22",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Mission start refused after arming",
+   "encodes": "ArduCopter answers MISSION_START with DENIED when param1 or param2 is not 0 and FAILED when AUTO cannot start (for example no mission). The phone reports the refusal and sends nothing more; the autopilot disarms by itself after its 10 s preflight disarm delay.",
+   "cites": [
+    "AP463 ArduCopter/GCS_Mavlink.cpp:958-972",
+    "AP473 ArduCopter/GCS_MAVLink_Copter.cpp:695-709",
+    "AP463 ArduCopter/mode_guided.cpp:106-114",
+    "AP463 ArduCopter/mode_auto.cpp:210-216",
+    "AP463 ArduCopter/Parameters.cpp:967-972",
+    "AP463 ArduCopter/mode_auto.cpp:23-31",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:5020-5042",
+    "AP463 ArduCopter/motors.cpp:87-133",
+    "AP463 ArduCopter/Parameters.cpp:340-346"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 81,
+     "custom_mode": 0,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "start",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 0,
+      "param1": 1.0,
+      "param2": 4.0
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 176,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 40,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 400,
+      "confirmation": 0,
+      "param1": 1.0
+     }
+    },
+    {
+     "t": 300,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 400,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 300,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 300,
+      "confirmation": 0
+     }
+    },
+    {
+     "t": 340,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 300,
+      "result": 2,
+      "target_system": 255,
+      "target_component": 190
+     }
+    }
+   ],
+   "result": {
+    "t": 340,
+    "outcome": "refused",
+    "data": {
+     "step": "start",
+     "mav_result": 2
+    }
+   },
+   "end_ms": 3000
+  },
+  {
+   "id": "MAV-22.px4.arm",
+   "behaviour": "MAV-22",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Arming refused: no mission start",
+   "encodes": "PX4 runs its preflight checks for a MAVLink arm request and answers a failure with MAV_RESULT_DENIED, explained in a STATUSTEXT. The phone stops at the refused step and never sends MISSION_START; the STATUSTEXT is kept for the Check screen.",
+   "cites": [
+    "PX4 src/modules/commander/Commander.cpp:948-982",
+    "PX4 src/modules/commander/Commander.cpp:1127-1153",
+    "PX4 src/modules/navigator/navigator_main.cpp:681-686",
+    "PX4 src/modules/commander/ModeUtil/mode_requirements.cpp:100-200",
+    "PX4 src/modules/commander/commander_params.c:243",
+    "PX4 src/modules/commander/Commander.cpp:2294-2296",
+    "PX4 src/modules/commander/Commander.cpp:549-609"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 81,
+     "custom_mode": 196608,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "start",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 0,
+      "param1": 1.0,
+      "param2": 4.0,
+      "param3": 3.0
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 176,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 40,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 400,
+      "confirmation": 0,
+      "param1": 1.0
+     }
+    },
+    {
+     "t": 250,
+     "from": "vehicle",
+     "msg": "STATUSTEXT",
+     "fields": {
+      "severity": 2,
+      "text": "Preflight Fail: No global position"
+     }
+    },
+    {
+     "t": 260,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 400,
+      "result": 2,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 300,
+     "query": "statustext",
+     "expect": [
+      {
+       "severity": 2,
+       "text": "Preflight Fail: No global position"
+      }
+     ]
+    }
+   ],
+   "result": {
+    "t": 260,
+    "outcome": "refused",
+    "data": {
+     "step": "arm",
+     "mav_result": 2
+    }
+   },
+   "end_ms": 3000
+  },
+  {
+   "id": "MAV-22.px4.start",
+   "behaviour": "MAV-22",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Mission start refused after arming",
+   "encodes": "PX4 answers MISSION_START with DENIED when no valid mission exists and TEMPORARILY_REJECTED when the mode change or arming fails. The phone reports the refusal and sends nothing more; the autopilot disarms by itself after its 10 s preflight disarm delay.",
+   "cites": [
+    "PX4 src/modules/commander/Commander.cpp:948-982",
+    "PX4 src/modules/commander/Commander.cpp:1127-1153",
+    "PX4 src/modules/navigator/navigator_main.cpp:681-686",
+    "PX4 src/modules/commander/ModeUtil/mode_requirements.cpp:100-200",
+    "PX4 src/modules/commander/commander_params.c:243",
+    "PX4 src/modules/commander/Commander.cpp:2294-2296"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 81,
+     "custom_mode": 196608,
+     "system_status": 3,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "start",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 0,
+      "param1": 1.0,
+      "param2": 4.0,
+      "param3": 3.0
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 176,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 40,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 400,
+      "confirmation": 0,
+      "param1": 1.0
+     }
+    },
+    {
+     "t": 300,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 400,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 300,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 300,
+      "confirmation": 0
+     }
+    },
+    {
+     "t": 340,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 300,
+      "result": 1,
+      "target_system": 255,
+      "target_component": 190
+     }
+    }
+   ],
+   "result": {
+    "t": 340,
+    "outcome": "refused",
+    "data": {
+     "step": "start",
+     "mav_result": 1
+    }
+   },
+   "end_ms": 3000
+  },
+  {
+   "id": "MAV-23.ap",
+   "behaviour": "MAV-23",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Hold",
+   "encodes": "ArduCopter holds in GUIDED: entering GUIDED from AUTO starts velocity control with a zero target, so the copter brakes and holds. LOITER is avoided because with no RC its throttle input would descend.",
+   "cites": [
+    "AP463 ArduCopter/mode_guided.cpp:36-47",
+    "AP463 ArduCopter/mode_guided.cpp:260-267",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:5170-5200",
+    "MAVLINK services/command.html",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:4872-4878",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:2826-2838",
+    "AP463 ArduCopter/mode.h:75-105"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 217,
+     "custom_mode": 3,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "hold",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 0,
+      "param1": 1.0,
+      "param2": 4.0
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 176,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 1000,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 3,
+      "base_mode": 217,
+      "custom_mode": 4,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 1000,
+     "query": "snapshot",
+     "expect": {
+      "mode": "GUIDED",
+      "role": "hold",
+      "commanded": true
+     }
+    }
+   ],
+   "result": {
+    "t": 40,
+    "outcome": "ok",
+    "data": {}
+   },
+   "end_ms": 2000
+  },
+  {
+   "id": "MAV-23.px4",
+   "behaviour": "MAV-23",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Hold",
+   "encodes": "PX4 holds in AUTO.LOITER (main mode 4, sub mode 3).",
+   "cites": [
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:439-458",
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:122-134",
+    "PX4 src/modules/commander/Commander.cpp:2674-2680",
+    "MAVLINK services/command.html",
+    "PX4 src/modules/commander/Commander.cpp:800-908",
+    "PX4 src/modules/commander/px4_custom_mode.h:46-98"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 157,
+     "custom_mode": 67371008,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "hold",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 0,
+      "param1": 1.0,
+      "param2": 4.0,
+      "param3": 3.0
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 176,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 1000,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 12,
+      "base_mode": 157,
+      "custom_mode": 50593792,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 1000,
+     "query": "snapshot",
+     "expect": {
+      "mode": "AUTO.LOITER",
+      "role": "hold",
+      "commanded": true
+     }
+    }
+   ],
+   "result": {
+    "t": 40,
+    "outcome": "ok",
+    "data": {}
+   },
+   "end_ms": 2000
+  },
+  {
+   "id": "MAV-24.ap",
+   "behaviour": "MAV-24",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Resume",
+   "encodes": "ArduCopter resumes the mission at its current command when AUTO is set again (MIS_RESTART 0, the default).",
+   "cites": [
+    "AP463 ArduCopter/mode_auto.cpp:88-95",
+    "AP463 libraries/AP_Mission/AP_Mission.cpp:130-157",
+    "AP463 libraries/AP_Mission/AP_Mission.h:45",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:5170-5200",
+    "MAVLINK services/command.html",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:4872-4878",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:2826-2838",
+    "AP463 ArduCopter/mode.h:75-105"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 217,
+     "custom_mode": 4,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "resume",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 0,
+      "param1": 1.0,
+      "param2": 3.0
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 176,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 1000,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 3,
+      "base_mode": 217,
+      "custom_mode": 3,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 1000,
+     "query": "snapshot",
+     "expect": {
+      "mode": "AUTO",
+      "role": "mission",
+      "commanded": true
+     }
+    }
+   ],
+   "result": {
+    "t": 40,
+    "outcome": "ok",
+    "data": {}
+   },
+   "end_ms": 2000
+  },
+  {
+   "id": "MAV-24.px4",
+   "behaviour": "MAV-24",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Resume",
+   "encodes": "PX4 resumes the mission at its current item when AUTO.MISSION is set again.",
+   "cites": [
+    "PX4 src/modules/navigator/mission_base.cpp:204-254",
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:439-458",
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:122-134",
+    "PX4 src/modules/commander/Commander.cpp:2674-2680",
+    "MAVLINK services/command.html",
+    "PX4 src/modules/commander/Commander.cpp:800-908",
+    "PX4 src/modules/commander/px4_custom_mode.h:46-98"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 157,
+     "custom_mode": 50593792,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "resume",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 0,
+      "param1": 1.0,
+      "param2": 4.0,
+      "param3": 4.0
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 176,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 1000,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 12,
+      "base_mode": 157,
+      "custom_mode": 67371008,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 1000,
+     "query": "snapshot",
+     "expect": {
+      "mode": "AUTO.MISSION",
+      "role": "mission",
+      "commanded": true
+     }
+    }
+   ],
+   "result": {
+    "t": 40,
+    "outcome": "ok",
+    "data": {}
+   },
+   "end_ms": 2000
+  },
+  {
+   "id": "MAV-25.ap",
+   "behaviour": "MAV-25",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Return home",
+   "encodes": "ArduCopter runs MAV_CMD_NAV_RETURN_TO_LAUNCH as a change to RTL mode (ACCEPTED, or FAILED).",
+   "cites": [
+    "AP463 ArduCopter/GCS_Mavlink.cpp:825-836",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:5170-5200",
+    "MAVLINK services/command.html"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 217,
+     "custom_mode": 3,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "return_home",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 20,
+      "confirmation": 0
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 20,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 1000,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 3,
+      "base_mode": 217,
+      "custom_mode": 6,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 1000,
+     "query": "snapshot",
+     "expect": {
+      "mode": "RTL",
+      "role": "return",
+      "commanded": true
+     }
+    }
+   ],
+   "result": {
+    "t": 40,
+    "outcome": "ok",
+    "data": {}
+   },
+   "end_ms": 2000
+  },
+  {
+   "id": "MAV-25.px4",
+   "behaviour": "MAV-25",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Return home",
+   "encodes": "PX4 runs MAV_CMD_NAV_RETURN_TO_LAUNCH as a change to AUTO.RTL (ACCEPTED, or TEMPORARILY_REJECTED).",
+   "cites": [
+    "PX4 src/modules/commander/Commander.cpp:1050-1062",
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:439-458",
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:122-134",
+    "PX4 src/modules/commander/Commander.cpp:2674-2680",
+    "MAVLINK services/command.html"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 157,
+     "custom_mode": 67371008,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "return_home",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 20,
+      "confirmation": 0
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 20,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 1000,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 12,
+      "base_mode": 157,
+      "custom_mode": 84148224,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 1000,
+     "query": "snapshot",
+     "expect": {
+      "mode": "AUTO.RTL",
+      "role": "return",
+      "commanded": true
+     }
+    }
+   ],
+   "result": {
+    "t": 40,
+    "outcome": "ok",
+    "data": {}
+   },
+   "end_ms": 2000
+  },
+  {
+   "id": "MAV-26.ap",
+   "behaviour": "MAV-26",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Land",
+   "encodes": "ArduCopter runs MAV_CMD_NAV_LAND as a change to LAND mode, landing in place; params 5 and 6 are ignored.",
+   "cites": [
+    "AP463 ArduCopter/GCS_Mavlink.cpp:825-836",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:5170-5200",
+    "MAVLINK services/command.html"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 217,
+     "custom_mode": 3,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "land",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 21,
+      "confirmation": 0
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 21,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 1000,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 3,
+      "base_mode": 217,
+      "custom_mode": 9,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 1000,
+     "query": "snapshot",
+     "expect": {
+      "mode": "LAND",
+      "role": "land",
+      "commanded": true
+     }
+    }
+   ],
+   "result": {
+    "t": 40,
+    "outcome": "ok",
+    "data": {}
+   },
+   "end_ms": 2000
+  },
+  {
+   "id": "MAV-26.px4",
+   "behaviour": "MAV-26",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Land",
+   "encodes": "PX4 runs MAV_CMD_NAV_LAND as a forced change to AUTO.LAND, landing in place; the navigator does not read the command's position.",
+   "cites": [
+    "PX4 src/modules/commander/Commander.cpp:1093-1111",
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:439-458",
+    "PX4 src/modules/mavlink/mavlink_receiver.cpp:122-134",
+    "PX4 src/modules/commander/Commander.cpp:2674-2680",
+    "MAVLINK services/command.html"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 157,
+     "custom_mode": 67371008,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "land",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 21,
+      "confirmation": 0
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 21,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 1000,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 12,
+      "base_mode": 157,
+      "custom_mode": 100925440,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 1000,
+     "query": "snapshot",
+     "expect": {
+      "mode": "AUTO.LAND",
+      "role": "land",
+      "commanded": true
+     }
+    }
+   ],
+   "result": {
+    "t": 40,
+    "outcome": "ok",
+    "data": {}
+   },
+   "end_ms": 2000
+  },
+  {
+   "id": "MAV-27.ap.silent",
+   "behaviour": "MAV-27",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "No ACK for NAV_LAND: land by mode",
+   "encodes": "Three unanswered MAV_CMD_NAV_LAND tries are followed at once by MAV_CMD_DO_SET_MODE to the autopilot's land mode (LAND, custom mode 9), which lands in place by the other command path.",
+   "cites": [
+    "AP463 ArduCopter/GCS_Mavlink.cpp:825-836",
+    "PLAN 2.4",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:4872-4878",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:2826-2838",
+    "AP463 ArduCopter/mode.h:75-105"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 217,
+     "custom_mode": 3,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "land",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 21,
+      "confirmation": 0
+     }
+    },
+    {
+     "t": 1000,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 21,
+      "confirmation": 1
+     }
+    },
+    {
+     "t": 2000,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 21,
+      "confirmation": 2
+     }
+    },
+    {
+     "t": 3000,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 0,
+      "param1": 1.0,
+      "param2": 9.0
+     }
+    },
+    {
+     "t": 3040,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 176,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    }
+   ],
+   "result": {
+    "t": 3040,
+    "outcome": "ok",
+    "data": {}
+   },
+   "end_ms": 5000
+  },
+  {
+   "id": "MAV-27.ap.refused",
+   "behaviour": "MAV-27",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "NAV_LAND refused: land by mode at once",
+   "encodes": "A refused MAV_CMD_NAV_LAND (FAILED) is not repeated; the phone moves to MAV_CMD_DO_SET_MODE land at once.",
+   "cites": [
+    "AP463 ArduCopter/GCS_Mavlink.cpp:825-836",
+    "PLAN 2.4",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:4872-4878",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:2826-2838",
+    "AP463 ArduCopter/mode.h:75-105"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 217,
+     "custom_mode": 3,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "land",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 21,
+      "confirmation": 0
+     }
+    },
+    {
+     "t": 30,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 21,
+      "result": 4,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 30,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 0,
+      "param1": 1.0,
+      "param2": 9.0
+     }
+    },
+    {
+     "t": 70,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 176,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    }
+   ],
+   "result": {
+    "t": 70,
+    "outcome": "ok",
+    "data": {}
+   },
+   "end_ms": 3000
+  },
+  {
+   "id": "MAV-27.px4.silent",
+   "behaviour": "MAV-27",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "No ACK for NAV_LAND: land by mode",
+   "encodes": "Three unanswered MAV_CMD_NAV_LAND tries are followed at once by MAV_CMD_DO_SET_MODE to the autopilot's land mode (AUTO.LAND), which lands in place by the other command path.",
+   "cites": [
+    "PX4 src/modules/commander/Commander.cpp:1093-1111",
+    "PLAN 2.4",
+    "PX4 src/modules/commander/Commander.cpp:800-908",
+    "PX4 src/modules/commander/px4_custom_mode.h:46-98"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 157,
+     "custom_mode": 67371008,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "land",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 21,
+      "confirmation": 0
+     }
+    },
+    {
+     "t": 1000,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 21,
+      "confirmation": 1
+     }
+    },
+    {
+     "t": 2000,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 21,
+      "confirmation": 2
+     }
+    },
+    {
+     "t": 3000,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 0,
+      "param1": 1.0,
+      "param2": 4.0,
+      "param3": 6.0
+     }
+    },
+    {
+     "t": 3040,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 176,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    }
+   ],
+   "result": {
+    "t": 3040,
+    "outcome": "ok",
+    "data": {}
+   },
+   "end_ms": 5000
+  },
+  {
+   "id": "MAV-27.px4.refused",
+   "behaviour": "MAV-27",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "NAV_LAND refused: land by mode at once",
+   "encodes": "A refused MAV_CMD_NAV_LAND (TEMPORARILY_REJECTED) is not repeated; the phone moves to MAV_CMD_DO_SET_MODE land at once.",
+   "cites": [
+    "PX4 src/modules/commander/Commander.cpp:1093-1111",
+    "PLAN 2.4",
+    "PX4 src/modules/commander/Commander.cpp:800-908",
+    "PX4 src/modules/commander/px4_custom_mode.h:46-98"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 157,
+     "custom_mode": 67371008,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "land",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 21,
+      "confirmation": 0
+     }
+    },
+    {
+     "t": 30,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 21,
+      "result": 1,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 30,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 0,
+      "param1": 1.0,
+      "param2": 4.0,
+      "param3": 6.0
+     }
+    },
+    {
+     "t": 70,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 176,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    }
+   ],
+   "result": {
+    "t": 70,
+    "outcome": "ok",
+    "data": {}
+   },
+   "end_ms": 3000
+  },
+  {
+   "id": "MAV-27.ap.none",
+   "behaviour": "MAV-27",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Land gets no answer at all",
+   "encodes": "Three NAV_LAND tries and three DO_SET_MODE tries without any ACK end in a timeout at 6 s; Land all shows 'no answer' for this drone.",
+   "cites": [
+    "AP463 ArduCopter/GCS_Mavlink.cpp:825-836",
+    "PLAN 2.4",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:4872-4878",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:2826-2838",
+    "AP463 ArduCopter/mode.h:75-105"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 217,
+     "custom_mode": 3,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "land",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 21,
+      "confirmation": 0
+     }
+    },
+    {
+     "t": 1000,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 21,
+      "confirmation": 1
+     }
+    },
+    {
+     "t": 2000,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 21,
+      "confirmation": 2
+     }
+    },
+    {
+     "t": 3000,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 0,
+      "param1": 1.0,
+      "param2": 9.0
+     }
+    },
+    {
+     "t": 4000,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 1,
+      "param1": 1.0,
+      "param2": 9.0
+     }
+    },
+    {
+     "t": 5000,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 2,
+      "param1": 1.0,
+      "param2": 9.0
+     }
+    }
+   ],
+   "result": {
+    "t": 6000,
+    "outcome": "timeout",
+    "data": {}
+   },
+   "end_ms": 7500
+  },
+  {
+   "id": "MAV-28.ap",
+   "behaviour": "MAV-28",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Telemetry snapshot",
+   "encodes": "ArduCopter reports landed_state from land_complete and the mode (never UNDEFINED) and sends EXTENDED_SYS_STATE only when requested. Battery comes from BATTERY_STATUS instance 0, else SYS_STATUS; -1 (unknown) and other instances never overwrite a reading, so its time stays old and the stale-battery rule (R5) can act. UINT16_MAX heading or voltage and 255 satellites are unknown too.",
+   "cites": [
+    "AP463 ArduCopter/GCS_Mavlink.cpp:1560-1572",
+    "MAVLINK messages/common.html#SYS_STATUS",
+    "MAVLINK messages/common.html#BATTERY_STATUS",
+    "MAVLINK messages/common.html#GLOBAL_POSITION_INT",
+    "MAVLINK messages/common.html#GPS_RAW_INT",
+    "PLAN 2.2"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 217,
+     "custom_mode": 3,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "observe",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 100,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 3,
+      "base_mode": 217,
+      "custom_mode": 3,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 200,
+     "from": "vehicle",
+     "msg": "GLOBAL_POSITION_INT",
+     "fields": {
+      "time_boot_ms": 184200,
+      "lat": 406894450,
+      "lon": -1117306000,
+      "alt": 1610050,
+      "relative_alt": 10050,
+      "vx": 300,
+      "vy": -12,
+      "vz": -5,
+      "hdg": 9000
+     }
+    },
+    {
+     "t": 300,
+     "from": "vehicle",
+     "msg": "SYS_STATUS",
+     "fields": {
+      "voltage_battery": 15800,
+      "current_battery": 1530,
+      "battery_remaining": 76
+     }
+    },
+    {
+     "t": 400,
+     "from": "vehicle",
+     "msg": "BATTERY_STATUS",
+     "fields": {
+      "id": 0,
+      "battery_function": 1,
+      "type": 1,
+      "temperature": 3150,
+      "voltages": [
+       4200,
+       4190,
+       4180,
+       4170,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535
+      ],
+      "current_battery": 1530,
+      "current_consumed": 812,
+      "energy_consumed": -1,
+      "battery_remaining": 74
+     }
+    },
+    {
+     "t": 500,
+     "from": "vehicle",
+     "msg": "GPS_RAW_INT",
+     "fields": {
+      "fix_type": 3,
+      "lat": 406894450,
+      "lon": -1117306000,
+      "alt": 1610050,
+      "eph": 121,
+      "epv": 180,
+      "satellites_visible": 14
+     }
+    },
+    {
+     "t": 600,
+     "from": "vehicle",
+     "msg": "EXTENDED_SYS_STATE",
+     "fields": {
+      "vtol_state": 3,
+      "landed_state": 2
+     }
+    },
+    {
+     "t": 700,
+     "from": "vehicle",
+     "msg": "STATUSTEXT",
+     "fields": {
+      "severity": 6,
+      "text": "Mission: 3 WP"
+     }
+    },
+    {
+     "t": 800,
+     "query": "snapshot",
+     "expect": {
+      "link_up": true,
+      "control_link": true,
+      "armed": true,
+      "mode": "AUTO",
+      "role": "mission",
+      "lat_e7": 406894450,
+      "lon_e7": -1117306000,
+      "rel_alt_mm": 10050,
+      "heading_cdeg": 9000,
+      "position_at_ms": 200,
+      "battery_pct": 74,
+      "battery_at_ms": 400,
+      "voltage_mv": 15800,
+      "gps_fix": 3,
+      "satellites": 14,
+      "gps_at_ms": 500,
+      "landed": "in_air",
+      "landed_at_ms": 600
+     }
+    },
+    {
+     "t": 1000,
+     "from": "vehicle",
+     "msg": "BATTERY_STATUS",
+     "fields": {
+      "id": 1,
+      "battery_function": 1,
+      "type": 1,
+      "temperature": 32767,
+      "voltages": [
+       65535,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535
+      ],
+      "current_battery": -1,
+      "current_consumed": -1,
+      "energy_consumed": -1,
+      "battery_remaining": 12
+     }
+    },
+    {
+     "t": 1100,
+     "from": "vehicle",
+     "msg": "BATTERY_STATUS",
+     "fields": {
+      "id": 0,
+      "battery_function": 1,
+      "type": 1,
+      "temperature": 3150,
+      "voltages": [
+       65535,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535
+      ],
+      "current_battery": -1,
+      "current_consumed": -1,
+      "energy_consumed": -1,
+      "battery_remaining": -1
+     }
+    },
+    {
+     "t": 1200,
+     "from": "vehicle",
+     "msg": "SYS_STATUS",
+     "fields": {
+      "voltage_battery": 65535,
+      "current_battery": -1,
+      "battery_remaining": -1
+     }
+    },
+    {
+     "t": 1300,
+     "from": "vehicle",
+     "msg": "GLOBAL_POSITION_INT",
+     "fields": {
+      "time_boot_ms": 185300,
+      "lat": 406894460,
+      "lon": -1117306000,
+      "alt": 1610050,
+      "relative_alt": 10040,
+      "hdg": 65535
+     }
+    },
+    {
+     "t": 1400,
+     "from": "vehicle",
+     "msg": "GPS_RAW_INT",
+     "fields": {
+      "fix_type": 3,
+      "lat": 406894460,
+      "lon": -1117306000,
+      "alt": 1610040,
+      "eph": 121,
+      "epv": 180,
+      "satellites_visible": 255
+     }
+    },
+    {
+     "t": 1500,
+     "query": "snapshot",
+     "expect": {
+      "battery_pct": 74,
+      "battery_at_ms": 400,
+      "voltage_mv": 15800,
+      "heading_cdeg": 9000,
+      "rel_alt_mm": 10040,
+      "position_at_ms": 1300,
+      "satellites": 14,
+      "gps_at_ms": 1400
+     }
+    },
+    {
+     "t": 1500,
+     "query": "statustext",
+     "expect": [
+      {
+       "severity": 6,
+       "text": "Mission: 3 WP"
+      }
+     ]
+    }
+   ],
+   "result": null,
+   "end_ms": 2000
+  },
+  {
+   "id": "MAV-28.px4",
+   "behaviour": "MAV-28",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Telemetry snapshot",
+   "encodes": "PX4 reports landed_state from its land detector and the setpoint type. Battery comes from BATTERY_STATUS instance 0, else SYS_STATUS; -1 (unknown) and other instances never overwrite a reading, so its time stays old and the stale-battery rule (R5) can act. UINT16_MAX heading or voltage and 255 satellites are unknown too.",
+   "cites": [
+    "PX4 src/modules/mavlink/streams/EXTENDED_SYS_STATE.hpp:102-118",
+    "MAVLINK messages/common.html#SYS_STATUS",
+    "MAVLINK messages/common.html#BATTERY_STATUS",
+    "MAVLINK messages/common.html#GLOBAL_POSITION_INT",
+    "MAVLINK messages/common.html#GPS_RAW_INT",
+    "PLAN 2.2"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 157,
+     "custom_mode": 67371008,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "observe",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 100,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 12,
+      "base_mode": 157,
+      "custom_mode": 67371008,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 200,
+     "from": "vehicle",
+     "msg": "GLOBAL_POSITION_INT",
+     "fields": {
+      "time_boot_ms": 184200,
+      "lat": 406894450,
+      "lon": -1117306000,
+      "alt": 1610050,
+      "relative_alt": 10050,
+      "vx": 300,
+      "vy": -12,
+      "vz": -5,
+      "hdg": 9000
+     }
+    },
+    {
+     "t": 300,
+     "from": "vehicle",
+     "msg": "SYS_STATUS",
+     "fields": {
+      "voltage_battery": 15800,
+      "current_battery": 1530,
+      "battery_remaining": 76
+     }
+    },
+    {
+     "t": 400,
+     "from": "vehicle",
+     "msg": "BATTERY_STATUS",
+     "fields": {
+      "id": 0,
+      "battery_function": 1,
+      "type": 1,
+      "temperature": 3150,
+      "voltages": [
+       4200,
+       4190,
+       4180,
+       4170,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535
+      ],
+      "current_battery": 1530,
+      "current_consumed": 812,
+      "energy_consumed": -1,
+      "battery_remaining": 74
+     }
+    },
+    {
+     "t": 500,
+     "from": "vehicle",
+     "msg": "GPS_RAW_INT",
+     "fields": {
+      "fix_type": 3,
+      "lat": 406894450,
+      "lon": -1117306000,
+      "alt": 1610050,
+      "eph": 121,
+      "epv": 180,
+      "satellites_visible": 14
+     }
+    },
+    {
+     "t": 600,
+     "from": "vehicle",
+     "msg": "EXTENDED_SYS_STATE",
+     "fields": {
+      "vtol_state": 0,
+      "landed_state": 2
+     }
+    },
+    {
+     "t": 700,
+     "from": "vehicle",
+     "msg": "STATUSTEXT",
+     "fields": {
+      "severity": 6,
+      "text": "Takeoff detected"
+     }
+    },
+    {
+     "t": 800,
+     "query": "snapshot",
+     "expect": {
+      "link_up": true,
+      "control_link": true,
+      "armed": true,
+      "mode": "AUTO.MISSION",
+      "role": "mission",
+      "lat_e7": 406894450,
+      "lon_e7": -1117306000,
+      "rel_alt_mm": 10050,
+      "heading_cdeg": 9000,
+      "position_at_ms": 200,
+      "battery_pct": 74,
+      "battery_at_ms": 400,
+      "voltage_mv": 15800,
+      "gps_fix": 3,
+      "satellites": 14,
+      "gps_at_ms": 500,
+      "landed": "in_air",
+      "landed_at_ms": 600
+     }
+    },
+    {
+     "t": 1000,
+     "from": "vehicle",
+     "msg": "BATTERY_STATUS",
+     "fields": {
+      "id": 1,
+      "battery_function": 1,
+      "type": 1,
+      "temperature": 32767,
+      "voltages": [
+       65535,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535
+      ],
+      "current_battery": -1,
+      "current_consumed": -1,
+      "energy_consumed": -1,
+      "battery_remaining": 12
+     }
+    },
+    {
+     "t": 1100,
+     "from": "vehicle",
+     "msg": "BATTERY_STATUS",
+     "fields": {
+      "id": 0,
+      "battery_function": 1,
+      "type": 1,
+      "temperature": 3150,
+      "voltages": [
+       65535,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535,
+       65535
+      ],
+      "current_battery": -1,
+      "current_consumed": -1,
+      "energy_consumed": -1,
+      "battery_remaining": -1
+     }
+    },
+    {
+     "t": 1200,
+     "from": "vehicle",
+     "msg": "SYS_STATUS",
+     "fields": {
+      "voltage_battery": 65535,
+      "current_battery": -1,
+      "battery_remaining": -1
+     }
+    },
+    {
+     "t": 1300,
+     "from": "vehicle",
+     "msg": "GLOBAL_POSITION_INT",
+     "fields": {
+      "time_boot_ms": 185300,
+      "lat": 406894460,
+      "lon": -1117306000,
+      "alt": 1610050,
+      "relative_alt": 10040,
+      "hdg": 65535
+     }
+    },
+    {
+     "t": 1400,
+     "from": "vehicle",
+     "msg": "GPS_RAW_INT",
+     "fields": {
+      "fix_type": 3,
+      "lat": 406894460,
+      "lon": -1117306000,
+      "alt": 1610040,
+      "eph": 121,
+      "epv": 180,
+      "satellites_visible": 255
+     }
+    },
+    {
+     "t": 1500,
+     "query": "snapshot",
+     "expect": {
+      "battery_pct": 74,
+      "battery_at_ms": 400,
+      "voltage_mv": 15800,
+      "heading_cdeg": 9000,
+      "rel_alt_mm": 10040,
+      "position_at_ms": 1300,
+      "satellites": 14,
+      "gps_at_ms": 1400
+     }
+    },
+    {
+     "t": 1500,
+     "query": "statustext",
+     "expect": [
+      {
+       "severity": 6,
+       "text": "Takeoff detected"
+      }
+     ]
+    }
+   ],
+   "result": null,
+   "end_ms": 2000
+  },
+  {
+   "id": "MAV-29.ap",
+   "behaviour": "MAV-29",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Mode role, commanded flag and the AUTO return item",
+   "encodes": "ArduCopter reports the flight mode number as custom_mode. Its mission's NAV_RETURN_TO_LAUNCH item runs inside AUTO, so the mode stays AUTO to the end. A heartbeat that arrives while the hold command waits for its ACK still shows AUTO and is not judged. An RTL the phone did not command (here ArduCopter's own failsafe) is reported with commanded false, which the mission rules turn into EXTERNAL (R8).",
+   "cites": [
+    "AP463 ArduCopter/GCS_Mavlink.cpp:62-65",
+    "AP463 ArduCopter/mode_auto.cpp:709-711",
+    "PLAN 2.2",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:4872-4878",
+    "AP463 libraries/GCS_MAVLink/GCS_Common.cpp:2826-2838",
+    "AP463 ArduCopter/mode.h:75-105"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 217,
+     "custom_mode": 3,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "hold",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "phone",
+     "msg": "COMMAND_LONG",
+     "fields": {
+      "target_system": 1,
+      "target_component": 1,
+      "command": 176,
+      "confirmation": 0,
+      "param1": 1.0,
+      "param2": 4.0
+     }
+    },
+    {
+     "t": 20,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 3,
+      "base_mode": 217,
+      "custom_mode": 3,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 25,
+     "query": "snapshot",
+     "expect": {
+      "mode": "AUTO",
+      "role": "mission",
+      "commanded": true
+     }
+    },
+    {
+     "t": 40,
+     "from": "vehicle",
+     "msg": "COMMAND_ACK",
+     "fields": {
+      "command": 176,
+      "result": 0,
+      "target_system": 255,
+      "target_component": 190
+     }
+    },
+    {
+     "t": 1000,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 3,
+      "base_mode": 217,
+      "custom_mode": 4,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 1000,
+     "query": "snapshot",
+     "expect": {
+      "mode": "GUIDED",
+      "role": "hold",
+      "commanded": true
+     }
+    },
+    {
+     "t": 2000,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 3,
+      "base_mode": 217,
+      "custom_mode": 6,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 2000,
+     "query": "snapshot",
+     "expect": {
+      "mode": "RTL",
+      "role": "return",
+      "commanded": false
+     }
+    },
+    {
+     "t": 3000,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 3,
+      "base_mode": 217,
+      "custom_mode": 5,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 3000,
+     "query": "snapshot",
+     "expect": {
+      "mode": "LOITER",
+      "role": "other",
+      "commanded": false
+     }
+    }
+   ],
+   "result": {
+    "t": 40,
+    "outcome": "ok",
+    "data": {}
+   },
+   "end_ms": 3500
+  },
+  {
+   "id": "MAV-29.px4",
+   "behaviour": "MAV-29",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Mode role, commanded flag and the mission's return item",
+   "encodes": "PX4 runs a mission's NAV_RETURN_TO_LAUNCH item by issuing the RTL command to itself, so the mode changes to AUTO.RTL at the end of the mission. The phone treats that change as commanded when MISSION_CURRENT shows the last item (seq = total - 1); a mode the phone did not command, such as POSCTL from a pilot, is reported with commanded false.",
+   "cites": [
+    "PX4 src/modules/navigator/mission_block.cpp:533-555",
+    "PX4 src/modules/navigator/mission.cpp:276",
+    "PX4 src/modules/commander/Commander.cpp:1050-1062",
+    "PX4 src/modules/mavlink/streams/HEARTBEAT.hpp:104",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:284-292",
+    "PLAN 2.2"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 157,
+     "custom_mode": 67371008,
+     "system_status": 4,
+     "mavlink_version": 3
+    },
+    "commanded_role": "mission"
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "observe",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "vehicle",
+     "msg": "MISSION_CURRENT",
+     "fields": {
+      "seq": 4,
+      "total": 6,
+      "mission_state": 3,
+      "mission_mode": 1
+     }
+    },
+    {
+     "t": 100,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 12,
+      "base_mode": 157,
+      "custom_mode": 67371008,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 100,
+     "query": "snapshot",
+     "expect": {
+      "mode": "AUTO.MISSION",
+      "role": "mission",
+      "commanded": true
+     }
+    },
+    {
+     "t": 1000,
+     "from": "vehicle",
+     "msg": "MISSION_CURRENT",
+     "fields": {
+      "seq": 5,
+      "total": 6,
+      "mission_state": 3,
+      "mission_mode": 1
+     }
+    },
+    {
+     "t": 1100,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 12,
+      "base_mode": 157,
+      "custom_mode": 84148224,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 1100,
+     "query": "snapshot",
+     "expect": {
+      "mode": "AUTO.RTL",
+      "role": "return",
+      "commanded": true
+     }
+    },
+    {
+     "t": 2100,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 12,
+      "base_mode": 209,
+      "custom_mode": 196608,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 2100,
+     "query": "snapshot",
+     "expect": {
+      "mode": "POSCTL",
+      "role": "other",
+      "commanded": false
+     }
+    }
+   ],
+   "result": null,
+   "end_ms": 2500
+  },
+  {
+   "id": "MAV-30.ap",
+   "behaviour": "MAV-30",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "MISSION_CURRENT to plan item index",
+   "encodes": "ArduCopter's sequence 0 is home, so its MISSION_CURRENT is one above the plan's index and 0 means no plan item yet; MISSION_CURRENT is in its EXTENDED_STATUS stream, so the phone requests it.",
+   "cites": [
+    "AP463 libraries/AP_Mission/AP_Mission.cpp:816-821",
+    "AP463 ArduCopter/GCS_Mavlink.cpp:507",
+    "MAVLINK messages/common.html#MISSION_CURRENT"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 217,
+     "custom_mode": 3,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "observe",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "vehicle",
+     "msg": "MISSION_CURRENT",
+     "fields": {
+      "seq": 0,
+      "total": 7
+     }
+    },
+    {
+     "t": 0,
+     "query": "snapshot",
+     "expect": {
+      "mission_item": null
+     }
+    },
+    {
+     "t": 1000,
+     "from": "vehicle",
+     "msg": "MISSION_CURRENT",
+     "fields": {
+      "seq": 1,
+      "total": 7,
+      "mission_state": 3
+     }
+    },
+    {
+     "t": 1000,
+     "query": "snapshot",
+     "expect": {
+      "mission_item": 0
+     }
+    },
+    {
+     "t": 2000,
+     "from": "vehicle",
+     "msg": "MISSION_CURRENT",
+     "fields": {
+      "seq": 3,
+      "total": 7,
+      "mission_state": 3
+     }
+    },
+    {
+     "t": 2000,
+     "query": "snapshot",
+     "expect": {
+      "mission_item": 2
+     }
+    },
+    {
+     "t": 3000,
+     "from": "vehicle",
+     "msg": "MISSION_CURRENT",
+     "fields": {
+      "seq": 6,
+      "total": 7,
+      "mission_state": 3
+     }
+    },
+    {
+     "t": 3000,
+     "query": "snapshot",
+     "expect": {
+      "mission_item": 5
+     }
+    }
+   ],
+   "result": null,
+   "end_ms": 3500
+  },
+  {
+   "id": "MAV-30.px4",
+   "behaviour": "MAV-30",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "MISSION_CURRENT to plan item index",
+   "encodes": "PX4's sequence 0 is the first plan item; its mission manager sends MISSION_CURRENT at 1 Hz and on every change.",
+   "cites": [
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:284-292",
+    "PX4 src/modules/mavlink/mavlink_mission.cpp:506-510",
+    "MAVLINK messages/common.html#MISSION_CURRENT"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 157,
+     "custom_mode": 67371008,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "observe",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 1000,
+     "from": "vehicle",
+     "msg": "MISSION_CURRENT",
+     "fields": {
+      "seq": 0,
+      "total": 6,
+      "mission_state": 3
+     }
+    },
+    {
+     "t": 1000,
+     "query": "snapshot",
+     "expect": {
+      "mission_item": 0
+     }
+    },
+    {
+     "t": 2000,
+     "from": "vehicle",
+     "msg": "MISSION_CURRENT",
+     "fields": {
+      "seq": 2,
+      "total": 6,
+      "mission_state": 3
+     }
+    },
+    {
+     "t": 2000,
+     "query": "snapshot",
+     "expect": {
+      "mission_item": 2
+     }
+    },
+    {
+     "t": 3000,
+     "from": "vehicle",
+     "msg": "MISSION_CURRENT",
+     "fields": {
+      "seq": 5,
+      "total": 6,
+      "mission_state": 3
+     }
+    },
+    {
+     "t": 3000,
+     "query": "snapshot",
+     "expect": {
+      "mission_item": 5
+     }
+    }
+   ],
+   "result": null,
+   "end_ms": 3500
+  },
+  {
+   "id": "MAV-31.ap",
+   "behaviour": "MAV-31",
+   "autopilot": "ardupilot",
+   "firmware": [
+    "ArduCopter 4.6.3",
+    "ArduCopter 4.7.3"
+   ],
+   "title": "Link up and down",
+   "encodes": "The phone marks the link down after 3 s (link.loss_detect_s) without a packet from the connected vehicle; a packet from another system does not count. ArduCopter's own GCS failsafe acts after FS_GCS_TIMEOUT (default 5 s) without the phone's heartbeat. Land all stays enabled because the control link stays true once any packet has arrived.",
+   "cites": [
+    "AP463 ArduCopter/Parameters.cpp:984-991",
+    "AP463 ArduCopter/events.cpp:124-160",
+    "PLAN 2.2",
+    "PLAN 2.4"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 3,
+     "base_mode": 217,
+     "custom_mode": 3,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "observe",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 3,
+      "base_mode": 217,
+      "custom_mode": 3,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 1000,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 3,
+      "base_mode": 217,
+      "custom_mode": 3,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 2500,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 3,
+      "base_mode": 217,
+      "custom_mode": 3,
+      "system_status": 4,
+      "mavlink_version": 3
+     },
+     "src": {
+      "sysid": 2,
+      "compid": 1
+     }
+    },
+    {
+     "t": 3999,
+     "query": "snapshot",
+     "expect": {
+      "link_up": true,
+      "control_link": true
+     }
+    },
+    {
+     "t": 4000,
+     "query": "snapshot",
+     "expect": {
+      "link_up": false,
+      "control_link": true
+     }
+    },
+    {
+     "t": 6000,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 3,
+      "base_mode": 217,
+      "custom_mode": 3,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 6000,
+     "query": "snapshot",
+     "expect": {
+      "link_up": true,
+      "control_link": true
+     }
+    }
+   ],
+   "result": null,
+   "end_ms": 6500
+  },
+  {
+   "id": "MAV-31.px4",
+   "behaviour": "MAV-31",
+   "autopilot": "px4",
+   "firmware": [
+    "PX4 1.17.0"
+   ],
+   "title": "Link up and down",
+   "encodes": "The phone marks the link down after 3 s (link.loss_detect_s) without a packet from the connected vehicle; a packet from another system does not count. PX4's own data-link failsafe acts after COM_DL_LOSS_T (default 10 s) without the phone's heartbeat. Land all stays enabled because the control link stays true once any packet has arrived.",
+   "cites": [
+    "PX4 src/modules/commander/commander_params.c:85-98",
+    "PX4 src/modules/commander/Commander.cpp:2845-2858",
+    "PLAN 2.2",
+    "PLAN 2.4"
+   ],
+   "vehicle": {
+    "sysid": 1,
+    "compid": 1
+   },
+   "setup": {
+    "connected": true,
+    "heartbeat": {
+     "type": 2,
+     "autopilot": 12,
+     "base_mode": 157,
+     "custom_mode": 67371008,
+     "system_status": 4,
+     "mavlink_version": 3
+    }
+   },
+   "heartbeats": "ignore",
+   "op": {
+    "name": "observe",
+    "args": {}
+   },
+   "steps": [
+    {
+     "t": 0,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 12,
+      "base_mode": 157,
+      "custom_mode": 67371008,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 1000,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 12,
+      "base_mode": 157,
+      "custom_mode": 67371008,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 2500,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 12,
+      "base_mode": 157,
+      "custom_mode": 67371008,
+      "system_status": 4,
+      "mavlink_version": 3
+     },
+     "src": {
+      "sysid": 2,
+      "compid": 1
+     }
+    },
+    {
+     "t": 3999,
+     "query": "snapshot",
+     "expect": {
+      "link_up": true,
+      "control_link": true
+     }
+    },
+    {
+     "t": 4000,
+     "query": "snapshot",
+     "expect": {
+      "link_up": false,
+      "control_link": true
+     }
+    },
+    {
+     "t": 6000,
+     "from": "vehicle",
+     "msg": "HEARTBEAT",
+     "fields": {
+      "type": 2,
+      "autopilot": 12,
+      "base_mode": 157,
+      "custom_mode": 67371008,
+      "system_status": 4,
+      "mavlink_version": 3
+     }
+    },
+    {
+     "t": 6000,
+     "query": "snapshot",
+     "expect": {
+      "link_up": true,
+      "control_link": true
+     }
+    }
+   ],
+   "result": null,
+   "end_ms": 6500
+  }
+ ]
+}
