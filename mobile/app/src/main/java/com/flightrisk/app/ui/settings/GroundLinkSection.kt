@@ -70,6 +70,7 @@ private fun GroundLinkSectionContent(
     var addressInput by remember { mutableStateOf("") }
     var tokenInput by remember { mutableStateOf("") }
     var showDisclosure by remember { mutableStateOf(false) }
+    var showNotice by remember { mutableStateOf(false) }
     // Show the saved address once it is known; later edits stay in the field.
     LaunchedEffect(state.address) { if (addressInput.isEmpty()) addressInput = state.address }
 
@@ -91,6 +92,16 @@ private fun GroundLinkSectionContent(
                 }) { Text("Send detections") }
             },
             dismissButton = { TextButton(onClick = { showDisclosure = false }) { Text("Cancel") } },
+        )
+    }
+
+    // The full notice is shown when the link is turned on; afterwards it is one tap away.
+    if (showNotice) {
+        AlertDialog(
+            onDismissRequest = { showNotice = false },
+            title = { Text(GroundLinkText.DISCLOSURE_TITLE) },
+            text = { Text(GroundLinkText.DISCLOSURE) },
+            confirmButton = { TextButton(onClick = { showNotice = false }) { Text("Close") } },
         )
     }
 
@@ -210,12 +221,7 @@ private fun GroundLinkSectionContent(
             color = if (problem) AlertRed else MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.semantics { contentDescription = "Ground station link status: ${GroundLinkText.statusLine(state)}" },
         )
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = GroundLinkText.DISCLOSURE,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        TextButton(onClick = { showNotice = true }) { Text("What is sent") }
     }
 }
 
