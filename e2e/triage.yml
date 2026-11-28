@@ -1,0 +1,64 @@
+# E2E triage rules, first match wins
+# Every rule adds 'bug' and 'source: e2e' labels plus the platform label
+
+rules:
+  - name: "Safety or critical journeys"
+    conditions:
+      - kind: "safety"
+      - journey: ["J12", "J15", "J19", "J20", "J35", "J36", "J37", "J41", "J42", "J45"]
+    priority: "critical"
+    extra_labels: []
+
+  - name: "Crash or ANR"
+    conditions:
+      - kind: ["crash", "anr_or_hang"]
+    priority: "high"
+    extra_labels: []
+
+  - name: "Assertion or timeout in core paths"
+    conditions:
+      - kind: ["assertion", "timeout_or_stuck"]
+      - journey: ["J01", "J02", "J09", "J18", "J21", "J22", "J23"]
+    priority: "high"
+    extra_labels: []
+
+  - name: "Uncaught exception or error UI"
+    conditions:
+      - kind: ["uncaught_exception", "error_ui"]
+    priority: "medium"
+    extra_labels: []
+
+  - name: "Other assertions or timeouts"
+    conditions:
+      - kind: ["assertion", "timeout_or_stuck"]
+    priority: "medium"
+    extra_labels: []
+
+  - name: "Release-build smoke run finding"
+    conditions:
+      - release_smoke_only: true
+    priority: "inherit"
+    extra_labels:
+      - "area: release"
+
+  - name: "Crawler lost app or unclassified dialog"
+    conditions:
+      - kind: ["timeout_or_stuck"]
+      - crawler_lost: true
+      - unclassified_dialog: true
+    priority: "medium"
+    extra_labels:
+      - "needs decision"
+
+  - name: "Flaky test"
+    conditions:
+      - classification: "flaky"
+    priority: "low"
+    extra_labels:
+      - "e2e: flaky"
+
+  - name: "Cosmetic"
+    conditions:
+      - kind: "cosmetic"
+    priority: "low"
+    extra_labels: []
