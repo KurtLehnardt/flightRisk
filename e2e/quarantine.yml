@@ -1,0 +1,5 @@
+# E2E quarantined journeys: runs and reports without gating pull requests
+# Schema: journey, github_issue, expiry_date
+# Empty until the first flaky journeys are found
+
+quarantined: []
