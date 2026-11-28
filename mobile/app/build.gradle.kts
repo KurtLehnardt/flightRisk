@@ -453,6 +453,8 @@ val checkLicenceTexts = tasks.register("checkLicenceTexts") {
 dependencies {
     // Shared ground-station contract (models, decoders, Socket.IO frame codec)
     implementation(project(":contract"))
+    // Shared phone-only mission core (planner, state machine, MAVLink and Tello adapters).
+    implementation(project(":mission"))
 
     // Reads the generated library list for the Licences screen (core only, no UI artifact).
     implementation("com.mikepenz:aboutlibraries-core:12.2.4")

@@ -50,6 +50,12 @@ targets:
         product: SocketIOMini
       - package: FlightRiskGround
         product: PersonVision
+      - package: FlightRiskGround
+        product: MissionCore
+      - package: FlightRiskGround
+        product: DroneLinks
+      - package: FlightRiskGround
+        product: MissionUI
     configFiles:
       Debug: Config/Signing.xcconfig
       Release: Config/Signing.xcconfig
